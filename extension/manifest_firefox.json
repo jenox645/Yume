@@ -1,0 +1,80 @@
+{
+  "manifest_version": 3,
+  "name": "Yume - AI Subtitles",
+  "version": "5.0.0",
+  "description": "You Understand More Easily - Real-time AI subtitles for Japanese videos",
+  
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "yume-subtitles@pocketyume",
+      "strict_min_version": "121.0"
+    }
+  },
+  
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting"
+  ],
+  
+  "host_permissions": [
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  
+  "background": {
+    "scripts": ["js/background.js"]
+  },
+  
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  
+  "commands": {
+    "toggle-subtitles": {
+      "suggested_key": {
+        "default": "Alt+Y",
+        "mac": "Alt+Y"
+      },
+      "description": "Toggle subtitles on/off"
+    }
+  },
+  
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://youtube.com/*",
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "js/debug-system.js",
+        "js/subtitle-window.js",
+        "js/audio-capture.js",
+        "js/content.js"
+      ],
+      "css": ["css/content.css"],
+      "run_at": "document_end",
+      "all_frames": false
+    }
+  ],
+  
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  
+  "web_accessible_resources": [
+    {
+      "resources": ["css/*", "icons/*", "fonts/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

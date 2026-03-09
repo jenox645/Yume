@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Yume</title>
+  <link rel="stylesheet" href="css/popup.css">
+</head>
+<body>
+  <div class="yume-container">
+    <div class="yume-header">
+      <div class="deco-line top-line"></div>
+      <h1 class="yume-title">Yume</h1>
+      <div class="yume-subtitle">v3.8.0</div>
+      <div class="deco-line bottom-line"></div>
+    </div>
+
+    <!-- Subtitle Control -->
+    <div class="yume-section">
+      <div class="section-label">Subtitle Control</div>
+      <div class="section-body">
+        <div class="control-card">
+          <div class="control-row">
+            <span class="control-label">AI Subtitles</span>
+            <button id="toggleSubtitles" class="yume-button primary">
+              <span id="toggleText">Enable</span>
+            </button>
+          </div>
+          <div id="statusMessage" class="status-message"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Server Status -->
+    <div class="yume-section">
+      <div class="section-label">Server Status</div>
+      <div class="section-body">
+        <div class="status-card">
+          <div class="status-row">
+            <div class="status-indicator" id="whisperStatus"></div>
+            <div class="status-info">
+              <div class="status-name">Whisper</div>
+              <div class="status-port" id="whisperInfo">localhost:5001</div>
+            </div>
+          </div>
+        </div>
+        <div class="status-card">
+          <div class="status-row">
+            <div class="status-indicator" id="translationStatus"></div>
+            <div class="status-info">
+              <div class="status-name">Translation</div>
+              <div class="status-port" id="translationInfo">localhost:5000</div>
+            </div>
+          </div>
+        </div>
+        <button id="refreshStatus" class="yume-button secondary">Refresh</button>
+      </div>
+    </div>
+
+    <!-- Display Settings -->
+    <div class="yume-section">
+      <div class="section-label">Display Settings</div>
+      <div class="section-body">
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Original Text</span>
+            <label class="yume-toggle"><input type="checkbox" id="showOriginal" checked><span class="toggle-slider"></span></label>
+          </div>
+        </div>
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label" id="romajiLabel">Romanization <span class="setting-hint" id="romajiHint">(Romaji)</span></span>
+            <label class="yume-toggle"><input type="checkbox" id="showRomaji"><span class="toggle-slider"></span></label>
+          </div>
+        </div>
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Translation</span>
+            <label class="yume-toggle"><input type="checkbox" id="showEnglish" checked><span class="toggle-slider"></span></label>
+          </div>
+        </div>
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Source language</span>
+            <select id="sourceLanguage" class="yume-select">
+              <option value="ja">Japanese</option>
+              <option value="zh">Chinese</option>
+              <option value="ko">Korean</option>
+              <option value="en">English</option>
+              <option value="fr">French</option>
+              <option value="de">German</option>
+              <option value="es">Spanish</option>
+              <option value="pt">Portuguese</option>
+              <option value="ru">Russian</option>
+              <option value="it">Italian</option>
+              <option value="ar">Arabic</option>
+              <option value="auto">Auto-detect</option>
+            </select>
+          </div>
+        </div>
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Translate to</span>
+            <select id="targetLanguage" class="yume-select">
+              <option value="English">English</option>
+              <option value="French">Fran&#231;ais</option>
+              <option value="Spanish">Espa&#241;ol</option>
+              <option value="German">Deutsch</option>
+              <option value="Portuguese">Portugu&#234;s</option>
+              <option value="Italian">Italiano</option>
+              <option value="Korean">&#54620;&#44397;&#50612;</option>
+              <option value="Chinese">&#20013;&#25991;</option>
+              <option value="Russian">&#1056;&#1091;&#1089;&#1089;&#1082;&#1080;&#1081;</option>
+              <option value="Japanese">&#26085;&#26412;&#35486;</option>
+              <option value="Arabic">&#1575;&#1604;&#1593;&#1585;&#1576;&#1610;&#1577;</option>
+              <option value="Indonesian">Bahasa Indonesia</option>
+              <option value="Vietnamese">Ti&#7871;ng Vi&#7879;t</option>
+              <option value="Thai">&#3616;&#3634;&#3625;&#3634;&#3652;&#3607;&#3618;</option>
+              <option value="Turkish">T&#252;rk&#231;e</option>
+              <option value="Dutch">Nederlands</option>
+              <option value="Polish">Polski</option>
+            </select>
+          </div>
+        </div>
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Chunk Duration</span>
+            <div class="setting-value-group">
+              <input type="number" id="chunkDuration" min="10" max="60" value="30" class="yume-input">
+              <span class="setting-unit">sec</span>
+            </div>
+          </div>
+        </div>
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Show Progress Counter</span>
+            <label class="yume-toggle"><input type="checkbox" id="showChunkCounter" checked><span class="toggle-slider"></span></label>
+          </div>
+        </div>
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Confidence Indicator</span>
+            <label class="yume-toggle"><input type="checkbox" id="showConfidence"><span class="toggle-slider"></span></label>
+          </div>
+          <div class="setting-hint">Fades translation when Whisper is less certain</div>
+        </div>
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Timing Offset</span>
+            <div class="setting-value-group">
+              <input type="range" id="timingOffset" min="-30" max="30" value="0" step="1" class="yume-range">
+              <span id="timingOffsetVal" class="setting-unit">0.0s</span>
+            </div>
+          </div>
+          <div class="setting-hint" style="margin-top:2px;font-size:11px">Shift subtitles earlier (−) or later (+). 1 tick = 0.1s</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hallucination Filter (collapsible) -->
+    <div class="yume-section collapsible collapsed" data-section="hallucination">
+      <div class="section-label section-toggle">
+        <span class="toggle-arrow">&#9654;</span> Hallucination Filter
+      </div>
+      <div class="section-body">
+        <div class="setting-card">
+          <div class="hallucination-info">
+            Seeing phantom subtitles? Click <b>Report</b> to capture the current text and add it to the blacklist.
+            Items are filtered instantly from display. Click <b>Update Server</b> to also filter at transcription time.
+          </div>
+        </div>
+        <button id="reportHallucination" class="yume-button danger" style="margin-bottom:8px">
+          &#9888; Report Current Subtitle
+        </button>
+        <div id="hallucinationPreview" class="hallucination-preview" style="display:none"></div>
+        <div class="setting-card" style="margin-top:8px">
+          <div class="setting-row">
+            <span class="setting-label">Blacklist</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span id="blacklistCount" class="setting-hint">0 items</span>
+              <button id="toggleBlacklistView" class="yume-button-mini" title="Show/Hide list">&#9660;</button>
+            </div>
+          </div>
+        </div>
+        <div id="blacklistContainer" class="blacklist-container" style="display:none"></div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button id="updateBlacklist" class="yume-button primary" style="flex:1;margin-top:0">
+            &#8635; Update Server
+          </button>
+          <button id="clearBlacklist" class="yume-button secondary" style="flex:1;margin-top:0">
+            Clear All
+          </button>
+        </div>
+        <div id="blacklistStatus" class="status-message" style="margin-top:4px"></div>
+      </div>
+    </div>
+
+    <!-- Appearance (collapsible) -->
+    <div class="yume-section collapsible collapsed" data-section="appearance">
+      <div class="section-label section-toggle">
+        <span class="toggle-arrow">&#9654;</span> Appearance
+      </div>
+      <div class="section-body">
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Window Title</span>
+            <input type="text" id="windowTitle" value="Yume" class="yume-input wide" maxlength="30">
+          </div>
+        </div>
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Background</span>
+            <div class="setting-value-group">
+              <input type="color" id="windowBgColor" value="#08080c" class="yume-color">
+              <input type="range" id="windowOpacity" min="20" max="100" value="88" class="yume-range">
+              <span id="opacityVal" class="setting-unit">88%</span>
+            </div>
+          </div>
+        </div>
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Shadow</span>
+            <label class="yume-toggle"><input type="checkbox" id="windowShadow" checked><span class="toggle-slider"></span></label>
+          </div>
+        </div>
+
+        <!-- Per-line: Original -->
+        <div class="subsection-label">Original Text</div>
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Font</span>
+            <select id="originalFont" class="yume-select"></select>
+          </div>
+        </div>
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Size</span>
+            <div class="setting-value-group">
+              <input type="number" id="originalFontSize" min="12" max="36" value="19" class="yume-input">
+              <span class="setting-unit">px</span>
+            </div>
+          </div>
+        </div>
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Color</span>
+            <input type="color" id="originalColor" value="#ffffff" class="yume-color">
+          </div>
+        </div>
+
+        <!-- Per-line: Romanization -->
+        <div id="romajiAppearanceSection">
+        <div class="subsection-label" id="romajiAppearanceLabel">Romanization</div>
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Font</span>
+            <select id="romajiFont" class="yume-select"></select>
+          </div>
+        </div>
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Size</span>
+            <div class="setting-value-group">
+              <input type="number" id="romajiFontSize" min="10" max="28" value="13" class="yume-input">
+              <span class="setting-unit">px</span>
+            </div>
+          </div>
+        </div>
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Color</span>
+            <input type="color" id="romajiColor" value="#ffc88c" class="yume-color">
+          </div>
+        </div>
+        </div>
+
+        <!-- Per-line: Translation -->
+        <div class="subsection-label">Translation</div>
+        <div id="translationFontRow" class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Font</span>
+            <select id="translationFont" class="yume-select"></select>
+          </div>
+        </div>
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Size</span>
+            <div class="setting-value-group">
+              <input type="number" id="translationFontSize" min="10" max="28" value="14" class="yume-input">
+              <span class="setting-unit">px</span>
+            </div>
+          </div>
+        </div>
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Color</span>
+            <input type="color" id="translationColor" value="#b4beff" class="yume-color">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Translation Model (collapsible) -->
+    <div class="yume-section collapsible collapsed" data-section="model">
+      <div class="section-label section-toggle">
+        <span class="toggle-arrow">&#9654;</span> Translation Model
+      </div>
+      <div class="section-body">
+        <div class="setting-card">
+          <div id="modelInfo" class="model-info">
+            <span class="model-label">Click to load...</span>
+          </div>
+        </div>
+        <button id="refreshModels" class="yume-button secondary">Refresh Models</button>
+      </div>
+    </div>
+
+    <!-- Whisper Model Switcher (collapsible) -->
+    <div class="yume-section collapsible collapsed" data-section="whisper-model">
+      <div class="section-label section-toggle">
+        <span class="toggle-arrow">&#9654;</span> Whisper Model
+      </div>
+      <div class="section-body">
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Active Model</span>
+            <span id="currentWhisperModel" class="setting-hint">—</span>
+          </div>
+        </div>
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Switch to</span>
+            <select id="whisperModelSelect" class="yume-select">
+              <option value="tiny">tiny (~1GB)</option>
+              <option value="base">base (~1GB)</option>
+              <option value="small">small (~2GB)</option>
+              <option value="medium">medium (~5GB)</option>
+              <option value="large-v2">large-v2 (~10GB)</option>
+              <option value="large-v3" selected>large-v3 (~10GB)</option>
+              <option value="distil-large-v2">distil-large-v2 (~4GB)</option>
+              <option value="distil-large-v3">distil-large-v3 (~4GB)</option>
+            </select>
+          </div>
+        </div>
+        <button id="switchWhisperModel" class="yume-button primary" style="margin-top:8px">
+          Switch Model
+        </button>
+        <div id="modelSwitchStatus" class="status-message" style="margin-top:4px"></div>
+        <div class="hallucination-info" style="margin-top:6px">
+          Smaller models = faster but less accurate. Cache is cleared on switch.
+        </div>
+      </div>
+    </div>
+
+    <!-- Server Stats (collapsible) -->
+    <div class="yume-section collapsible collapsed" data-section="stats">
+      <div class="section-label section-toggle">
+        <span class="toggle-arrow">&#9654;</span> Server Stats
+      </div>
+      <div class="section-body">
+        <div id="statsPanel" class="diag-panel">
+          <div id="statsContent" class="model-info" style="line-height:1.8">
+            Click to load...
+          </div>
+        </div>
+        <button id="refreshStats" class="yume-button secondary">Refresh</button>
+      </div>
+    </div>
+
+    <!-- Server Settings (collapsible) -->
+    <div class="yume-section collapsible collapsed" data-section="server">
+      <div class="section-label section-toggle">
+        <span class="toggle-arrow">&#9654;</span> Server Settings
+      </div>
+      <div class="section-body">
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Whisper Port</span>
+            <div class="setting-value-group">
+              <input type="number" id="whisperPort" min="1024" max="65535" value="5001" class="yume-input">
+            </div>
+          </div>
+        </div>
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Translation Port</span>
+            <div class="setting-value-group">
+              <input type="number" id="translationPort" min="1024" max="65535" value="5000" class="yume-input">
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button id="savePorts" class="yume-button primary" style="flex:1;margin-top:0">Save Ports</button>
+          <button id="autoFreePorts" class="yume-button secondary" style="flex:1;margin-top:0">Auto Free Ports</button>
+        </div>
+        <div id="portsStatus" class="status-message" style="margin-top:4px"></div>
+        <!-- Custom Stream URL for m3u8 / direct media -->
+        <div class="subsection-label" style="margin-top:12px">Custom Stream URL</div>
+        <div class="setting-card">
+          <div class="hallucination-info" style="margin-bottom:6px">
+            If yt-dlp fails on a site, paste the direct <b>.m3u8</b> or media URL here.
+            Find it in DevTools &rarr; Network &rarr; filter &quot;m3u8&quot;.
+          </div>
+          <input type="text" id="customStreamUrl" placeholder="https://...m3u8 or direct media URL" class="yume-input wide" style="margin-bottom:6px">
+          <div style="display:flex;gap:8px">
+            <button id="setStreamUrl" class="yume-button primary" style="flex:1;margin-top:0">Set &amp; Enable</button>
+            <button id="clearStreamUrl" class="yume-button secondary" style="flex:1;margin-top:0">Clear</button>
+          </div>
+          <div id="streamUrlStatus" class="status-message" style="margin-top:4px"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Diagnostics (collapsible) -->
+    <div class="yume-section collapsible collapsed" data-section="diagnostics">
+      <div class="section-label section-toggle">
+        <span class="toggle-arrow">&#9654;</span> Diagnostics
+      </div>
+      <div class="section-body">
+        <div id="diagPanel" class="diag-panel">
+          <div id="diagStatus" class="diag-status">Idle</div>
+          <div id="diagLog" class="diag-log"></div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button id="refreshDiag" class="yume-button secondary" style="flex:1;margin-top:0">Refresh Log</button>
+          <button id="downloadDiag" class="yume-button secondary" style="flex:1;margin-top:0">Download Log</button>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button id="exportSrt" class="yume-button primary" style="flex:1;margin-top:0">Export SRT</button>
+          <button id="clearCache" class="yume-button danger" style="flex:1;margin-top:0">Clear Cache</button>
+        </div>
+        <div id="exportStatus" class="status-message" style="margin-top:4px"></div>
+      </div>
+    </div>
+
+    <div class="yume-footer">
+      <div class="deco-line"></div>
+      <div class="footer-text">You Understand More Easily</div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
