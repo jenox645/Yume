@@ -205,3 +205,23 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Yume - user config (each user has their own settings)
+config/yume_config.json
+
+# Downloaded models - can be gigabytes
+models/translation/ *. gguf
+models/translation/ *. bin
+
+# Runtime logs
+logs/ *. log
+logs/ *. txt
+
+# Downloaded tools
+tools/yt-dlp
+tools/yt-dlp.exe
+tools/ffmpeg
+tools/ffmpeg.exe
+
+# macOs
+.DS_Store
