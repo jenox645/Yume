@@ -44,6 +44,12 @@ The setup wizard runs on first launch — it detects your hardware, installs dep
 3. Click **Load unpacked** → select the `extension/` folder
 4. Pin the Yume icon in the toolbar
 
+**Firefox:**
+1. Rename "manifest_firefox.json" by "manifest.json", replacing the already existing "manifest.json".
+2. Go to `about:debugging`
+3. This Firefox → Load Temporary Add-on → select `extension/manifest_firefox.json`
+4. Pin the Yume icon in the toolbar
+
 ### 3. Watch
 
 1. Go to any video with speech
