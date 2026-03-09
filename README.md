@@ -17,7 +17,7 @@ Transcription · Translation · Romanization
 
 Yume captures audio from any video in your browser, transcribes it with [faster-whisper](https://github.com/SYSTRAN/faster-whisper) running on your GPU, translates it with a local LLM, and overlays subtitles in real-time. Everything runs on your machine. No API keys, no subscriptions, no data leaves your computer.
 
-**Supported sites:** YouTube, NicoNico, Bilibili, Twitch, Crunchyroll, and [1000+ more](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md) via yt-dlp. Also works with direct stream URLs (m3u8, mp4).
+**Supported sites:** YouTube, NicoNico, Bilibili, Twitch, Crunchyroll, and [1000+ more](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md) via [yt-dlp](https://github.com/yt-dlp/yt-dlp/tree/master). Also works with direct stream URLs (m3u8, mp4).
 
 **Source languages:** Japanese · Chinese · Korean · Russian · Arabic
 
