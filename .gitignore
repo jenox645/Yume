@@ -210,8 +210,8 @@ __marimo__/
 config/yume_config.json
 
 # Downloaded models - can be gigabytes
-models/translation/ *. gguf
-models/translation/ *. bin
+models/translation/*.gguf
+models/translation/*.bin
 
 # Runtime logs
 logs/ *. log
@@ -222,6 +222,8 @@ tools/yt-dlp
 tools/yt-dlp.exe
 tools/ffmpeg
 tools/ffmpeg.exe
+tools/deno.exe
+tools/ffprobe.exe
 
 # macOs
 .DS_Store
