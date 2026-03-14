@@ -1,0 +1,149 @@
+<svg width="900" height="500" viewBox="0 0 900 500" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="900" height="500" fill="#FAFAFA"/>
+  
+  <!-- Gradient Definitions -->
+  <defs>
+    <!-- Coral gradient for popup.js -->
+    <linearGradient id="coralGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FCA5A5;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#F87171;stop-opacity:1" />
+    </linearGradient>
+    
+    <!-- Sky blue gradient for background.js and audio-capture.js -->
+    <linearGradient id="skyGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#93C5FD;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#60A5FA;stop-opacity:1" />
+    </linearGradient>
+    
+    <!-- Emerald gradient for content.js and subtitle-window.js -->
+    <linearGradient id="emeraldGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#86EFAC;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#4ADE80;stop-opacity:1" />
+    </linearGradient>
+    
+    <!-- Violet gradient for Whisper Server -->
+    <linearGradient id="violetGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#C4B5FD;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#A78BFA;stop-opacity:1" />
+    </linearGradient>
+    
+    <!-- Mint gradient for Translation LLM -->
+    <linearGradient id="mintGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#BBF7D0;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#86EFAC;stop-opacity:1" />
+    </linearGradient>
+    
+    <!-- Arrow markers -->
+    <marker id="arrowhead-right" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M 0 0 L 8 4 L 0 8 z" fill="#64748B"/>
+    </marker>
+    
+    <marker id="arrowhead-left" markerWidth="8" markerHeight="8" refX="1" refY="4" orient="auto">
+      <path d="M 8 0 L 0 4 L 8 8 z" fill="#64748B"/>
+    </marker>
+    
+    <!-- Shadow filters -->
+    <filter id="cardShadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="3"/>
+      <feOffset dx="0" dy="1" result="offsetblur"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.05"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <!-- Left Column - Browser Extension -->
+  <text x="30" y="35" font-family="Inter, sans-serif" font-size="10" font-weight="600" fill="#94A3B8" letter-spacing="2" text-transform="uppercase">BROWSER EXTENSION</text>
+  
+  <!-- popup.js card -->
+  <g filter="url(#cardShadow)">
+    <rect x="30" y="60" width="240" height="52" rx="10" fill="url(#coralGradient)"/>
+  </g>
+  <text x="46" y="82" font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="#7F1D1D">popup.js</text>
+  <text x="46" y="96" font-family="Inter, sans-serif" font-size="11" fill="#991B1B" fill-opacity="0.7">Settings UI</text>
+  
+  <!-- background.js card -->
+  <g filter="url(#cardShadow)">
+    <rect x="30" y="124" width="240" height="52" rx="10" fill="url(#skyGradient)"/>
+  </g>
+  <text x="46" y="146" font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="#1E3A5F">background.js</text>
+  <text x="46" y="160" font-family="Inter, sans-serif" font-size="11" fill="#1E3A5F" fill-opacity="0.7">Server Proxy &amp; Cache</text>
+  
+  <!-- audio-capture.js card -->
+  <g filter="url(#cardShadow)">
+    <rect x="30" y="188" width="240" height="52" rx="10" fill="url(#skyGradient)"/>
+  </g>
+  <text x="46" y="210" font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="#1E3A5F">audio-capture.js</text>
+  <text x="46" y="224" font-family="Inter, sans-serif" font-size="11" fill="#1E3A5F" fill-opacity="0.7">Pipeline Engine</text>
+  
+  <!-- content.js card -->
+  <g filter="url(#cardShadow)">
+    <rect x="30" y="252" width="240" height="52" rx="10" fill="url(#emeraldGradient)"/>
+  </g>
+  <text x="46" y="274" font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="#14532D">content.js</text>
+  <text x="46" y="288" font-family="Inter, sans-serif" font-size="11" fill="#14532D" fill-opacity="0.7">Lifecycle Manager</text>
+  
+  <!-- subtitle-window.js card -->
+  <g filter="url(#cardShadow)">
+    <rect x="30" y="316" width="240" height="52" rx="10" fill="url(#emeraldGradient)"/>
+  </g>
+  <text x="46" y="338" font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="#14532D">subtitle-window.js</text>
+  <text x="46" y="352" font-family="Inter, sans-serif" font-size="11" fill="#14532D" fill-opacity="0.7">Overlay Renderer</text>
+  
+  <!-- Center Column - Arrows -->
+  <!-- Top arrow - pointing right with upward curve -->
+  <path d="M 340 220 Q 450 205, 560 220" fill="none" stroke="#64748B" stroke-width="1.5" marker-end="url(#arrowhead-right)"/>
+  <text x="450" y="195" font-family="Inter, sans-serif" font-size="11" fill="#94A3B8" text-anchor="middle">video URL + settings</text>
+  
+  <!-- Decorative dotted line -->
+  <line x1="450" y1="230" x2="450" y2="270" stroke="#E2E8F0" stroke-width="1" stroke-dasharray="4 4"/>
+  
+  <!-- Bottom arrow - pointing left with downward curve -->
+  <path d="M 560 280 Q 450 295, 340 280" fill="none" stroke="#64748B" stroke-width="1.5" marker-start="url(#arrowhead-left)"/>
+  <text x="450" y="320" font-family="Inter, sans-serif" font-size="11" fill="#94A3B8" text-anchor="middle">transcribed + translated subtitles</text>
+  
+  <!-- Right Column - Local Servers -->
+  <text x="590" y="185" font-family="Inter, sans-serif" font-size="10" font-weight="600" fill="#94A3B8" letter-spacing="2" text-transform="uppercase">LOCAL SERVERS</text>
+  
+  <!-- Whisper Server card -->
+  <g filter="url(#cardShadow)">
+    <rect x="590" y="206" width="260" height="72" rx="12" fill="url(#violetGradient)"/>
+  </g>
+  
+  <!-- Port badge -->
+  <rect x="806" y="220" width="34" height="18" rx="8" fill="#7C3AED"/>
+  <text x="823" y="232" font-family="Inter, sans-serif" font-size="10" font-weight="500" fill="white" text-anchor="middle">:5001</text>
+  
+  <!-- Waveform icon -->
+  <rect x="608" y="228" width="2" height="4" rx="1" fill="#7C3AED" fill-opacity="0.4"/>
+  <rect x="613" y="225" width="2" height="10" rx="1" fill="#7C3AED" fill-opacity="0.4"/>
+  <rect x="618" y="227" width="2" height="6" rx="1" fill="#7C3AED" fill-opacity="0.4"/>
+  
+  <text x="630" y="234" font-family="Inter, sans-serif" font-size="14" font-weight="600" fill="#3B0764">Whisper Server</text>
+  <text x="630" y="249" font-family="Inter, sans-serif" font-size="11" fill="#4C1D95" fill-opacity="0.7">faster-whisper + yt-dlp + ffmpeg</text>
+  
+  <!-- Translation LLM card -->
+  <g filter="url(#cardShadow)">
+    <rect x="590" y="294" width="260" height="72" rx="12" fill="url(#mintGradient)"/>
+  </g>
+  
+  <!-- Port badge -->
+  <rect x="806" y="308" width="34" height="18" rx="8" fill="#16A34A"/>
+  <text x="823" y="320" font-family="Inter, sans-serif" font-size="10" font-weight="500" fill="white" text-anchor="middle">:5000</text>
+  
+  <!-- Chat bubble icon -->
+  <path d="M 608 319.5 C 608 318.119 609.119 317 610.5 317 H 617.5 C 618.881 317 620 318.119 620 319.5 V 323.5 C 620 324.881 618.881 326 617.5 326 H 614 L 611 328 V 326 H 610.5 C 609.119 326 608 324.881 608 323.5 V 319.5 Z" fill="#16A34A" fill-opacity="0.4"/>
+  
+  <text x="630" y="322" font-family="Inter, sans-serif" font-size="14" font-weight="600" fill="#14532D">Translation LLM</text>
+  <text x="630" y="337" font-family="Inter, sans-serif" font-size="11" fill="#14532D" fill-opacity="0.7">llama.cpp / Ollama / LM Studio</text>
+  
+  <!-- Footer -->
+  <line x1="30" y1="460" x2="870" y2="460" stroke="#E2E8F0" stroke-width="1"/>
+  <text x="30" y="482" font-family="Inter, sans-serif" font-size="10" fill="#CBD5E1">Yume v5.4.0</text>
+  <text x="870" y="482" font-family="Inter, sans-serif" font-size="10" fill="#CBD5E1" text-anchor="end">github.com/jenox645/Yume</text>
+</svg>

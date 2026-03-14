@@ -2,7 +2,7 @@
 
 <img src="assets/banner.png" alt="Yume Banner" width="800"/>
 
-# Pocket Yume
+# Yume
 
 **Real-time AI subtitles for any video — fully local, no cloud APIs.**
 
@@ -12,6 +12,10 @@ Transcription · Translation · Romanization
 [![Python](https://img.shields.io/badge/python-3.10+-green)]()
 [![Chrome](https://img.shields.io/badge/chrome-MV3-yellow)]()
 [![Firefox](https://img.shields.io/badge/firefox-MV3-orange)]()
+[![Stars](https://img.shields.io/github/stars/jenox645/Yume?style=flat-square)](https://github.com/jenox645/Yume/stargazers)
+[![Last Commit](https://img.shields.io/github/last-commit/jenox645/Yume?style=flat-square)](https://github.com/jenox645/Yume/commits/main)
+[![Issues](https://img.shields.io/github/issues/jenox645/Yume?style=flat-square)](https://github.com/jenox645/Yume/issues)
+[![CI](https://img.shields.io/github/actions/workflow/status/jenox645/Yume/ci.yml?label=CI&style=flat-square)](https://github.com/jenox645/Yume/actions)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
 </div>
@@ -88,20 +92,7 @@ The setup wizard runs on first launch — it detects your hardware, installs dep
 
 ## How It Works
 
-```
-Browser Extension                    Local Servers
-┌──────────────┐                    ┌─────────────────┐
-│  popup.js    │  settings/control  │ Whisper Server   │
-│  content.js  │ ◄───────────────── │ (port 5001)      │
-│  audio-      │  transcription     │ faster-whisper   │
-│  capture.js  │ ──────────────────►│ yt-dlp + ffmpeg  │
-│  subtitle-   │                    └─────────────────┘
-│  window.js   │                    ┌─────────────────┐
-│              │  translation       │ Translation LLM  │
-│              │ ◄─────────────────►│ (port 5000)      │
-└──────────────┘                    │ llama.cpp/Ollama │
-                                    └─────────────────┘
-```
+<img src="assets/architecture.svg" alt="Architecture" width="700"/>
 
 The extension sends the video URL to the Whisper server, which downloads audio chunks via yt-dlp, transcribes them with faster-whisper, and returns timestamped segments. The extension then sends text to the translation LLM in parallel — transcribing chunk N+1 while translating chunk N.
 
