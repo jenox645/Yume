@@ -1,6 +1,6 @@
 # Developer Guide
 
-> PocketYume v5.0.0
+> PocketYume v5.4.0
 
 ## Setup
 

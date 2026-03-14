@@ -1,5 +1,5 @@
 // ============================================================================
-// AUDIO CAPTURE v3.8.0 - Download-once + parallel pipeline
+// AUDIO CAPTURE v3.9.0 - Download-once + parallel pipeline (Yume v5.4.0)
 // Translation and romanization are SEPARATE API calls
 // ============================================================================
 
@@ -48,8 +48,10 @@ class AudioCapture {
     this.serverPatterns = null;  // null = not yet fetched
     this._loadUserBlacklist();
 
-    // Listen for blacklist changes — purge matching cached segments immediately
-    chrome.storage.onChanged.addListener((changes) => {
+    // Listen for blacklist + settings changes (bound so we can remove on dispose)
+    // NOTE: Language change restart is handled by content.js only — not here.
+    // This listener only handles blacklist, timingOffset, and romaji state sync.
+    this._onStorageChanged = (changes) => {
       if (changes.hallucinationBlacklist) {
         this.userBlacklist = changes.hallucinationBlacklist.newValue || [];
         DEBUG.info('AudioCapture', `User blacklist updated: ${this.userBlacklist.length} items`);
@@ -58,25 +60,11 @@ class AudioCapture {
       if (changes.settings) {
         const s = changes.settings.newValue || {};
         this.timingOffset = (s.timingOffset || 0) / 10;
-        // If language changed while pipeline is running, restart
-        const newLang = s.sourceLanguage || 'ja';
-        if (this.isCapturing && newLang !== this.sourceLanguage) {
-          console.log('[Yume] Language changed to', newLang, '— restarting pipeline');
-          this.sourceLanguage = newLang;
-          this.showRomaji = s.showRomaji || false;
-          // Safe: JS is single-threaded, so rapid language changes fire sequentially.
-          // Each generation++ causes prior pipelines to abort on their next gen check.
-          this.generation++; // abort all in-flight chunks
-          this.subtitleChunks = {}; this.fetchedChunks = new Set(); this.fetchingChunks = new Set();
-          this.emptyChunkCount = 0; this.fetchingStopped = false;
-          this.prepared = false;
-          this._runPipeline().catch(e => console.warn('[Yume] Pipeline restart failed:', e.message));
-        } else {
-          this.sourceLanguage = newLang;
-          this.showRomaji = s.showRomaji || false;
-        }
+        this.sourceLanguage = s.sourceLanguage || 'ja';
+        this.showRomaji = s.showRomaji || false;
       }
-    });
+    };
+    chrome.storage.onChanged.addListener(this._onStorageChanged);
 
     // Diagnostics log
     this.diagLog = [];
@@ -121,21 +109,34 @@ class AudioCapture {
     // Fetch server-authoritative hallucination patterns (async, non-blocking)
     this._fetchServerPatterns();
 
-    // Pre-start health check — fail fast if server isn't running
+    // Pre-start health check — fail fast if server isn't running, wait if loading
     window.dispatchEvent(new CustomEvent('display-status', {
       detail: { message: 'Checking server...', type: 'loading' }
     }));
-    try {
-      const healthResp = await this._sendMessage({ type: 'CHECK_SERVER',
-        url: (await new Promise(r => chrome.storage.local.get(['settings'], r)))?.settings?.whisperUrl + '/health'
-          || 'http://localhost:5001/health'
-      });
-      if (!healthResp || !healthResp.healthy) {
+    const maxWait = 120;  // seconds to wait for model loading
+    const startWait = Date.now();
+    while (true) {
+      try {
+        const healthResp = await this._sendMessage({ type: 'CHECK_SERVER',
+          url: (await new Promise(r => chrome.storage.local.get(['settings'], r)))?.settings?.whisperUrl + '/health'
+            || 'http://localhost:5001/health'
+        });
+        if (healthResp?.healthy) break;  // Server ready
+        if (healthResp?.loading) {
+          // Model is loading — show status and retry
+          const elapsed = Math.round((Date.now() - startWait) / 1000);
+          if (elapsed > maxWait) throw new Error('Model loading timed out — restart Yume');
+          window.dispatchEvent(new CustomEvent('display-status', {
+            detail: { message: `Loading model... (${elapsed}s)`, type: 'loading' }
+          }));
+          await this._sleep(2000);
+          continue;
+        }
+        throw new Error('Whisper server not reachable — is Yume running?');
+      } catch (e) {
+        if (e.message.includes('not reachable') || e.message.includes('Yume running') || e.message.includes('timed out')) throw e;
         throw new Error('Whisper server not reachable — is Yume running?');
       }
-    } catch (e) {
-      if (e.message.includes('not reachable') || e.message.includes('Yume running')) throw e;
-      throw new Error('Whisper server not reachable — is Yume running?');
     }
 
     window.dispatchEvent(new CustomEvent('display-status', {
@@ -156,7 +157,15 @@ class AudioCapture {
       window.dispatchEvent(new CustomEvent('display-status', {
         detail: { message: 'Restored from cache \u2713', type: 'success' }
       }));
-      this._signalReady();
+      // Guard: only signal ready if current playback chunk has segments
+      const curChunk = this._chunkForTime(this.video?.currentTime || 0);
+      if (this.subtitleChunks[curChunk]?.length > 0) {
+        this._signalReady();
+      } else {
+        window.dispatchEvent(new CustomEvent('display-status', {
+          detail: { message: 'Restored — no speech at current position', type: 'info' }
+        }));
+      }
       this.timeUpdateHandler = () => this._onTimeUpdate();
       video.addEventListener('timeupdate', this.timeUpdateHandler);
       DEBUG.success('AudioCapture', 'Session restore complete — playback ready');
@@ -389,13 +398,13 @@ class AudioCapture {
   }
 
   // =========================================================================
-  // FETCH A CHUNK (transcribe + translate + optionally romanize)
-  // Used for first chunk (must complete fully before playback starts)
-  // Pipeline chunks use _transcribeOnly + _translateAndFinalize for overlap
+  // SHARED: Transcribe + filter hallucinations + handle empty chunks
+  // Used by both _fetchChunk (synchronous first chunk) and _transcribeOnly (pipeline)
+  // Returns { segments, whisperTime, t0 } or null if empty/error.
   // =========================================================================
 
-  async _fetchChunk(chunkIndex) {
-    if (this.fetchingChunks.has(chunkIndex) || this.fetchedChunks.has(chunkIndex)) return;
+  async _transcribeAndFilter(chunkIndex) {
+    if (this.fetchingChunks.has(chunkIndex) || this.fetchedChunks.has(chunkIndex)) return null;
     this.fetchingChunks.add(chunkIndex);
 
     const chunkStart = chunkIndex * this.stepSize;
@@ -405,12 +414,10 @@ class AudioCapture {
     this._addDiag(chunkIndex, 'fetching', 0, 0, `${chunkStart}s-${chunkEnd}s`);
 
     try {
-      // 1. Transcribe (with retry)
       const tWhisper = performance.now();
       const transcription = await this._retryAsync(() => this._requestTranscription(chunkIndex), 2);
       const whisperTime = ((performance.now() - tWhisper) / 1000).toFixed(1);
 
-      // Filter hallucinations (built-in + user blacklist)
       const cleanSegments = (transcription?.segments || [])
         .filter(seg => !this._isHallucination(seg.text));
 
@@ -427,19 +434,45 @@ class AudioCapture {
           this.fetchingStopped = true;
           this._addDiag(chunkIndex, 'stopped', 0, 0, 'Too many empty chunks');
         }
-        if (chunkIndex === this._chunkForTime(this.video?.currentTime || 0) && this.subtitleChunks[chunkIndex]?.length > 0) this._signalReady();
-        return;
+        return null;
       }
 
       this.emptyChunkCount = 0;
       if (this.fetchingStopped) { this.fetchingStopped = false; }
 
-      // 2. Translate (skip entirely if translation is disabled — saves full LLM inference)
+      return { segments: cleanSegments, whisperTime, t0 };
+
+    } catch (error) {
+      const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+      this._addDiag(chunkIndex, 'error', 0, elapsed, error.message);
+      this.fetchingChunks.delete(chunkIndex);
+      if (chunkIndex === 0) {
+        window.dispatchEvent(new CustomEvent('display-error', {
+          detail: { message: `Failed: ${error.message}` }
+        }));
+      }
+      return null;
+    }
+  }
+
+  // =========================================================================
+  // FETCH A CHUNK (transcribe + translate + optionally romanize)
+  // Used for first chunk (must complete fully before playback starts)
+  // Pipeline chunks use _transcribeOnly + _translateAndFinalize for overlap
+  // =========================================================================
+
+  async _fetchChunk(chunkIndex) {
+    const result = await this._transcribeAndFilter(chunkIndex);
+    if (!result) return;
+
+    const { segments: cleanSegments, whisperTime, t0 } = result;
+
+    try {
+      // 2. Translate (skip entirely if translation is disabled)
       const tTrans = performance.now();
       const { settings: transSettings } = await new Promise(r => chrome.storage.local.get(['settings'], r));
       let translated;
       if (transSettings?.showEnglish === false) {
-        // No translation — store source-language-only segments
         translated = cleanSegments.map(seg => ({
           start: seg.start, end: seg.end,
           original: seg.text, english: '', romaji: '',
@@ -450,7 +483,7 @@ class AudioCapture {
       }
       const transTime = ((performance.now() - tTrans) / 1000).toFixed(1);
 
-      // 3. Romanize if enabled (completely separate call)
+      // 3. Romanize if enabled
       let romaTime = '0';
       try {
         if (transSettings?.showRomaji) {
@@ -488,57 +521,9 @@ class AudioCapture {
   }
 
   // Phase 1: Transcribe only (Whisper server). Returns segments or null.
+  // Uses shared _transcribeAndFilter — no duplicated logic.
   async _transcribeOnly(chunkIndex) {
-    if (this.fetchingChunks.has(chunkIndex) || this.fetchedChunks.has(chunkIndex)) return null;
-    this.fetchingChunks.add(chunkIndex);
-
-    const chunkStart = chunkIndex * this.stepSize;
-    const chunkEnd = chunkStart + this.chunkDuration;
-    const t0 = performance.now();
-
-    this._addDiag(chunkIndex, 'fetching', 0, 0, `${chunkStart}s-${chunkEnd}s`);
-
-    try {
-      const tWhisper = performance.now();
-      const transcription = await this._retryAsync(() => this._requestTranscription(chunkIndex), 2);
-      const whisperTime = ((performance.now() - tWhisper) / 1000).toFixed(1);
-
-      const cleanSegments = (transcription?.segments || [])
-        .filter(seg => !this._isHallucination(seg.text));
-
-      if (cleanSegments.length === 0) {
-        const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-        this._addDiag(chunkIndex, 'empty', 0, elapsed, `${transcription?.segments?.length || 0} raw -> 0 clean`);
-        this.subtitleChunks[chunkIndex] = [];
-        this.fetchedChunks.add(chunkIndex);
-        this.fetchingChunks.delete(chunkIndex);
-        this._dispatchProgress();
-
-        this.emptyChunkCount++;
-        if (this.emptyChunkCount >= this.maxEmptyChunks) {
-          this.fetchingStopped = true;
-          this._addDiag(chunkIndex, 'stopped', 0, 0, 'Too many empty chunks');
-        }
-        if (chunkIndex === this._chunkForTime(this.video?.currentTime || 0) && this.subtitleChunks[chunkIndex]?.length > 0) this._signalReady();
-        return null;
-      }
-
-      this.emptyChunkCount = 0;
-      if (this.fetchingStopped) { this.fetchingStopped = false; }
-
-      return { segments: cleanSegments, whisperTime, t0 };
-
-    } catch (error) {
-      const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-      this._addDiag(chunkIndex, 'error', 0, elapsed, error.message);
-      this.fetchingChunks.delete(chunkIndex);
-      if (chunkIndex === 0) {
-        window.dispatchEvent(new CustomEvent('display-error', {
-          detail: { message: `Failed: ${error.message}` }
-        }));
-      }
-      return null;
-    }
+    return this._transcribeAndFilter(chunkIndex);
   }
 
   // Phase 2: Translate + romanize + store. Runs concurrently with next transcription.
@@ -802,8 +787,30 @@ class AudioCapture {
     }));
   }
 
-  // Separate romanization call — only runs if showRomaji is on
+  // Separate romanization call — uses batch endpoint for single round trip
   async _romanizeBatch(segments) {
+    if (segments.length === 0) return;
+    const texts = segments.map(seg => seg.original || '');
+
+    try {
+      // Single batch call — 1 round trip instead of N
+      const response = await this._sendMessage({
+        type: 'ROMANIZE_BATCH',
+        texts,
+        sourceLang: this.sourceLanguage || 'ja'
+      });
+      if (response?.success && response.romanizations) {
+        for (let i = 0; i < segments.length; i++) {
+          const roma = (response.romanizations[i] || '').trim();
+          if (roma) segments[i].romaji = roma;
+        }
+        return;
+      }
+    } catch (err) {
+      DEBUG.warn('AudioCapture', 'Batch romanization failed, falling back to sequential');
+    }
+
+    // Fallback: sequential (for older server versions or if batch fails)
     for (const seg of segments) {
       try {
         const response = await this._sendMessage({
@@ -821,22 +828,35 @@ class AudioCapture {
   }
 
   // Re-romanize already cached chunks (when user toggles romaji ON mid-video)
+  // Uses batch endpoint for efficiency — one call per chunk instead of one per segment
   async reRomanizeCachedChunks() {
-    DEBUG.info('AudioCapture', 'Re-romanizing cached chunks');
+    DEBUG.info('AudioCapture', 'Re-romanizing cached chunks (batch)');
     for (const [idx, segments] of Object.entries(this.subtitleChunks)) {
-      for (const seg of segments) {
-        if (!seg.romaji) {
-          try {
-            const response = await this._sendMessage({
-              type: 'ROMANIZE',
-              text: seg.original,
-              sourceLang: this.sourceLanguage || 'ja'
-            });
-            if (response?.success && response.romanization) {
-              seg.romaji = response.romanization.trim();
-            }
-          } catch (e) { /* skip */ }
+      // Collect segments that need romanization
+      const needsRoma = [];
+      const needsIndices = [];
+      for (let i = 0; i < segments.length; i++) {
+        if (!segments[i].romaji && segments[i].original) {
+          needsRoma.push(segments[i].original);
+          needsIndices.push(i);
         }
+      }
+      if (needsRoma.length === 0) continue;
+
+      try {
+        const response = await this._sendMessage({
+          type: 'ROMANIZE_BATCH',
+          texts: needsRoma,
+          sourceLang: this.sourceLanguage || 'ja'
+        });
+        if (response?.success && response.romanizations) {
+          for (let j = 0; j < needsIndices.length; j++) {
+            const roma = (response.romanizations[j] || '').trim();
+            if (roma) segments[needsIndices[j]].romaji = roma;
+          }
+        }
+      } catch (e) {
+        DEBUG.warn('AudioCapture', `Re-romanize chunk ${idx} failed: ${e.message}`);
       }
     }
     // Force refresh current display
@@ -983,6 +1003,12 @@ class AudioCapture {
     this.subtitleChunks = {}; this.fetchedChunks = new Set(); this.fetchingChunks = new Set();
     this.lastShownSegment = null; this.emptyChunkCount = 0; this.fetchingStopped = false;
     this.prepared = false; this.pipelineRunning = false; this.priorityChunk = -1;
+
+    // Remove storage listener to prevent leaks when AudioCapture is recreated
+    if (this._onStorageChanged) {
+      chrome.storage.onChanged.removeListener(this._onStorageChanged);
+      this._onStorageChanged = null;
+    }
 
     // Clear server subtitle cache (fire and forget)
     this._sendMessage({ type: 'CLEAR_SERVER_CACHE' }).catch(e => console.warn('[Yume]', e.message));

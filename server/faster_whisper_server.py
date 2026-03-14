@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Yume -- Faster-Whisper Server v3.9
+Yume -- Faster-Whisper Server v5.4.0
 Word-level timestamps + pause re-splitting + security hardening
+Parallel startup: Flask starts before model loads. Prewarm inference on load.
 All output is ASCII-safe for Windows cp932/cp1252 locales.
 """
 
@@ -104,8 +105,8 @@ def _validate_url(url):
         return False, "URL cannot start with '-' (argument injection)"
     try:
         parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https", ""):
-            return False, f"Unsupported URL scheme: {parsed.scheme}"
+        if parsed.scheme not in ("http", "https"):
+            return False, f"Unsupported URL scheme: {parsed.scheme!r} (only http/https allowed)"
         if not parsed.netloc and not parsed.path:
             return False, "URL has no host or path"
     except Exception as e:
@@ -167,6 +168,7 @@ def _cleanup_request_temps(exception):
 
 # Global state
 model = None
+batched_model = None    # BatchedInferencePipeline wrapper (optional, for multi-chunk)
 model_name = "large-v3"
 device = "cuda"
 compute_type = "float16"
@@ -276,9 +278,10 @@ def health():
     origin = request.headers.get("Origin", "")
     safe_caller = (not origin) or origin.startswith("chrome-extension://") or origin.startswith("moz-extension://")
 
+    is_ready = model is not None
     base = {
-        "status": "ready" if model else "loading",
-        "version": "5.0.0",
+        "status": "ready" if is_ready else "loading",
+        "version": "5.4.0",
         "prepare_supported": True,
         "ytdlp_available": _check_ytdlp(),
     }
@@ -299,7 +302,9 @@ def health():
             "translation_url": f"http://{translation_host}:{translation_port}",
         })
 
-    return jsonify(base)
+    # Return 503 while model is loading — extension checks response.ok
+    status_code = 200 if is_ready else 503
+    return jsonify(base), status_code
 
 
 @app.route('/stats', methods=['GET'])
@@ -348,10 +353,15 @@ def switch_model():
     valid_models = [
         'tiny', 'tiny.en', 'base', 'base.en', 'small', 'small.en',
         'medium', 'medium.en', 'large-v1', 'large-v2', 'large-v3',
+        'turbo', 'large-v3-turbo',
         'distil-large-v2', 'distil-large-v3',
     ]
     if new_model not in valid_models:
         return jsonify({"error": f"Unknown model: {new_model}", "valid": valid_models}), 400
+
+    # Normalize turbo alias
+    if new_model == 'turbo':
+        new_model = 'large-v3-turbo'
 
     if new_model == model_name:
         return jsonify({"status": "already_loaded", "model": model_name})
@@ -363,6 +373,12 @@ def switch_model():
         with transcribe_lock:
             model_name = new_model
             model = WhisperModel(model_name, device=device, compute_type=compute_type)
+            # Rebuild batched pipeline wrapper
+            try:
+                from faster_whisper import BatchedInferencePipeline
+                batched_model = BatchedInferencePipeline(model=model)
+            except (ImportError, Exception):
+                batched_model = None
 
         # Clear subtitle cache (old model's results are stale)
         with prefetch_lock:
@@ -458,9 +474,15 @@ def _is_youtube_url(url):
     """Check if URL is a YouTube URL (for YouTube-specific args)."""
     if not url:
         return False
-    yt_domains = ["youtube.com", "youtu.be", "youtube-nocookie.com", "music.youtube.com"]
-    url_lower = url.lower()
-    return any(d in url_lower for d in yt_domains)
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or '').lower()
+        yt_domains = {"youtube.com", "www.youtube.com", "youtu.be",
+                      "youtube-nocookie.com", "www.youtube-nocookie.com",
+                      "music.youtube.com", "m.youtube.com"}
+        return host in yt_domains or host.endswith(".youtube.com")
+    except Exception:
+        return False
 
 
 # ============================================================================
@@ -1260,9 +1282,21 @@ def _romanize_chinese(text):
         return None
 
 
+def _romanize_korean(text):
+    """Convert Korean text to Revised Romanization using `romanization` (MIT). ~1ms."""
+    try:
+        from romanization import romanize as kr_romanize
+        return kr_romanize(text)
+    except ImportError:
+        return None
+    except Exception as e:
+        print(f"[Yume] Korean romanization error: {e}")
+        return None
+
+
 @app.route('/romanize', methods=['POST', 'OPTIONS'])
 def romanize():
-    """Deterministic romanization for ja/zh only. Returns in <5ms vs 1-10s for LLM.
+    """Deterministic romanization for ja/zh/ko. Returns in <5ms vs 1-10s for LLM.
     Falls back to {supported: false} if library not available."""
     if request.method == 'OPTIONS':
         return '', 204
@@ -1279,12 +1313,52 @@ def romanize():
         result = _romanize_japanese(text)
     elif lang == 'zh':
         result = _romanize_chinese(text)
-    # Korean: could add korean-romanizer here in future
+    elif lang == 'ko':
+        result = _romanize_korean(text)
 
     if result is not None:
         return jsonify({"romanization": result, "method": "deterministic", "language": lang})
     else:
         return jsonify({"supported": False, "language": lang}), 501
+
+
+@app.route('/romanize_batch', methods=['POST', 'OPTIONS'])
+def romanize_batch():
+    """Batch deterministic romanization — single round trip for N texts.
+    Accepts: {"texts": ["text1", "text2", ...], "language": "ja"}
+    Returns: {"romanizations": ["roma1", "roma2", ...], "method": "deterministic"}
+    Falls back to empty strings for unsupported languages."""
+    if request.method == 'OPTIONS':
+        return '', 204
+
+    data = request.get_json() or {}
+    texts = data.get('texts', [])
+    lang = data.get('language') or None
+
+    if not texts or not isinstance(texts, list):
+        return jsonify({"romanizations": [], "method": "empty"})
+
+    # Pick the right romanizer
+    romanizer = None
+    if lang == 'ja':
+        romanizer = _romanize_japanese
+    elif lang == 'zh':
+        romanizer = _romanize_chinese
+    elif lang == 'ko':
+        romanizer = _romanize_korean
+
+    if romanizer is None:
+        return jsonify({"supported": False, "language": lang}), 501
+
+    results = []
+    for text in texts:
+        try:
+            r = romanizer(text.strip()) if text.strip() else ''
+            results.append(r or '')
+        except Exception:
+            results.append('')
+
+    return jsonify({"romanizations": results, "method": "deterministic", "language": lang})
 
 
 HALLUCINATION_PATTERNS = [
@@ -1429,6 +1503,9 @@ def _is_credits_line(text):
 
 def _transcribe_file(audio_path, language, start_offset=0.0):
     """Transcribe audio file. Uses v2.0.7 parameters proven to work for music."""
+    if model is None:
+        raise RuntimeError("Model is still loading — try again in a few seconds")
+
     print(f"[Yume] Transcribing {audio_path} (offset: {start_offset}s)")
     t_start = time.time()
 
@@ -1568,7 +1645,7 @@ def main():
         compute_type = "float16" if device == "cuda" else "int8"
 
     print("=" * 70)
-    print("  YUME -- Whisper Server v3.9.0")
+    print("  YUME -- Whisper Server v5.4.0")
     print("=" * 70)
     print(f"  Model:            {model_name}")
     print(f"  Device:           {device}")
@@ -1590,10 +1667,13 @@ def main():
     try:
         from pypinyin import pinyin; roma_parts.append("zh(pypinyin)")
     except ImportError: pass
+    try:
+        from romanization import romanize as _kr; roma_parts.append("ko(romanization)")
+    except ImportError: pass
     if roma_parts:
         print(f"  Romanization:     {', '.join(roma_parts)} (instant)")
     else:
-        print(f"  Romanization:     LLM-only (pip install pykakasi pypinyin for instant)")
+        print(f"  Romanization:     LLM-only (pip install pykakasi pypinyin romanization for instant)")
 
     print("=" * 70)
 
@@ -1628,33 +1708,25 @@ def main():
             print(f"  Now using: cookies ({cookies_browser})")
             print("")
 
-    print("")
-    print("  Loading Whisper model...")
-    print("")
-
+    # Write API token file for extension discovery (before model load so
+    # the extension can discover the server while model is still loading)
+    base_dir = Path(__file__).parent.parent.resolve()
+    TOKEN_FILE = str(base_dir / ".yume_token")
     try:
-        model = WhisperModel(model_name, device=device, compute_type=compute_type)
+        with open(TOKEN_FILE, 'w') as f:
+            f.write(API_TOKEN)
+        os.chmod(TOKEN_FILE, 0o600)  # owner-only read/write
+        print(f"  API token:        written to {TOKEN_FILE}")
+    except Exception as e:
+        print(f"  API token:        {API_TOKEN[:12]}... (file write failed: {e})")
 
-        print("=" * 70)
-        print("  MODEL LOADED -- Server ready")
-        print(f"  Listening on http://localhost:{port}")
-        print("=" * 70)
+    print(f"  Security:         Host validation + API token + URL validation")
 
-        # Write API token file for extension discovery
-        base_dir = Path(__file__).parent.parent.resolve()
-        TOKEN_FILE = str(base_dir / ".yume_token")
-        try:
-            with open(TOKEN_FILE, 'w') as f:
-                f.write(API_TOKEN)
-            os.chmod(TOKEN_FILE, 0o600)  # owner-only read/write
-            print(f"  API token:        written to {TOKEN_FILE}")
-        except Exception as e:
-            print(f"  API token:        {API_TOKEN[:12]}... (file write failed: {e})")
-
-        print(f"  Security:         Host validation + API token + URL validation")
-        print("")
-
-        # Prefer Waitress (production WSGI) over Flask dev server
+    # ── Parallel startup: start HTTP server FIRST, then load model ──
+    # The /health endpoint returns {"status": "loading"} while model is None,
+    # so the extension can connect immediately and show "Loading model..." to
+    # the user instead of "Server not reachable".
+    def _start_server():
         try:
             from waitress import serve
             print("  Server:           Waitress (production)")
@@ -1665,6 +1737,46 @@ def main():
             print("  Server:           Flask dev (install waitress for production)")
             print("")
             app.run(host='127.0.0.1', port=port, debug=False, threaded=True)
+
+    server_thread = threading.Thread(target=_start_server, daemon=True)
+    server_thread.start()
+
+    print("")
+    print(f"  Listening on http://localhost:{port}  (status: loading)")
+    print("  Loading Whisper model...")
+    print("")
+
+    try:
+        model = WhisperModel(model_name, device=device, compute_type=compute_type)
+
+        # Try to create BatchedInferencePipeline wrapper for potential multi-chunk batching
+        try:
+            from faster_whisper import BatchedInferencePipeline
+            batched_model = BatchedInferencePipeline(model=model)
+            print(f"  Batched pipeline: available (faster-whisper BatchedInferencePipeline)")
+        except (ImportError, Exception) as bp_err:
+            batched_model = None
+            print(f"  Batched pipeline: unavailable ({bp_err})")
+
+        # Prewarm: run a tiny dummy inference to trigger CUDA kernel compilation
+        # and KV cache allocation. This moves the first-inference penalty from
+        # the user's first real request to startup time.
+        try:
+            import numpy as np
+            _dummy = np.zeros(16000, dtype=np.float32)  # 1 second of silence
+            list(model.transcribe(_dummy, language="en"))
+            print("  Prewarm:          done (CUDA kernels compiled)")
+        except Exception as pw_err:
+            print(f"  Prewarm:          skipped ({pw_err})")
+
+        print("=" * 70)
+        print("  MODEL LOADED -- Server ready")
+        print(f"  Listening on http://localhost:{port}")
+        print("=" * 70)
+        print("")
+
+        # Keep main thread alive (server runs in daemon thread)
+        server_thread.join()
 
     except Exception as e:
         print(f"\n  FAILED TO LOAD MODEL: {e}")

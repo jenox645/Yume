@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Yume - AI Subtitles",
-  "version": "5.0.0",
-  "description": "You Understand More Easily - Real-time AI subtitles for Japanese videos",
+  "version": "5.4.0",
+  "description": "You Understand More Easily - Real-time AI subtitles for any video, fully local",
   
   "permissions": [
     "activeTab",
@@ -16,8 +16,7 @@
   ],
   
   "background": {
-    "service_worker": "js/background.js",
-    "type": "module"
+    "service_worker": "js/background.js"
   },
   
   "action": {

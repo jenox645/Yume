@@ -20,6 +20,10 @@
   --accent-green: #5da271;
   --accent-red: #c74848;
   --glow-gold: rgba(212, 175, 55, 0.3);
+
+  /* Glass Effect (CSS vars controlled by popup.js, applied to subtitle window via content.css) */
+  --glass-blur: 18px;
+  --glass-radius: 20px;
 }
 
 body {

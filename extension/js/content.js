@@ -1,5 +1,5 @@
 // ============================================================================
-// CONTENT SCRIPT v5.0.0 - Main orchestrator
+// CONTENT SCRIPT v5.4.0 - Main orchestrator
 // ============================================================================
 
 (async function() {
@@ -358,6 +358,20 @@
     if (message.action === 'CLEAR_CONTENT_CACHE') {
       const cleared = state.audioCapture ? state.audioCapture.clearContentCache() : 0;
       sendResponse({ success: true, cleared });
+      return false;
+    }
+
+    if (message.action === 'UPDATE_GLASS') {
+      // Live glass update from popup slider — apply to subtitle window immediately
+      if (state.subtitleWindow?.element) {
+        const s = state.subtitleWindow.settings || {};
+        s.glassEnabled = message.glassEnabled;
+        s.glassBlur = message.glassBlur;
+        s.glassRadius = message.glassRadius;
+        state.subtitleWindow.settings = s;
+        state.subtitleWindow.applyCustomStyles();
+      }
+      sendResponse({ success: true });
       return false;
     }
   });

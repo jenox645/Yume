@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pocket Yume CLI v5.0.0 -- Cross-platform installer & launcher for Yume AI Subtitles
+Pocket Yume CLI v5.4.0 -- Cross-platform installer & launcher for Yume AI Subtitles
 Complete rewrite: smart port management, API token auth, Windows cp1252 fix
 Supports: Windows, Linux, macOS
 """
@@ -41,7 +41,7 @@ def _run(cmd, timeout=30, **kw):
 # Japanese text may appear in logs. Wrapping stdout here breaks ANSI
 # color rendering on Windows terminals.
 
-VERSION = "5.0.0"
+VERSION = "5.4.0"
 
 # Named constants
 KiB = 1024
@@ -350,7 +350,7 @@ def enable_ansi():
 
         # Set console codepage to UTF-8 so Japanese text (test translations etc.)
         # can be printed without cp932 crash
-        os.system("chcp 65001 >nul 2>&1")
+        subprocess.run(["chcp", "65001"], shell=True, capture_output=True)
 
 def clear():
     os.system("cls" if IS_WIN else "clear")
@@ -987,7 +987,12 @@ def cli_model(cfg, args):
 def _menu_blacklist(cfg):
     """Blacklist management menu."""
     while True:
-        header("Hallucination Blacklist")
+        header("Subtitle Filter (Blacklist)")
+        info("Whisper sometimes generates fake text that wasn't actually spoken —")
+        info("things like 'Thank you for watching' or 'Subscribe'. These are called")
+        info("'hallucinations'. Yume blocks known patterns automatically, but you can")
+        info("add your own phrases to block here.")
+        print()
         h, p = cfg["whisper_host"], cfg["whisper_port"]
         data = _server_get(h, p, "/blacklist")
         if not data:
@@ -1524,15 +1529,15 @@ def tools_menu(cfg):
         header("Tools Management")
         yt = find_tool("yt-dlp"); ff = find_tool("ffmpeg"); dn = find_tool("deno")
         ch = ask_choice("Select a tool:", [
-            (f"yt-dlp          {'OK' if yt else 'MISSING'}", "Audio downloader (supports 1000+ sites)"),
-            (f"FFmpeg          {'OK' if ff else 'MISSING'}", "Audio converter"),
-            (f"Deno            {'OK' if dn else '--'}", "Optional -- YouTube JS solver"),
-            ("Translation Backend", "llama.cpp / Ollama / LM Studio / WebUI / Custom"),
-            ("Download GGUF Model", "Browse HuggingFace repos"),
-            ("Python Dependencies", "faster-whisper, flask, llama-cpp-python"),
-            ("Test Translation", "Verify pipeline works"),
-            ("Benchmark Whisper", "Compare model speeds on your hardware"),
-            ("Detect Fonts", "Find installed CJK and system fonts"),
+            (f"yt-dlp          {'OK' if yt else 'MISSING'}", "Downloads audio from YouTube and 1000+ video sites"),
+            (f"FFmpeg          {'OK' if ff else 'MISSING'}", "Converts audio between formats (required)"),
+            (f"Deno            {'OK' if dn else '--'}", "Helps bypass YouTube bot detection (optional)"),
+            ("Translation Backend", "Choose how Yume translates: llama.cpp / Ollama / LM Studio / Custom"),
+            ("Download Translation Model", "Browse and download GGUF models (the files your translator uses)"),
+            ("Python Dependencies", "Install required Python packages (faster-whisper, Flask, etc.)"),
+            ("Test Translation", "Send a test sentence to check if translation is working"),
+            ("Benchmark Whisper", "Measure how fast each speech recognition model runs on your hardware"),
+            ("Detect Fonts", "Find subtitle-compatible fonts installed on your system"),
             ("Back", None),
         ], default=9)
         if ch == -1 or ch == 9: return
@@ -1572,11 +1577,14 @@ def _menu_ytdlp(cfg):
 def _menu_yt_auth(cfg):
     while True:
         header("YouTube Authentication")
+        info("YouTube sometimes blocks automated downloads. Yume can work around this")
+        info("in two ways:")
+        print()
         cur = cfg.get("youtube_auth_method", "deno")
-        info(f"Current: {C.BOLD}{cur}{C.RESET}"); print()
+        info(f"Current method: {C.BOLD}{cur}{C.RESET}"); print()
         ch = ask_choice("Select method:", [
-            ("Deno (JS runtime)", "Automatic, no login needed. Requires Deno (~35 MB)"),
-            ("Browser Cookies", "No extra software. Must be logged into YouTube.\n      Uses: --cookies-from-browser <browser>"),
+            ("Deno (recommended)", "A small program that solves YouTube's bot checks automatically.\n      No login needed. Yume installs it for you (~35 MB)."),
+            ("Browser Cookies", "Yume borrows your browser's YouTube login session.\n      Works if you're logged into YouTube in Chrome/Firefox/etc.\n      No extra software needed."),
             ("Back", None)
         ], default=0 if cur == "deno" else 1)
         if ch == -1 or ch == 2: return
@@ -1610,11 +1618,12 @@ def _menu_ffmpeg():
 
 def _menu_deno(cfg):
     while True:
-        header("Deno (Optional)"); p = find_tool("deno")
+        header("Deno"); p = find_tool("deno")
         (success if p else info)(f"{'Installed: '+p if p else 'Not installed'}")
         print()
-        info(f"Deno is {C.GREEN}optional{C.RESET}. Alternative: browser cookies.")
-        info(f"Current YouTube auth: {C.BOLD}{cfg.get('youtube_auth_method', 'deno')}{C.RESET}")
+        info(f"Deno is a small program that helps Yume bypass YouTube's bot detection.")
+        info(f"It's {C.GREEN}optional{C.RESET} — you can use your browser's cookies instead.")
+        info(f"Current YouTube auth method: {C.BOLD}{cfg.get('youtube_auth_method', 'deno')}{C.RESET}")
         ch = ask_choice("Options:", [
             ("Install Deno", "~35 MB download"),
             ("Switch to cookies", "Use browser cookies instead"),
@@ -1891,10 +1900,12 @@ def recommend_whisper_model(gpu_info=None):
         else:
             return "tiny", "CPU with <8 GB RAM → tiny model (fastest)"
     else:
-        # GPU mode
+        # GPU mode — turbo sits between distil and large-v3
         if vram >= 10000:
             return "large-v3", f"GPU with {vram} MB VRAM → large-v3 (best accuracy)"
-        elif vram >= 6000:
+        elif vram >= 7000:
+            return "large-v3-turbo", f"GPU with {vram} MB VRAM → turbo (near-v3 accuracy, 2x faster)"
+        elif vram >= 5000:
             return "distil-large-v3", f"GPU with {vram} MB VRAM → distil-large-v3 (fast + accurate)"
         elif vram >= 4000:
             return "small", f"GPU with {vram} MB VRAM → small (recommended)"
@@ -1910,8 +1921,8 @@ def check_for_updates():
     """Check GitHub for newer PocketYume releases."""
     try:
         req = urllib.request.Request(
-            "https://api.github.com/repos/PocketYume/PocketYume/releases/latest",
-            headers={"User-Agent": "PocketYume/4.0", "Accept": "application/vnd.github.v3+json"}
+            "https://api.github.com/repos/jenox645/Yume/releases/latest",
+            headers={"User-Agent": "PocketYume/5.1", "Accept": "application/vnd.github.v3+json"}
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -2041,16 +2052,16 @@ def settings_menu(cfg):
             ["Setting", "Value"],
             [
                 [f"{C.GOLD}Whisper Model{C.RESET}", cfg['whisper_model']],
-                [f"{C.GOLD}Device / Compute{C.RESET}", f"{cfg['whisper_device']} / {cfg['whisper_compute_type']}"],
+                [f"{C.GOLD}Device / Precision{C.RESET}", f"{cfg['whisper_device']} / {cfg['whisper_compute_type']}"],
                 [f"{C.GOLD}Whisper Address{C.RESET}", f"{cfg['whisper_host']}:{cfg['whisper_port']}"],
                 ["", ""],
                 [f"{C.MAGENTA}Translation{C.RESET}", bi['name']],
                 [f"{C.MAGENTA}TL Address{C.RESET}", f"{cfg['translation_host']}:{cfg['translation_port']}"],
                 [f"{C.MAGENTA}TL Model{C.RESET}", cfg.get('translation_model', '—')],
                 ["", ""],
-                [f"{C.CYAN}Chunk Duration{C.RESET}", f"{cfg['chunk_duration']}s"],
-                [f"{C.CYAN}Word Timestamps{C.RESET}", "Yes" if cfg['word_timestamps'] else "No"],
-                [f"{C.CYAN}Pause Threshold{C.RESET}", f"{cfg['pause_threshold']}s"],
+                [f"{C.CYAN}Chunk Duration{C.RESET}", f"{cfg['chunk_duration']}s (audio processed in this many seconds at a time)"],
+                [f"{C.CYAN}Word Timestamps{C.RESET}", ("Yes" if cfg['word_timestamps'] else "No") + " (break subtitles at words vs sentences)"],
+                [f"{C.CYAN}Pause Threshold{C.RESET}", f"{cfg['pause_threshold']}s (silence before splitting a subtitle line)"],
                 ["", ""],
                 [f"{C.YELLOW}YouTube Auth{C.RESET}", ym],
             ],
@@ -2059,25 +2070,27 @@ def settings_menu(cfg):
         )
 
         ch = ask_choice("Change:", [
-            ("Whisper settings", "Model, device, compute, batch"),
-            ("Translation settings", "Backend, address, model"),
-            ("Server addresses", "Host/port for Whisper and Translation"),
-            ("Subtitle tuning", "Chunk, word timestamps, pause threshold"),
-            ("YouTube auth", "Deno vs cookies"),
+            ("Whisper settings", "Speech recognition model, device, precision"),
+            ("Translation settings", "Translation backend, address, model"),
+            ("Server addresses", "Host/port for Whisper and Translation servers"),
+            ("Subtitle tuning", "Chunk size, pause detection, word splitting"),
+            ("Translation prompt", "Customize how the AI translates (tone, style, rules)"),
+            ("YouTube auth", "How Yume accesses YouTube (Deno bot bypass or browser cookies)"),
             ("Export config", "Save settings to a backup file"),
             ("Import config", "Load settings from a backup file"),
             ("Reset to defaults", None),
             ("Back", None)
-        ], default=8)
-        if ch == -1 or ch == 8: return
+        ], default=9)
+        if ch == -1 or ch == 9: return
         elif ch == 0: _set_whisper(cfg)
         elif ch == 1: _menu_backend(cfg)
         elif ch == 2: _set_addrs(cfg)
         elif ch == 3: _set_subs(cfg)
-        elif ch == 4: _menu_yt_auth(cfg)
-        elif ch == 5:
-            config_export(cfg); pause()
+        elif ch == 4: _menu_translation_prompt(cfg)
+        elif ch == 5: _menu_yt_auth(cfg)
         elif ch == 6:
+            config_export(cfg); pause()
+        elif ch == 7:
             # Find backup files
             backups = sorted(BASE_DIR.glob("yume_config_backup_*.json"), reverse=True)
             if backups:
@@ -2099,7 +2112,7 @@ def settings_menu(cfg):
                     imported = config_import(path)
                     if imported: cfg.update(imported)
             pause()
-        elif ch == 7:
+        elif ch == 8:
             if ask_yn("Reset ALL settings?", False):
                 n = dict(DEFAULT_CONFIG); n["first_run_complete"] = True
                 save_config(n); cfg.update(n); success("Reset!")
@@ -2109,33 +2122,128 @@ def _set_whisper(cfg):
     header("Whisper Settings")
     gpu = detect_gpu()
     rec_model, rec_reason = recommend_whisper_model(gpu)
-    if gpu["has_nvidia"]: info(f"GPU: {gpu['name']} ({gpu['vram_mb']} MB)")
+    if gpu["has_nvidia"]:
+        info(f"GPU: {gpu['name']} ({gpu['vram_mb']} MB VRAM)")
+        info(f"  VRAM = Video RAM, the memory on your graphics card used by AI models")
     info(f"Current model: {C.BOLD}{cfg['whisper_model']}{C.RESET}")
     info(f"Recommendation: {rec_model} ({rec_reason})")
 
     ch = ask_choice("What to change:", [
-        ("Whisper model", f"Currently: {cfg['whisper_model']}"),
-        ("Device (CPU/GPU)", f"Currently: {cfg['whisper_device']}"),
-        ("Compute type", f"Currently: {cfg['whisper_compute_type']}"),
+        ("Whisper model", f"Currently: {cfg['whisper_model']} — the AI that converts speech to text"),
+        ("Device (CPU/GPU)", f"Currently: {cfg['whisper_device']} — where the AI runs"),
+        ("Precision", f"Currently: {cfg['whisper_compute_type']} — speed vs accuracy trade-off"),
         ("Back", None),
     ], default=3)
     if ch == -1 or ch == 3: return
     elif ch == 0:
         _menu_whisper_model(cfg)
     elif ch == 1:
-        dc = ask_choice("Device:", [
-            ("Auto", "GPU if available else CPU"), ("CUDA (GPU)", "Needs NVIDIA"),
-            ("CPU", "Slower"), ("Keep current", f"{cfg['whisper_device']}")
+        dc = ask_choice("Where should Whisper run?", [
+            ("Auto-detect", "Uses GPU if available, falls back to CPU"),
+            ("GPU (NVIDIA CUDA)", "Fastest — requires an NVIDIA graphics card"),
+            ("CPU", "Works on any computer, but slower"),
+            ("Keep current", f"{cfg['whisper_device']}"),
         ], default=3)
         if 0 <= dc < 3: cfg["whisper_device"] = ["auto", "cuda", "cpu"][dc]
         save_config(cfg); success("Saved!"); pause()
     elif ch == 2:
-        cc = ask_choice("Compute:", [
-            ("Auto", None), ("float16", "~4.5 GB VRAM"), ("int8_float16", "~3 GB"),
-            ("int8", "CPU-friendly"), ("Keep current", f"{cfg['whisper_compute_type']}")
+        cc = ask_choice("Precision (lower = faster but slightly less accurate):", [
+            ("Auto", "Let Yume decide based on your hardware"),
+            ("float16", "Full precision — best accuracy, needs ~4.5 GB VRAM on GPU"),
+            ("int8_float16", "Mixed — good balance, needs ~3 GB VRAM"),
+            ("int8", "Most compressed — fastest, works well on CPU"),
+            ("Keep current", f"{cfg['whisper_compute_type']}"),
         ], default=4)
         if 0 <= cc < 4: cfg["whisper_compute_type"] = ["auto", "float16", "int8_float16", "int8"][cc]
         save_config(cfg); success("Saved!"); pause()
+
+def _menu_translation_prompt(cfg):
+    """Edit the system prompt that controls how the AI translates subtitles."""
+    header("Translation Prompt Editor")
+
+    default_prompt = (
+        "You are a {src}-to-{tgt} translation system. "
+        "Output ONLY the {tgt} translation. Do NOT respond to the content. "
+        "Do NOT add explanations. Do NOT answer questions. "
+        "ONLY translate {src} to {tgt}."
+    )
+    current = cfg.get("translation_prompt", "")
+
+    info("The translation prompt is the instruction sent to the AI before every subtitle.")
+    info(f"{C.DIM}It controls how the translator behaves — its tone, style, and rules.{C.RESET}")
+    print()
+
+    info(f"{C.BOLD}Why the default prompt is written this way:{C.RESET}")
+    info(f"  {C.DIM}• 'Output ONLY the translation'{C.RESET}")
+    info(f"    {C.DIM}  → Prevents the AI from adding commentary or notes{C.RESET}")
+    info(f"  {C.DIM}• 'Do NOT respond to the content'{C.RESET}")
+    info(f"    {C.DIM}  → Stops the AI from answering questions it hears in the audio{C.RESET}")
+    info(f"    {C.DIM}  → e.g. if someone says 'What time is it?', it translates, not answers{C.RESET}")
+    info(f"  {C.DIM}• 'Do NOT add explanations'{C.RESET}")
+    info(f"    {C.DIM}  → Prevents output like 'This means: ...' or 'Note: ...'{C.RESET}")
+    info(f"  {C.DIM}• Short, assertive rules{C.RESET}")
+    info(f"    {C.DIM}  → Work best with small local AI models (7B-13B parameters){C.RESET}")
+    info(f"  {C.DIM}• {{src}} and {{tgt}} are placeholders{C.RESET}")
+    info(f"    {C.DIM}  → Replaced with actual language names (e.g. Japanese, English){C.RESET}")
+    print()
+
+    if current:
+        info(f"{C.BOLD}Current custom prompt:{C.RESET}")
+        info(f"  {C.CYAN}{current}{C.RESET}")
+    else:
+        info(f"{C.BOLD}Using default prompt:{C.RESET}")
+        info(f"  {C.CYAN}{default_prompt}{C.RESET}")
+
+    print()
+    ch = ask_choice("Options:", [
+        ("Edit prompt", "Write your own translation instruction"),
+        ("Reset to default", "Restore the built-in prompt"),
+        ("View example prompts", "See templates for different styles"),
+        ("Back", None)
+    ], default=3)
+
+    if ch == -1 or ch == 3: return
+    elif ch == 0:
+        info("Use {src} for source language and {tgt} for target language.")
+        info(f"{C.DIM}Example: 'Translate {{src}} to {{tgt}}. Keep it casual.'{C.RESET}")
+        new_prompt = ask_input("New prompt", current or default_prompt)
+        if new_prompt:
+            cfg["translation_prompt"] = new_prompt
+            save_config(cfg)
+            success("Prompt saved! Will be used for all future translations.")
+        pause()
+    elif ch == 1:
+        cfg.pop("translation_prompt", None)
+        save_config(cfg)
+        success("Reset to default prompt.")
+        pause()
+    elif ch == 2:
+        section("Example Prompts")
+        examples = [
+            ("Casual / informal",
+             "Translate {src} to casual {tgt}. Use everyday language, contractions, and slang where appropriate. Output ONLY the translation."),
+            ("Formal / literary",
+             "Translate {src} to formal {tgt}. Use proper grammar and literary vocabulary. Output ONLY the translation."),
+            ("Song lyrics (poetic)",
+             "Translate these {src} song lyrics to {tgt}. Preserve poetic rhythm and feeling. Output ONLY the translation."),
+            ("Keep honorifics (anime)",
+             "Translate {src} to {tgt}. Keep Japanese honorifics (-san, -kun, -chan, -sama, -sensei) untranslated. Output ONLY the translation."),
+            ("Technical / precise",
+             "Translate {src} to {tgt}. Preserve technical terms and proper nouns exactly. Output ONLY the translation."),
+        ]
+        for i, (name, prompt) in enumerate(examples):
+            info(f"  {C.BOLD}{i+1}. {name}{C.RESET}")
+            info(f"     {C.DIM}{prompt}{C.RESET}")
+            print()
+        choice = ask_input("Use which? (number, or press Enter to go back)", "")
+        if choice.strip().isdigit():
+            idx = int(choice.strip()) - 1
+            if 0 <= idx < len(examples):
+                cfg["translation_prompt"] = examples[idx][1]
+                save_config(cfg)
+                success(f"Prompt set to: {examples[idx][0]}")
+        pause()
+
 
 def _set_addrs(cfg):
     while True:
@@ -2151,13 +2259,31 @@ def _set_addrs(cfg):
 
 def _set_subs(cfg):
     header("Subtitle Tuning")
-    cfg["word_timestamps"] = ask_yn("Word-level timestamps?", cfg["word_timestamps"])
+    print()
+    info("These settings control how Yume processes audio into subtitles.")
+    print()
+
+    info(f"{C.BOLD}Word-level timestamps{C.RESET}: Break subtitles at individual words instead of sentences.")
+    info(f"  Currently: {'ON' if cfg['word_timestamps'] else 'OFF'}")
+    cfg["word_timestamps"] = ask_yn("Enable word-level timestamps? (OFF is better for music)", cfg["word_timestamps"])
+
+    print()
+    info(f"{C.BOLD}Pause threshold{C.RESET}: How long a silence (in seconds) before Yume splits")
+    info(f"  a subtitle into two lines. Lower = more lines, higher = longer subtitles.")
+    info(f"  0.25s works well for songs, 0.4s works well for speech.")
+    info(f"  Currently: {cfg['pause_threshold']}s")
     pt = ask_input("Pause threshold (0.2-1.0s)", str(cfg["pause_threshold"]))
     try: cfg["pause_threshold"] = float(pt)
     except Exception as e:
         _log.debug('[_set_subs] float-parse failed: %s', e)
 
-    cd = ask_input("Chunk duration (4-60s, smaller = faster subtitles)", str(cfg["chunk_duration"]))
+    print()
+    info(f"{C.BOLD}Chunk duration{C.RESET}: Yume processes audio in chunks of this many seconds.")
+    info(f"  Smaller chunks = subtitles appear faster, but may cut words at boundaries.")
+    info(f"  Larger chunks = more context for the AI, but longer wait for first subtitle.")
+    info(f"  30s is the default and works well for most content.")
+    info(f"  Currently: {cfg['chunk_duration']}s")
+    cd = ask_input("Chunk duration (10-60s)", str(cfg["chunk_duration"]))
     try: cfg["chunk_duration"] = int(cd)
     except Exception as e:
         _log.debug('[_set_subs] int-parse failed: %s', e)
@@ -2169,15 +2295,45 @@ def _set_subs(cfg):
 # ────
 
 WHISPER_MODELS_INFO = [
+    # (name, params, vram, user-friendly description)
     ("tiny",            "39M params",   "~1 GB",   "Fastest, low accuracy"),
     ("base",            "74M params",   "~1 GB",   "Fast, decent accuracy"),
-    ("small",           "244M params",  "~2 GB",   "Good balance"),
-    ("medium",          "769M params",  "~5 GB",   "High accuracy"),
+    ("small",           "244M params",  "~2 GB",   "Good balance of speed and accuracy"),
+    ("medium",          "769M params",  "~5 GB",   "High accuracy, slower"),
     ("large-v2",        "1550M params", "~10 GB",  "Very high accuracy"),
-    ("large-v3",        "1550M params", "~10 GB",  "Best accuracy"),
-    ("distil-large-v2", "756M params",  "~4 GB",   "Fast + accurate"),
-    ("distil-large-v3", "756M params",  "~4 GB",   "Fast + accurate (newer)"),
+    ("large-v3",        "1550M params", "~10 GB",  "Best accuracy (recommended if VRAM allows)"),
+    ("large-v3-turbo",  "809M params",  "~6 GB",   "Near-v3 accuracy at 2x speed (best mid-range)"),
+    ("distil-large-v2", "756M params",  "~4 GB",   "Compressed v2 -- 2x faster, similar accuracy"),
+    ("distil-large-v3", "756M params",  "~4 GB",   "Compressed v3 -- 2x faster, similar accuracy"),
 ]
+
+
+def _is_whisper_model_cached(model_name):
+    """Check if a Whisper model is already downloaded in the HuggingFace cache."""
+    try:
+        # faster-whisper uses HuggingFace hub cache: ~/.cache/huggingface/hub/
+        cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
+        if not cache_dir.exists():
+            return False
+        # Models are stored as 'models--Systran--faster-whisper-{model_name}'
+        patterns = [
+            f"models--Systran--faster-whisper-{model_name}",
+            f"models--guillaumekln--faster-whisper-{model_name}",
+            f"models--openai--whisper-{model_name}",
+        ]
+        for entry in cache_dir.iterdir():
+            for pat in patterns:
+                if pat.lower() in entry.name.lower():
+                    return True
+        # Also check CTranslate2 local cache
+        ct2_cache = Path.home() / ".cache" / "faster_whisper"
+        if ct2_cache.exists():
+            for entry in ct2_cache.iterdir():
+                if model_name in entry.name:
+                    return True
+        return False
+    except Exception:
+        return False  # Can't tell — assume not cached
 
 def benchmark_whisper(cfg):
     """Compare Whisper model speeds on this hardware."""
@@ -2259,11 +2415,17 @@ def benchmark_whisper(cfg):
         available.append((name, params, vram_req, desc, fits))
 
     info(f"Select models to benchmark:")
+    info(f"  'distil' models = compressed versions (same accuracy, 2x faster, half the size)")
+    info(f"  'turbo' = optimized large-v3 (near-full accuracy at much higher speed)")
+    info(f"  VRAM = your GPU's video memory — models marked [fits] will work on your hardware")
     print()
     for i, (name, params, vr, desc, fits) in enumerate(available):
         tag = f"{C.GREEN}fits{C.RESET}" if fits else f"{C.RED}may OOM{C.RESET}"
+        cached = _is_whisper_model_cached(name)
+        dl_tag = f"{C.GREEN}downloaded{C.RESET}" if cached else f"{C.DIM}not downloaded{C.RESET}"
         cur = f" {C.GOLD}<- current{C.RESET}" if name == cfg.get("whisper_model") else ""
-        print(f"    {i+1:2d}. {name:22s} {params:14s} {vr:8s} [{tag}]{cur}")
+        print(f"    {i+1:2d}. {name:22s} {vr:8s} [{tag}] [{dl_tag}]{cur}")
+        print(f"        {C.DIM}{desc}{C.RESET}")
     print()
 
     selection = ask_input(
@@ -2288,8 +2450,21 @@ def benchmark_whisper(cfg):
         warn("No models selected"); pause(); return
 
     info(f"Benchmarking {len(models_to_test)} model(s): {', '.join(models_to_test)}")
-    if not ask_yn("This will download models you don't have yet. Continue?", True):
-        return
+
+    # Check which models need downloading vs already cached
+    needs_download = []
+    for m in models_to_test:
+        if not _is_whisper_model_cached(m):
+            needs_download.append(m)
+
+    if needs_download:
+        warn(f"These models will be downloaded first: {', '.join(needs_download)}")
+        if not ask_yn("Download and benchmark?", True):
+            return
+    else:
+        info("All selected models are already downloaded (cached)")
+        if not ask_yn("Start benchmark?", True):
+            return
 
     # Determine device/compute
     if gpu.get("has_nvidia"):
@@ -2518,6 +2693,8 @@ def show_status(cfg):
 def detect_fonts():
     """Detect CJK and common fonts available on this system."""
     header("Font Detection")
+    info("Scanning for subtitle-compatible fonts (Chinese, Japanese, Korean, Arabic)...")
+    print()
 
     # Platform-specific font listing
     font_dirs = []
@@ -2595,8 +2772,16 @@ def detect_fonts():
         info("Create it and add .ttf/.otf files for custom subtitle fonts")
 
     print()
-    info("To use a font: select it in the extension popup under Appearance settings")
-    info("To bundle a font: place .ttf/.otf in extension/fonts/ and list in popup.js BUNDLED_FONTS")
+    info("How to use fonts in Yume:")
+    info("  1. Yume automatically detects your system fonts")
+    info("  2. Pick a font in the extension popup (Settings > Appearance)")
+    info("")
+    info("To add a custom font that isn't installed system-wide:")
+    info("  1. Copy the .ttf or .otf file into the extension/fonts/ folder")
+    info("  2. Open extension/popup.js, find the BUNDLED_FONTS list near the top")
+    info("  3. Add your font: { file: 'MyFont.ttf', name: 'My Font' }")
+    info("  4. Reload the extension in chrome://extensions")
+    info("  The font will appear with '(bundled)' next to its name in the dropdown")
     pause()
 
 
@@ -3007,12 +3192,14 @@ def _runtime_menu(cfg, procs, lhs, bk):
             )
 
             ch = ask_choice("Runtime:", [
-                ("Server Stats", "GPU, VRAM, session metrics"),
-                ("Blacklist", "Manage hallucination filter"),
-                ("Whisper Model", "Hot-swap model while running"),
-                ("View Logs", "Recent server output"),
-                ("Stop & Return", "Shut down all servers"),
-            ], default=4, allow_back=False)
+                ("Server Stats", "GPU usage, memory, how many chunks have been processed"),
+                ("Subtitle Filter", "Block phrases Whisper hallucinates (fake 'Subscribe' etc.)"),
+                ("Whisper Model", "Switch speech recognition model without restarting"),
+                ("Test Translation", "Send a test sentence to verify the translation pipeline"),
+                ("Benchmark Whisper", "Measure how fast each model runs on your hardware"),
+                ("View Logs", "Recent server output (for troubleshooting)"),
+                ("Stop & Return", "Shut down all servers and go back to main menu"),
+            ], default=6, allow_back=False)
 
             if ch == 0:
                 cli_server_stats(cfg); pause()
@@ -3021,9 +3208,13 @@ def _runtime_menu(cfg, procs, lhs, bk):
             elif ch == 2:
                 _menu_whisper_model(cfg)
             elif ch == 3:
+                _test_translation(cfg)
+            elif ch == 4:
+                benchmark_whisper(cfg)
+            elif ch == 5:
                 _show_logs(); pause()
                 # All options loop back to top which calls clear()
-            elif ch == 4:
+            elif ch == 6:
                 if ask_yn("Stop all servers?", default=True):
                     _stop_all(); return
     except KeyboardInterrupt:
@@ -3236,7 +3427,7 @@ def uninstall_yume():
     info("What will be removed:")
     dirs = [
         ("Tools (yt-dlp, ffmpeg, deno)", TOOLS_DIR),
-        ("GGUF models", GGUF_DIR),
+        ("Translation models (downloaded AI model files)", GGUF_DIR),
         ("Server files", SERVER_DIR),
         ("Configuration", CONFIG_DIR),
         ("Logs", LOGS_DIR),
@@ -3329,14 +3520,14 @@ def main_menu():
         if gpu["has_nvidia"]:
             gs = f"{C.GREEN}{gpu['name']}{C.RESET}"
         elif gpu["has_amd"]:
-            gs = f"{C.CYAN}{gpu['name']} (ROCm){C.RESET}"
+            gs = f"{C.CYAN}{gpu['name']} (AMD){C.RESET}"
         else:
-            gs = f"{C.YELLOW}CPU only{C.RESET}"
+            gs = f"{C.YELLOW}CPU only (no dedicated GPU){C.RESET}"
         bn = BACKEND_INFO.get(cfg.get("translation_backend", "llamacpp"), {}).get("name", "?")
         panel(
-            f"{C.DIM}GPU{C.RESET}  {gs}\n"
-            f"{C.DIM}STT{C.RESET}  {C.CYAN}{cfg['whisper_model']}{C.RESET}  on  {cfg['whisper_host']}:{cfg['whisper_port']}\n"
-            f"{C.DIM}TL {C.RESET}  {C.MAGENTA}{bn}{C.RESET}  on  {cfg['translation_host']}:{cfg['translation_port']}",
+            f"{C.DIM}GPU        {C.RESET}  {gs}\n"
+            f"{C.DIM}Speech AI  {C.RESET}  {C.CYAN}{cfg['whisper_model']}{C.RESET}  on  {cfg['whisper_host']}:{cfg['whisper_port']}\n"
+            f"{C.DIM}Translator {C.RESET}  {C.MAGENTA}{bn}{C.RESET}  on  {cfg['translation_host']}:{cfg['translation_port']}",
             style=C.DIM,
         )
         # Async update check (non-blocking)

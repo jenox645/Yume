@@ -1,4 +1,4 @@
-// Yume - Popup Script v5.0.0
+// Yume - Popup Script v5.4.0
 console.log('[Yume Popup] Script loaded');
 
 // ============================================================================
@@ -308,6 +308,22 @@ async function checkServers() {
   } catch (e) { translationEl.className = 'status-indicator disconnected'; }
 }
 
+// Auto-refresh server status while popup is open (fixes stale red indicators)
+let _statusInterval = null;
+function startStatusAutoRefresh() {
+  if (_statusInterval) clearInterval(_statusInterval);
+  _statusInterval = setInterval(checkServers, 12000);  // every 12 seconds
+}
+function stopStatusAutoRefresh() {
+  if (_statusInterval) { clearInterval(_statusInterval); _statusInterval = null; }
+}
+// Start on popup open, stop on close
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopStatusAutoRefresh();
+  else startStatusAutoRefresh();
+});
+startStatusAutoRefresh();
+
 // ============================================================================
 // SETTINGS
 // ============================================================================
@@ -383,6 +399,18 @@ async function loadSettings() {
       document.getElementById('timingOffset').value = offsetTicks;
       document.getElementById('timingOffsetVal').textContent = (offsetTicks / 10).toFixed(1) + 's';
 
+      // Glass effect
+      const glassEnabled = s.glassEnabled === true;
+      const glassBlur = s.glassBlur ?? 18;
+      const glassRadius = s.glassRadius ?? 16;
+      document.getElementById('glassEnabled').checked = glassEnabled;
+      document.getElementById('glassBlur').value = glassBlur;
+      document.getElementById('glassBlurVal').textContent = glassBlur + 'px';
+      document.getElementById('glassRadius').value = glassRadius;
+      document.getElementById('glassRadiusVal').textContent = glassRadius + 'px';
+      document.getElementById('glassControls').style.display = glassEnabled ? 'block' : 'none';
+      _applyGlass(glassEnabled, glassBlur, glassRadius);
+
       updateRomajiLabel();
       updateTranslationFontVisibility();
       resolve();
@@ -417,6 +445,9 @@ function saveSettings(showNotification = true) {
       translationFontSize: parseInt(document.getElementById('translationFontSize').value) || 14,
       translationColor:    document.getElementById('translationColor').value,
       timingOffset:        parseInt(document.getElementById('timingOffset').value) || 0,
+      glassEnabled:        document.getElementById('glassEnabled').checked,
+      glassBlur:           parseInt(document.getElementById('glassBlur').value) || 18,
+      glassRadius:         parseInt(document.getElementById('glassRadius').value) || 16,
     };
     chrome.storage.local.set({ settings }, () => {
       if (showNotification) showToast('Settings saved', 'success');
@@ -442,6 +473,54 @@ function updateRomajiLabel() {
   const appLabel = document.getElementById('romajiAppearanceLabel');
   if (appLabel) appLabel.textContent = labelOrDefault.name;
 }
+
+// ============================================================================
+// GLASS EFFECT (applied to subtitle window, not popup)
+// ============================================================================
+
+function _applyGlass(enabled, blur, radius) {
+  // Send glass settings to the active tab's subtitle window
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (tabs[0]) {
+      chrome.tabs.sendMessage(tabs[0].id, {
+        action: 'UPDATE_GLASS', glassEnabled: enabled,
+        glassBlur: blur, glassRadius: radius
+      }).catch(() => {});
+    }
+  });
+}
+
+// Glass toggle
+document.getElementById('glassEnabled')?.addEventListener('change', (e) => {
+  const on = e.target.checked;
+  document.getElementById('glassControls').style.display = on ? 'block' : 'none';
+  const blur = parseInt(document.getElementById('glassBlur').value) || 18;
+  const radius = parseInt(document.getElementById('glassRadius').value) || 20;
+  _applyGlass(on, blur, radius);
+  saveSettings(false);
+});
+
+// Glass blur slider
+document.getElementById('glassBlur')?.addEventListener('input', (e) => {
+  const v = e.target.value;
+  document.getElementById('glassBlurVal').textContent = v + 'px';
+  const radius = parseInt(document.getElementById('glassRadius').value) || 20;
+  _applyGlass(true, parseInt(v), radius);
+});
+document.getElementById('glassBlur')?.addEventListener('change', () => saveSettings(false));
+
+// Glass radius slider
+document.getElementById('glassRadius')?.addEventListener('input', (e) => {
+  const v = e.target.value;
+  document.getElementById('glassRadiusVal').textContent = v + 'px';
+  const blur = parseInt(document.getElementById('glassBlur').value) || 18;
+  _applyGlass(true, blur, parseInt(v));
+});
+document.getElementById('glassRadius')?.addEventListener('change', () => saveSettings(false));
+
+// ============================================================================
+// TRANSLATION FONT VISIBILITY
+// ============================================================================
 
 function updateTranslationFontVisibility() {
   const target = document.getElementById('targetLanguage').value;

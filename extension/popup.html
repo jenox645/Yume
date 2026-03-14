@@ -10,7 +10,7 @@
     <div class="yume-header">
       <div class="deco-line top-line"></div>
       <h1 class="yume-title">Yume</h1>
-      <div class="yume-subtitle">v5.0.0</div>
+      <div class="yume-subtitle">v5.4.0</div>
       <div class="deco-line bottom-line"></div>
     </div>
 
@@ -21,7 +21,7 @@
         <div class="control-card">
           <div class="control-row">
             <span class="control-label">AI Subtitles</span>
-            <button id="toggleSubtitles" class="yume-button primary">
+            <button id="toggleSubtitles" class="yume-button primary" aria-label="Toggle subtitles on or off" role="switch" aria-checked="false">
               <span id="toggleText">Enable</span>
             </button>
           </div>
@@ -36,7 +36,7 @@
       <div class="section-body">
         <div class="status-card">
           <div class="status-row">
-            <div class="status-indicator" id="whisperStatus"></div>
+            <div class="status-indicator" id="whisperStatus" role="status" aria-label="Whisper server status"></div>
             <div class="status-info">
               <div class="status-name">Whisper</div>
               <div class="status-port" id="whisperInfo">localhost:5001</div>
@@ -45,14 +45,14 @@
         </div>
         <div class="status-card">
           <div class="status-row">
-            <div class="status-indicator" id="translationStatus"></div>
+            <div class="status-indicator" id="translationStatus" role="status" aria-label="Translation server status"></div>
             <div class="status-info">
               <div class="status-name">Translation</div>
               <div class="status-port" id="translationInfo">localhost:5000</div>
             </div>
           </div>
         </div>
-        <button id="refreshStatus" class="yume-button secondary">Refresh</button>
+        <button id="refreshStatus" class="yume-button secondary" aria-label="Refresh server status">Refresh</button>
       </div>
     </div>
 
@@ -63,25 +63,25 @@
         <div class="setting-card">
           <div class="setting-row">
             <span class="setting-label">Original Text</span>
-            <label class="yume-toggle"><input type="checkbox" id="showOriginal" checked><span class="toggle-slider"></span></label>
+            <label class="yume-toggle"><input type="checkbox" id="showOriginal" checked aria-label="Show original text"><span class="toggle-slider"></span></label>
           </div>
         </div>
         <div class="setting-card">
           <div class="setting-row">
             <span class="setting-label" id="romajiLabel">Romanization <span class="setting-hint" id="romajiHint">(Romaji)</span></span>
-            <label class="yume-toggle"><input type="checkbox" id="showRomaji"><span class="toggle-slider"></span></label>
+            <label class="yume-toggle"><input type="checkbox" id="showRomaji" aria-label="Show romanization"><span class="toggle-slider"></span></label>
           </div>
         </div>
         <div class="setting-card">
           <div class="setting-row">
             <span class="setting-label">Translation</span>
-            <label class="yume-toggle"><input type="checkbox" id="showEnglish" checked><span class="toggle-slider"></span></label>
+            <label class="yume-toggle"><input type="checkbox" id="showEnglish" checked aria-label="Show translation"><span class="toggle-slider"></span></label>
           </div>
         </div>
         <div class="setting-card">
           <div class="setting-row">
             <span class="setting-label">Source language</span>
-            <select id="sourceLanguage" class="yume-select">
+            <select id="sourceLanguage" class="yume-select" aria-label="Source language">
               <option value="ja">Japanese</option>
               <option value="zh">Chinese</option>
               <option value="ko">Korean</option>
@@ -100,7 +100,7 @@
         <div class="setting-card">
           <div class="setting-row">
             <span class="setting-label">Translate to</span>
-            <select id="targetLanguage" class="yume-select">
+            <select id="targetLanguage" class="yume-select" aria-label="Target language">
               <option value="English">English</option>
               <option value="French">Fran&#231;ais</option>
               <option value="Spanish">Espa&#241;ol</option>
@@ -125,7 +125,7 @@
           <div class="setting-row">
             <span class="setting-label">Chunk Duration</span>
             <div class="setting-value-group">
-              <input type="number" id="chunkDuration" min="10" max="60" value="30" class="yume-input">
+              <input type="number" id="chunkDuration" aria-label="Audio chunk duration in seconds" min="10" max="60" value="30" class="yume-input">
               <span class="setting-unit">sec</span>
             </div>
           </div>
@@ -133,13 +133,13 @@
         <div class="setting-card">
           <div class="setting-row">
             <span class="setting-label">Show Progress Counter</span>
-            <label class="yume-toggle"><input type="checkbox" id="showChunkCounter" checked><span class="toggle-slider"></span></label>
+            <label class="yume-toggle"><input type="checkbox" id="showChunkCounter" checked aria-label="Show chunk counter"><span class="toggle-slider"></span></label>
           </div>
         </div>
         <div class="setting-card">
           <div class="setting-row">
             <span class="setting-label">Confidence Indicator</span>
-            <label class="yume-toggle"><input type="checkbox" id="showConfidence"><span class="toggle-slider"></span></label>
+            <label class="yume-toggle"><input type="checkbox" id="showConfidence" aria-label="Show confidence score"><span class="toggle-slider"></span></label>
           </div>
           <div class="setting-hint">Fades translation when Whisper is less certain</div>
         </div>
@@ -147,7 +147,7 @@
           <div class="setting-row">
             <span class="setting-label">Timing Offset</span>
             <div class="setting-value-group">
-              <input type="range" id="timingOffset" min="-30" max="30" value="0" step="1" class="yume-range">
+              <input type="range" id="timingOffset" aria-label="Subtitle timing offset" min="-30" max="30" value="0" step="1" class="yume-range">
               <span id="timingOffsetVal" class="setting-unit">0.0s</span>
             </div>
           </div>
@@ -168,7 +168,7 @@
             Items are filtered instantly from display. Click <b>Update Server</b> to also filter at transcription time.
           </div>
         </div>
-        <button id="reportHallucination" class="yume-button danger" style="margin-bottom:8px">
+        <button id="reportHallucination" class="yume-button danger" aria-label="Report current subtitle as hallucination" style="margin-bottom:8px">
           &#9888; Report Current Subtitle
         </button>
         <div id="hallucinationPreview" class="hallucination-preview" style="display:none"></div>
@@ -220,6 +220,35 @@
           <div class="setting-row">
             <span class="setting-label">Shadow</span>
             <label class="yume-toggle"><input type="checkbox" id="windowShadow" checked><span class="toggle-slider"></span></label>
+          </div>
+        </div>
+
+        <!-- Glass Effect for subtitle window -->
+        <div class="setting-card">
+          <div class="setting-row">
+            <span class="setting-label">Glass Effect</span>
+            <label class="yume-toggle"><input type="checkbox" id="glassEnabled" aria-label="Toggle glass transparency effect on subtitle window"><span class="toggle-slider"></span></label>
+          </div>
+          <div class="setting-hint">Transparent blur behind subtitles (like frosted glass)</div>
+        </div>
+        <div id="glassControls" style="display:none">
+          <div class="setting-card">
+            <div class="setting-row">
+              <span class="setting-label">Blur</span>
+              <div class="setting-value-group">
+                <input type="range" id="glassBlur" aria-label="Glass blur intensity" min="0" max="40" value="18" step="1" class="yume-range">
+                <span id="glassBlurVal" class="setting-unit">18px</span>
+              </div>
+            </div>
+          </div>
+          <div class="setting-card">
+            <div class="setting-row">
+              <span class="setting-label">Corner Radius</span>
+              <div class="setting-value-group">
+                <input type="range" id="glassRadius" aria-label="Subtitle corner radius" min="0" max="40" value="20" step="1" class="yume-range">
+                <span id="glassRadiusVal" class="setting-unit">20px</span>
+              </div>
+            </div>
           </div>
         </div>
 

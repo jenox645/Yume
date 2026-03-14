@@ -1,6 +1,6 @@
 # Architecture
 
-> PocketYume v5.0.0 · ~10,600 lines across 14 source files
+> PocketYume v5.4.0 · ~10,700 lines across 14 source files
 
 ## Overview
 

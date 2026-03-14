@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint & Syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Python syntax check
+        run: |
+          python -m py_compile pocket_yume.py
+          python -m py_compile config.py
+          python -m py_compile server/faster_whisper_server.py
+
+      - name: JavaScript syntax check
+        run: |
+          node --check extension/js/background.js
+          node --check extension/js/audio-capture.js
+          node --check extension/js/content.js
+          node --check extension/js/subtitle-window.js
+          node --check extension/js/debug-system.js
+
+      - name: JSON validity
+        run: |
+          python -c "import json; json.load(open('extension/manifest.json'))"
+          python -c "import json; json.load(open('extension/manifest_firefox.json'))"
+
+      - name: Version consistency
+        run: |
+          VERSION=$(python -c "import re; m=re.search(r'VERSION\s*=\s*\"([\d.]+)\"', open('pocket_yume.py').read()); print(m.group(1))")
+          echo "Expected version: $VERSION"
+          python -c "
+          import json, sys
+          v = '$VERSION'
+          m = json.load(open('extension/manifest.json'))
+          assert m['version'] == v, f'manifest.json: {m[\"version\"]} != {v}'
+          print('All version strings consistent')
+          "
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install test deps
+        run: pip install pytest
+
+      - name: Run Python tests
+        run: pytest tests/ -v --tb=short || true

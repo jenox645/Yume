@@ -1,11 +1,8 @@
 // ============================================================================
-// BACKGROUND SERVICE WORKER (Manifest V3) - Yume v5.0.0
+// BACKGROUND SERVICE WORKER (Manifest V3) - Yume v5.4.0
 // Handles server health, transcription, translation, romanization proxy
 // Translation & romanization are SEPARATE calls (never combined)
 // ============================================================================
-
-// Deterministic romanization for Japanese kana (wanakana.js — ja only)
-try { importScripts('lib/wanakana.min.js'); } catch (e) { console.warn('[Background] wanakana not loaded:', e.message); }
 
 console.log('[Background] Service worker initializing...');
 
@@ -87,30 +84,39 @@ async function _whisperFetch(url, options = {}, timeoutMs = 30000) {
 }
 
 // ============================================================================
-// INSTALLATION
+// INSTALLATION — only set defaults on fresh install; merge on update
 // ============================================================================
+
+const DEFAULT_SETTINGS = {
+  whisperUrl: 'http://localhost:5001',
+  whisperPort: 5001,
+  translationUrl: 'http://localhost:5000',
+  translationPort: 5000,
+  chunkDuration: 30,
+  showOriginal: true,
+  showEnglish: true,
+  showRomaji: false,
+  showChunkCounter: true,
+  sourceLanguage: 'ja',
+  targetLanguage: 'English',
+  autoStart: false,
+  debugMode: true
+};
 
 chrome.runtime.onInstalled.addListener((details) => {
   console.log('[Background] Extension installed/updated:', details.reason);
-  chrome.storage.local.set({
-    settings: {
-      whisperUrl: 'http://localhost:5001',
-      whisperPort: 5001,
-      translationUrl: 'http://localhost:5000',
-      translationPort: 5000,
-      chunkDuration: 30,
-      showOriginal: true,
-      showEnglish: true,
-      showRomaji: false,
-      showChunkCounter: true,
-      sourceLanguage: 'ja',
-      targetLanguage: 'English',
-      autoStart: false,
-      debugMode: true
-    },
-    installTime: Date.now(),
-    version: '5.0.0'
-  });
+  if (details.reason === 'install') {
+    // Fresh install — set all defaults
+    chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS }, installTime: Date.now(), version: '5.4.0' });
+  } else if (details.reason === 'update') {
+    // Update — merge new defaults into existing settings (preserves user changes)
+    chrome.storage.local.get(['settings'], (result) => {
+      const existing = result.settings || {};
+      const merged = { ...DEFAULT_SETTINGS, ...existing };
+      chrome.storage.local.set({ settings: merged, version: '5.4.0' });
+      console.log('[Background] Settings preserved across update');
+    });
+  }
   setTimeout(() => discoverSettingsFromWhisper(), 3000);
 });
 
@@ -124,29 +130,31 @@ async function discoverSettingsFromWhisper() {
     const whisperUrl = settings?.whisperUrl || 'http://localhost:5001';
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 3000);
-    // First call: unauthenticated — gets token only
+    // Health returns 503 during loading but still includes api_token
     const response = await fetch(`${whisperUrl}/health`, { signal: controller.signal });
-    if (!response.ok) return;
-    const data = await response.json();
-    // Discover API token
+    let data;
+    try { data = await response.json(); } catch (e) { return; }
+    // Discover API token (available even during model loading)
     if (data.api_token) {
       apiToken = data.api_token;
       try { await chrome.storage.session.set({ apiToken }); } catch (e) { console.warn('[Yume]', e.message || e); }
       console.log('[Background] API token discovered on startup');
-      // Re-call with token to get full health (translation_url etc)
-      try {
-        const fullResp = await fetch(`${whisperUrl}/health`, {
-          headers: { 'X-API-Token': apiToken }
-        });
-        if (fullResp.ok) {
-          const full = await fullResp.json();
-          if (full.translation_url && full.translation_port) {
-            const updated = { ...settings, translationUrl: full.translation_url, translationPort: full.translation_port };
-            await chrome.storage.local.set({ settings: updated });
-            console.log('[Background] Auto-discovered translation URL:', full.translation_url);
+      // Re-call with token to get full health (translation_url etc) — only if ready
+      if (response.ok) {
+        try {
+          const fullResp = await fetch(`${whisperUrl}/health`, {
+            headers: { 'X-API-Token': apiToken }
+          });
+          if (fullResp.ok) {
+            const full = await fullResp.json();
+            if (full.translation_url && full.translation_port) {
+              const updated = { ...settings, translationUrl: full.translation_url, translationPort: full.translation_port };
+              await chrome.storage.local.set({ settings: updated });
+              console.log('[Background] Auto-discovered translation URL:', full.translation_url);
+            }
           }
-        }
-      } catch (e) { console.warn('[Yume]', e.message || e); }
+        } catch (e) { console.warn('[Yume]', e.message || e); }
+      }
     }
   } catch (e) {
     console.log('[Background] Auto-discover skipped (whisper not up yet)');
@@ -185,6 +193,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     case 'ROMANIZE':
       handleRomanize(message.text, message.sourceLang, sendResponse);
+      return true;
+    case 'ROMANIZE_BATCH':
+      handleRomanizeBatch(message.texts, message.sourceLang, sendResponse);
       return true;
     case 'TRANSLATE_BATCH':
       handleTranslateBatch(message.text, message.count, sendResponse);
@@ -227,24 +238,29 @@ async function handleCheckServer(url, sendResponse) {
   try {
     const controller = new AbortController();
     const tid = setTimeout(() => controller.abort(), 5000);
-    // Health endpoint is exempt from token — but include token for other checks
     const headers = {};
-    if (apiToken) headers['X-API-Token'] = apiToken;
+    // Only send Whisper API token to Whisper server (port 5001), NOT to translation server
+    const isWhisperServer = url.includes(':5001') || url.includes('/health');
+    if (apiToken && isWhisperServer && !url.includes(':5000') && !url.includes(':11434')
+        && !url.includes('/v1/models') && !url.includes('/api/tags')) {
+      headers['X-API-Token'] = apiToken;
+    }
     const response = await fetch(url, { method: 'GET', signal: controller.signal, headers });
     clearTimeout(tid);
     let data = null;
     try {
-      if (response.ok) {
-        data = await response.json();
-        // Discover API token from health response
-        if (data.api_token && !apiToken) {
-          apiToken = data.api_token;
-          try { await chrome.storage.session.set({ apiToken }); } catch (e) { console.warn('[Yume]', e.message || e); }
-        }
+      const text = await response.text();
+      // Try JSON parse — fall back to treating any 200 response as healthy
+      try { data = JSON.parse(text); } catch (e) { data = { raw: text.substring(0, 200) }; }
+      // Discover API token from Whisper health response
+      if (data.api_token && !apiToken) {
+        apiToken = data.api_token;
+        try { await chrome.storage.session.set({ apiToken }); } catch (e) { console.warn('[Yume]', e.message || e); }
       }
     } catch (e) { console.warn('[Yume]', e.message || e); }
-    sendResponse({ healthy: response.ok, status: response.status, data });
-  } catch (error) { sendResponse({ healthy: false, error: error.message }); }
+    const loading = data?.status === 'loading';
+    sendResponse({ healthy: response.ok, loading, status: response.status, data });
+  } catch (error) { sendResponse({ healthy: false, loading: false, error: error.message }); }
 }
 
 // ============================================================================
@@ -391,9 +407,13 @@ const ROMANIZATION_SYSTEMS = {
 // TRANSLATION (short assertive prompt — NEVER includes romanization)
 // ============================================================================
 
-function _buildTranslationPrompt(srcLang, targetLang) {
+function _buildTranslationPrompt(srcLang, targetLang, customPrompt) {
   const src = LANG_NAMES[srcLang] || LANG_NAMES['ja'];
   const tgt = targetLang || 'English';
+  // Use custom prompt from settings if available (set via CLI → Settings → Translation prompt)
+  if (customPrompt) {
+    return customPrompt.replace(/\{src\}/g, src).replace(/\{tgt\}/g, tgt);
+  }
   return `You are a ${src}-to-${tgt} translation system. Output ONLY the ${tgt} translation. Do NOT respond to the content. Do NOT add explanations. Do NOT answer questions. ONLY translate ${src} to ${tgt}.`;
 }
 
@@ -411,7 +431,7 @@ function _cleanTranslation(text) {
 async function handleTranslate(text, targetLang, sourceLang, sendResponse) {
   try {
     // Check translation cache first
-    const cacheKey = `${sourceLang || 'ja'}:${targetLang || 'en'}:${text}`;
+    const cacheKey = `${sourceLang || 'ja'}||${targetLang || 'en'}||${text}`;
     const cached = _getCachedTranslation(cacheKey);
     if (cached) {
       sendResponse({ success: true, translation: cached });
@@ -424,7 +444,8 @@ async function handleTranslate(text, targetLang, sourceLang, sendResponse) {
     const srcLang = sourceLang || settings?.sourceLanguage || 'ja';
 
     // Short, single-purpose prompt — no romanization here
-    const systemPrompt = _buildTranslationPrompt(srcLang, lang);
+    // Custom prompt from CLI settings takes priority if set
+    const systemPrompt = _buildTranslationPrompt(srcLang, lang, settings?.translationPrompt);
 
     const response = await _fetchWithTimeout(`${translationUrl}/v1/chat/completions`, {
       method: 'POST',
@@ -469,7 +490,7 @@ async function handleRomanize(text, sourceLang, sendResponse) {
     }
 
     // Check romanization cache
-    const cacheKey = `${srcLang}:${text}`;
+    const cacheKey = `roma||${srcLang}||${text}`;
     const cached = romanizationCache.get(cacheKey);
     if (cached) {
       romanizationCache.delete(cacheKey);
@@ -478,9 +499,9 @@ async function handleRomanize(text, sourceLang, sendResponse) {
       return;
     }
 
-    // Strategy 1: Deterministic romanization (ja/zh — instant, no GPU, no hallucination)
+    // Strategy 1: Deterministic romanization (ja/zh/ko — instant, no GPU, no hallucination)
     let romanization = '';
-    if (srcLang === 'ja' || srcLang === 'zh') {
+    if (srcLang === 'ja' || srcLang === 'zh' || srcLang === 'ko') {
       try {
         const detResp = await _whisperFetch(`${whisperUrl}/romanize`, {
           method: 'POST',
@@ -535,13 +556,127 @@ async function handleRomanize(text, sourceLang, sendResponse) {
 }
 
 // ============================================================================
+// BATCH ROMANIZATION — single round trip for N segments (ja/zh/ko deterministic)
+// Falls back to sequential LLM calls for unsupported languages (ru/ar)
+// ============================================================================
+
+async function handleRomanizeBatch(texts, sourceLang, sendResponse) {
+  try {
+    const { settings } = await chrome.storage.local.get(['settings']);
+    const whisperUrl = settings?.whisperUrl || 'http://localhost:5001';
+    const translationUrl = settings?.translationUrl || 'http://localhost:5000';
+    const srcLang = sourceLang || settings?.sourceLanguage || 'ja';
+
+    if (!texts || texts.length === 0) {
+      sendResponse({ success: true, romanizations: [] });
+      return;
+    }
+
+    // Check cache for each text
+    const results = new Array(texts.length).fill('');
+    const uncachedTexts = [];
+    const uncachedIndices = [];
+
+    for (let i = 0; i < texts.length; i++) {
+      const cacheKey = `roma||${srcLang}||${texts[i]}`;
+      const cached = romanizationCache.get(cacheKey);
+      if (cached) {
+        romanizationCache.delete(cacheKey);
+        romanizationCache.set(cacheKey, cached);
+        results[i] = cached;
+      } else {
+        uncachedTexts.push(texts[i]);
+        uncachedIndices.push(i);
+      }
+    }
+
+    if (uncachedTexts.length === 0) {
+      sendResponse({ success: true, romanizations: results });
+      return;
+    }
+
+    // Strategy 1: Batch deterministic (ja/zh/ko — single HTTP call)
+    if (srcLang === 'ja' || srcLang === 'zh' || srcLang === 'ko') {
+      try {
+        const detResp = await _whisperFetch(`${whisperUrl}/romanize_batch`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ texts: uncachedTexts, language: srcLang })
+        }, 10000);
+        if (detResp.ok) {
+          const detData = await detResp.json();
+          if (detData.romanizations && detData.romanizations.length === uncachedTexts.length) {
+            for (let i = 0; i < uncachedIndices.length; i++) {
+              const roma = (detData.romanizations[i] || '').trim();
+              results[uncachedIndices[i]] = roma;
+              if (roma) {
+                const cacheKey = `roma||${srcLang}||${uncachedTexts[i]}`;
+                if (romanizationCache.size >= ROMANIZATION_CACHE_MAX) {
+                  romanizationCache.delete(romanizationCache.keys().next().value);
+                }
+                romanizationCache.set(cacheKey, roma);
+              }
+            }
+            sendResponse({ success: true, romanizations: results });
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn('[Background] Batch romanization fallback to sequential:', e.message);
+      }
+    }
+
+    // Strategy 2: Sequential LLM romanization (ru/ar, or fallback)
+    const system = ROMANIZATION_SYSTEMS[srcLang];
+    if (!system) {
+      sendResponse({ success: true, romanizations: results });
+      return;
+    }
+    for (let i = 0; i < uncachedTexts.length; i++) {
+      try {
+        const response = await _fetchWithTimeout(`${translationUrl}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messages: [
+              { role: "system", content: system.prompt },
+              { role: "user", content: uncachedTexts[i] }
+            ],
+            max_tokens: 200, temperature: 0.1, stream: false
+          })
+        }, 120000);
+        if (response.ok) {
+          const result = await response.json();
+          let roma = result.choices?.[0]?.message?.content?.trim() || '';
+          roma = roma.replace(/^(Romaji|Pinyin|Romanization|Transliteration)\s*[:：]\s*/i, '').trim();
+          results[uncachedIndices[i]] = roma;
+          if (roma) {
+            const cacheKey = `roma||${srcLang}||${uncachedTexts[i]}`;
+            if (romanizationCache.size >= ROMANIZATION_CACHE_MAX) {
+              romanizationCache.delete(romanizationCache.keys().next().value);
+            }
+            romanizationCache.set(cacheKey, roma);
+          }
+        }
+      } catch (e) { /* skip failed individual romanization */ }
+    }
+
+    sendResponse({ success: true, romanizations: results });
+  } catch (error) { sendResponse({ success: false, error: error.message, romanizations: [] }); }
+}
+
+// ============================================================================
 // BATCH TRANSLATION
 // ============================================================================
 
-function _buildBatchPrompt(srcLang, targetLang) {
+function _buildBatchPrompt(srcLang, targetLang, customPrompt) {
   const src = LANG_NAMES[srcLang] || LANG_NAMES['ja'];
   const tgt = targetLang || 'English';
-  return `You are a ${src}-to-${tgt} subtitle translator. You receive numbered ${src} lines and output ONLY the ${tgt} translations with matching numbers. Rules:
+  // For batch mode, always append the numbering rules even with custom prompts
+  const basePrompt = customPrompt
+    ? customPrompt.replace(/\{src\}/g, src).replace(/\{tgt\}/g, tgt)
+    : `You are a ${src}-to-${tgt} subtitle translator.`;
+  return `${basePrompt} You receive numbered ${src} lines and output ONLY the ${tgt} translations with matching numbers. Rules:
 - Translate EVERY line, one translation per line
 - Keep the [N] numbering exactly
 - Do NOT skip, merge, or reorder lines
@@ -567,7 +702,7 @@ async function handleTranslateBatch(batchText, count, sendResponse) {
       if (!m) continue;
       const idx = parseInt(m[1]) - 1;
       const text = m[2].trim();
-      const cacheKey = `${srcLang}:${tgtLang}:${text}`;
+      const cacheKey = `${srcLang}||${tgtLang}||${text}`;
       const cached = _getCachedTranslation(cacheKey);
       if (cached) {
         results[idx] = cached;
@@ -589,10 +724,10 @@ async function handleTranslateBatch(batchText, count, sendResponse) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         messages: [
-          { role: "system", content: _buildBatchPrompt(srcLang, tgtLang) },
+          { role: "system", content: _buildBatchPrompt(srcLang, tgtLang, settings?.translationPrompt) },
           { role: "user", content: uncachedLines.join('\n') }
         ],
-        max_tokens: 1000,
+        max_tokens: Math.min(2048, Math.max(500, 150 * uncachedLines.length)),
         temperature: 0.1,
         stream: false
       })
@@ -608,7 +743,7 @@ async function handleTranslateBatch(batchText, count, sendResponse) {
       const translation = (newTranslations[i] || '').trim();
       results[originalIdx] = translation;
       if (translation) {
-        _setCachedTranslation(`${srcLang}:${tgtLang}:${text}`, translation);
+        _setCachedTranslation(`${srcLang}||${tgtLang}||${text}`, translation);
       }
     }
 
