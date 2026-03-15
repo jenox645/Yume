@@ -1,5 +1,5 @@
 // ============================================================================
-// AUDIO CAPTURE v3.9.0 - Download-once + parallel pipeline (Yume v5.4.0)
+// AUDIO CAPTURE v3.9.0 - Download-once + parallel pipeline (Yume v5.4.2)
 // Translation and romanization are SEPARATE API calls
 // ============================================================================
 
@@ -117,7 +117,7 @@ class AudioCapture {
     const startWait = Date.now();
     while (true) {
       try {
-        const healthResp = await this._sendMessage({ type: 'CHECK_SERVER',
+        const healthResp = await this._sendMessage({ type: 'CHECK_SERVER', isWhisper: true,
           url: (await new Promise(r => chrome.storage.local.get(['settings'], r)))?.settings?.whisperUrl + '/health'
             || 'http://localhost:5001/health'
         });

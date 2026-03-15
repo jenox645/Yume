@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Yume -- Faster-Whisper Server v5.4.0
+Yume -- Faster-Whisper Server v5.4.2
 Word-level timestamps + pause re-splitting + security hardening
 Parallel startup: Flask starts before model loads. Prewarm inference on load.
 All output is ASCII-safe for Windows cp932/cp1252 locales.
@@ -281,7 +281,7 @@ def health():
     is_ready = model is not None
     base = {
         "status": "ready" if is_ready else "loading",
-        "version": "5.4.0",
+        "version": "5.4.2",
         "prepare_supported": True,
         "ytdlp_available": _check_ytdlp(),
     }
@@ -1645,7 +1645,7 @@ def main():
         compute_type = "float16" if device == "cuda" else "int8"
 
     print("=" * 70)
-    print("  YUME -- Whisper Server v5.4.0")
+    print("  YUME -- Whisper Server v5.4.2")
     print("=" * 70)
     print(f"  Model:            {model_name}")
     print(f"  Device:           {device}")

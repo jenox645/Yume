@@ -1,4 +1,4 @@
-// Yume - Popup Script v5.4.0
+// Yume - Popup Script v5.4.2
 console.log('[Yume Popup] Script loaded');
 
 // ============================================================================
@@ -274,8 +274,8 @@ async function checkServers() {
   whisperEl.className = 'status-indicator checking';
   translationEl.className = 'status-indicator checking';
 
-  const sendBg = (url) => new Promise((resolve) => {
-    chrome.runtime.sendMessage({ type: 'CHECK_SERVER', url }, (r) => {
+  const sendBg = (url, isWhisper = false) => new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'CHECK_SERVER', url, isWhisper }, (r) => {
       resolve(chrome.runtime.lastError ? { healthy: false } : (r || { healthy: false }));
     });
   });
@@ -287,7 +287,7 @@ async function checkServers() {
   const tUrl = settings?.translationUrl || `http://localhost:${tPort}`;
 
   try {
-    const w = await sendBg(`${whisperUrl}/health`);
+    const w = await sendBg(`${whisperUrl}/health`, true);  // isWhisper = true
     whisperEl.className = 'status-indicator ' + (w.healthy ? 'connected' : 'disconnected');
     const infoEl = document.getElementById('whisperInfo');
     if (infoEl && w.data) infoEl.textContent = `${w.data.device || '?'} | ${w.data.model || '?'}`;
@@ -409,7 +409,7 @@ async function loadSettings() {
       document.getElementById('glassRadius').value = glassRadius;
       document.getElementById('glassRadiusVal').textContent = glassRadius + 'px';
       document.getElementById('glassControls').style.display = glassEnabled ? 'block' : 'none';
-      _applyGlass(glassEnabled, glassBlur, glassRadius);
+      // Glass is applied to the subtitle window via settings storage, not a direct message on load
 
       updateRomajiLabel();
       updateTranslationFontVisibility();
@@ -447,7 +447,7 @@ function saveSettings(showNotification = true) {
       timingOffset:        parseInt(document.getElementById('timingOffset').value) || 0,
       glassEnabled:        document.getElementById('glassEnabled').checked,
       glassBlur:           parseInt(document.getElementById('glassBlur').value) || 18,
-      glassRadius:         parseInt(document.getElementById('glassRadius').value) || 16,
+      glassRadius:         parseInt(document.getElementById('glassRadius').value) || 20,
     };
     chrome.storage.local.set({ settings }, () => {
       if (showNotification) showToast('Settings saved', 'success');

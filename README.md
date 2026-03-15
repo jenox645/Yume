@@ -2,20 +2,16 @@
 
 <img src="assets/banner.png" alt="Yume Banner" width="800"/>
 
-# Yume
+# Pocket Yume
 
 **Real-time AI subtitles for any video — fully local, no cloud APIs.**
 
 Transcription · Translation · Romanization
 
-[![Version](https://img.shields.io/badge/version-5.4.0-blue)]()
+[![Version](https://img.shields.io/badge/version-5.4.2-blue)]()
 [![Python](https://img.shields.io/badge/python-3.10+-green)]()
 [![Chrome](https://img.shields.io/badge/chrome-MV3-yellow)]()
 [![Firefox](https://img.shields.io/badge/firefox-MV3-orange)]()
-[![Stars](https://img.shields.io/github/stars/jenox645/Yume?style=flat-square)](https://github.com/jenox645/Yume/stargazers)
-[![Last Commit](https://img.shields.io/github/last-commit/jenox645/Yume?style=flat-square)](https://github.com/jenox645/Yume/commits/main)
-[![Issues](https://img.shields.io/github/issues/jenox645/Yume?style=flat-square)](https://github.com/jenox645/Yume/issues)
-[![CI](https://img.shields.io/github/actions/workflow/status/jenox645/Yume/ci.yml?label=CI&style=flat-square)](https://github.com/jenox645/Yume/actions)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
 </div>
@@ -92,7 +88,20 @@ The setup wizard runs on first launch — it detects your hardware, installs dep
 
 ## How It Works
 
-<img src="assets/architecture.svg" alt="Architecture" width="700"/>
+```
+Browser Extension                    Local Servers
+┌──────────────┐                    ┌─────────────────┐
+│  popup.js    │  settings/control  │ Whisper Server   │
+│  content.js  │ ◄───────────────── │ (port 5001)      │
+│  audio-      │  transcription     │ faster-whisper   │
+│  capture.js  │ ──────────────────►│ yt-dlp + ffmpeg  │
+│  subtitle-   │                    └─────────────────┘
+│  window.js   │                    ┌─────────────────┐
+│              │  translation       │ Translation LLM  │
+│              │ ◄─────────────────►│ (port 5000)      │
+└──────────────┘                    │ llama.cpp/Ollama │
+                                    └─────────────────┘
+```
 
 The extension sends the video URL to the Whisper server, which downloads audio chunks via yt-dlp, transcribes them with faster-whisper, and returns timestamped segments. The extension then sends text to the translation LLM in parallel — transcribing chunk N+1 while translating chunk N.
 
@@ -236,25 +245,28 @@ Run `python pocket_yume.py fonts` to see which CJK fonts are already installed o
 
 ## Changelog
 
-### v5.4.0
+### v5.4.2
 - **Removed**: `yume_doctor.py` (redundant with `health` command)
 - **Fixed**: GPL license conflict — switched `korean_romanizer` (GPL-v3) to `romanization` (MIT)
-- **Fixed**: Translation server indicator showing red when working (token leak to non-Whisper servers, non-JSON crash, no auto-refresh)
+- **Fixed**: Translation server "not reachable" bug — `check_server()` crashed on non-JSON responses from llama-cpp-python
+- **Fixed**: Translation status indicator showing red — token leak, non-JSON crash, no auto-refresh (3 causes)
+- **Fixed**: `check_server` now tries multiple endpoints for translation backends (`/v1/models`, `/health`, `/api/tags`)
 - **Fixed**: Benchmark no longer says "will download" when model is already cached
-- **Fixed**: Test Translation and Benchmark now available in Runtime menu (where servers are running)
+- **Fixed**: Test Translation and Benchmark now available in Runtime menu
 - **Fixed**: Dead code removed — unreachable `_signalReady` in empty-chunk branches
 - **Fixed**: `_fetchChunk`/`_transcribeOnly` duplication — extracted shared `_transcribeAndFilter` helper
-- **Fixed**: `reRomanizeCachedChunks` now uses batch endpoint (1 call per chunk, not per segment)
-- **Added**: Glass effect on subtitle window (toggle + blur slider + corner radius, in Appearance settings)
+- **Fixed**: `reRomanizeCachedChunks` uses batch endpoint (1 call per chunk, not per segment)
+- **Fixed**: `isWhisper` flag now caller-driven (no URL guessing for token attachment)
+- **Fixed**: Glass `glassRadius` default mismatch (unified to 20px)
+- **Added**: Glass effect on subtitle window (toggle + blur + corner radius, in Appearance)
 - **Added**: Translation prompt editor in CLI (Settings → Translation Prompt) with 5 style presets
 - **Added**: Custom translation prompts used by both single and batch translation
-- **Added**: GitHub Actions CI workflow (syntax, JSON, version consistency, pytest)
-- **Added**: `.editorconfig` for consistent formatting across contributors
-- **Added**: `tests/` with 32 pytest tests (config, URL validation, version consistency)
-- **Added**: 14 ARIA attributes on popup interactive elements
-- **Added**: `turbo` (large-v3-turbo) to model list and benchmark with download status
-- **Added**: Auto-refresh server status every 12s while popup is open
-- **Improved**: All CLI jargon replaced with plain explanations (STT, TL, VRAM, distil, hallucination, GGUF, Deno, CJK, etc.)
+- **Added**: GitHub Actions CI, `.editorconfig`, `CONTRIBUTING.md`
+- **Added**: `tests/` with 32 pytest tests
+- **Added**: 14 ARIA attributes on popup, auto-refresh status every 12s
+- **Added**: `turbo` model in benchmark with download status detection
+- **Improved**: Benchmark UI — explains what metrics mean, shows progress, practical speed estimates
+- **Improved**: All CLI jargon replaced with plain explanations
 
 ### v5.3.0
 - **Added**: BatchedInferencePipeline support (faster-whisper batched inference, up to 12.5x speedup potential)

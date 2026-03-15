@@ -1,5 +1,5 @@
 // ============================================================================
-// BACKGROUND SERVICE WORKER (Manifest V3) - Yume v5.4.0
+// BACKGROUND SERVICE WORKER (Manifest V3) - Yume v5.4.2
 // Handles server health, transcription, translation, romanization proxy
 // Translation & romanization are SEPARATE calls (never combined)
 // ============================================================================
@@ -107,13 +107,13 @@ chrome.runtime.onInstalled.addListener((details) => {
   console.log('[Background] Extension installed/updated:', details.reason);
   if (details.reason === 'install') {
     // Fresh install — set all defaults
-    chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS }, installTime: Date.now(), version: '5.4.0' });
+    chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS }, installTime: Date.now(), version: '5.4.2' });
   } else if (details.reason === 'update') {
     // Update — merge new defaults into existing settings (preserves user changes)
     chrome.storage.local.get(['settings'], (result) => {
       const existing = result.settings || {};
       const merged = { ...DEFAULT_SETTINGS, ...existing };
-      chrome.storage.local.set({ settings: merged, version: '5.4.0' });
+      chrome.storage.local.set({ settings: merged, version: '5.4.2' });
       console.log('[Background] Settings preserved across update');
     });
   }
@@ -168,7 +168,7 @@ async function discoverSettingsFromWhisper() {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.type || message.action) {
     case 'CHECK_SERVER':
-      handleCheckServer(message.url, sendResponse);
+      handleCheckServer(message.url, sendResponse, message.isWhisper === true);
       return true;
     case 'GET_SETTINGS':
       handleGetSettings(sendResponse);
@@ -234,15 +234,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // SERVER HEALTH CHECKS
 // ============================================================================
 
-async function handleCheckServer(url, sendResponse) {
+async function handleCheckServer(url, sendResponse, isWhisperServer = false) {
   try {
     const controller = new AbortController();
     const tid = setTimeout(() => controller.abort(), 5000);
     const headers = {};
-    // Only send Whisper API token to Whisper server (port 5001), NOT to translation server
-    const isWhisperServer = url.includes(':5001') || url.includes('/health');
-    if (apiToken && isWhisperServer && !url.includes(':5000') && !url.includes(':11434')
-        && !url.includes('/v1/models') && !url.includes('/api/tags')) {
+    // Only attach Whisper API token when checking Whisper server (caller specifies)
+    if (apiToken && isWhisperServer) {
       headers['X-API-Token'] = apiToken;
     }
     const response = await fetch(url, { method: 'GET', signal: controller.signal, headers });

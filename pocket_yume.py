@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pocket Yume CLI v5.4.0 -- Cross-platform installer & launcher for Yume AI Subtitles
+Pocket Yume CLI v5.4.2 -- Cross-platform installer & launcher for Yume AI Subtitles
 Complete rewrite: smart port management, API token auth, Windows cp1252 fix
 Supports: Windows, Linux, macOS
 """
@@ -41,7 +41,7 @@ def _run(cmd, timeout=30, **kw):
 # Japanese text may appear in logs. Wrapping stdout here breaks ANSI
 # color rendering on Windows terminals.
 
-VERSION = "5.4.0"
+VERSION = "5.4.2"
 
 # Named constants
 KiB = 1024
@@ -615,13 +615,38 @@ def find_tool(name):
     return shutil.which(name)
 
 def check_server(host, port, path="/health"):
+    """Check if a server is responding. Handles JSON and non-JSON responses."""
     try:
         url = f"http://{host}:{port}{path}"
         req = urllib.request.Request(url, headers={"User-Agent": "PocketYume"})
         with urllib.request.urlopen(req, timeout=3) as resp:
-            return {"up": True, "data": json.loads(resp.read())}
+            body = resp.read()
+            try:
+                return {"up": True, "data": json.loads(body)}
+            except (json.JSONDecodeError, ValueError):
+                # Server responded (HTTP 200) but body isn't JSON — still up
+                return {"up": True, "data": {"raw": body.decode("utf-8", errors="replace")[:200]}}
     except Exception:
         return {"up": False, "data": {}}
+
+
+def check_translation_server(host, port, backend_info=None):
+    """Check translation server with fallback endpoints (different backends use different paths)."""
+    bi = backend_info or BACKEND_INFO.get("llamacpp", {})
+    # Try the backend's configured health path first
+    paths_to_try = [bi.get("hp", "/health"), "/v1/models", "/health", "/api/tags", "/"]
+    # Deduplicate while preserving order
+    seen = set()
+    unique = []
+    for p in paths_to_try:
+        if p not in seen:
+            seen.add(p)
+            unique.append(p)
+    for path in unique:
+        st = check_server(host, port, path)
+        if st["up"]:
+            return st
+    return {"up": False, "data": {}}
 
 def check_ollama_models(host="127.0.0.1", port=DEFAULT_OLLAMA_PORT):
     try:
@@ -1643,7 +1668,7 @@ def _menu_backend(cfg):
         bi = BACKEND_INFO.get(cur, BACKEND_INFO["custom"])
         info(f"Current: {C.BOLD}{bi['name']}{C.RESET}")
         info(f"Address: {C.CYAN}{cfg.get('translation_host', '127.0.0.1')}:{cfg.get('translation_port', DEFAULT_TRANSLATION_PORT)}{C.RESET}")
-        st = check_server(cfg.get("translation_host", "127.0.0.1"), cfg.get("translation_port", DEFAULT_TRANSLATION_PORT), bi.get("hp", "/health"))
+        st = check_translation_server(cfg.get("translation_host", "127.0.0.1"), cfg.get("translation_port", DEFAULT_TRANSLATION_PORT), bi)
         (success if st["up"] else warn)(f"Status: {'RUNNING' if st['up'] else 'Not running'}")
 
         ch = ask_choice("Options:", [
@@ -1816,11 +1841,13 @@ def _test_translation(cfg):
     if m: info(f"Model: {m}")
     print()
 
-    st = check_server(h, p, bi.get("hp", "/health"))
+    info("Checking server connectivity...")
+    st = check_translation_server(h, p, bi)
     if not st["up"]:
         error(f"Server not reachable at {h}:{p}")
         if bk == "llamacpp":
-            warn("Start the server first: Launch Yume from main menu")
+            warn("Make sure you launched Yume first (main menu → Launch Yume)")
+            info(f"{C.DIM}The translation server starts automatically when you launch.{C.RESET}")
         pause(); return
     success("Server reachable!")
 
@@ -2338,6 +2365,10 @@ def _is_whisper_model_cached(model_name):
 def benchmark_whisper(cfg):
     """Compare Whisper model speeds on this hardware."""
     header("Whisper Benchmark")
+    info("This measures how fast each speech recognition model runs on your hardware.")
+    info(f"{C.DIM}Yume processes audio in chunks. Faster models = subtitles appear sooner.{C.RESET}")
+    info(f"{C.DIM}A model running at '10x realtime' transcribes 1 minute of audio in 6 seconds.{C.RESET}")
+    print()
 
     # Check faster-whisper is installed
     try:
@@ -2484,9 +2515,13 @@ def benchmark_whisper(cfg):
 
     # Run benchmarks
     results = []
-    for model_name in models_to_test:
-        section(f"Testing: {model_name}")
-        info(f"Device: {device} | Compute: {compute}")
+    total = len(models_to_test)
+    for idx, model_name in enumerate(models_to_test):
+        section(f"Testing {idx+1}/{total}: {model_name}")
+        cached = _is_whisper_model_cached(model_name)
+        if not cached:
+            info(f"{C.DIM}Downloading model... (this may take a few minutes the first time){C.RESET}")
+        info(f"Device: {device} | Precision: {compute}")
 
         try:
             from faster_whisper import WhisperModel
@@ -2497,7 +2532,8 @@ def benchmark_whisper(cfg):
             load_time = time.time() - t0
             success(f"Loaded in {load_time:.1f}s")
 
-            # Measure transcription (3 runs, take median)
+            # Measure transcription (3 runs, take median for stability)
+            info(f"{C.DIM}Running 3 transcription passes (5s test audio each)...{C.RESET}")
             times = []
             segments_count = 0
             for run in range(3):
@@ -2560,21 +2596,22 @@ def benchmark_whisper(cfg):
     # Display results
     print()
     section("Benchmark Results")
-    info(f"Device: {device} | Compute: {compute} | Audio: 5s test tone")
+    info(f"Device: {device} | Precision: {compute} | Test: 5s audio, 3 runs (median)")
     if gpu.get("has_nvidia"):
-        info(f"GPU: {gpu['name']} ({gpu['vram_mb']} MB)")
+        info(f"GPU: {gpu['name']} ({gpu['vram_mb']} MB VRAM)")
     print()
 
     rows = []
     best_speed = max((r["speed_x"] for r in results if r["status"] == "OK"), default=0)
     for r in results:
         if r["status"] == "OK":
-            speed_bar = "#" * min(30, int(r["speed_x"] / max(best_speed, 1) * 30))
-            is_best = " *" if r["speed_x"] == best_speed and len(results) > 1 else ""
+            bar_len = min(25, int(r["speed_x"] / max(best_speed, 1) * 25))
+            speed_bar = f"{C.GREEN}{'█' * bar_len}{C.DIM}{'░' * (25 - bar_len)}{C.RESET}"
+            is_best = f" {C.GOLD}★{C.RESET}" if r["speed_x"] == best_speed and len(results) > 1 else ""
             rows.append([
                 r["model"],
                 f"{r['load_s']}s",
-                f"{r['median_s']}s",
+                f"{r['median_s']:.3f}s",
                 f"{r['speed_x']}x{is_best}",
                 speed_bar,
             ])
@@ -2584,7 +2621,7 @@ def benchmark_whisper(cfg):
     table(
         ["Model", "Load", "5s Audio", "Speed", ""],
         rows,
-        col_styles=[C.CYAN, C.RESET, C.RESET, C.GREEN, C.DIM],
+        col_styles=[C.CYAN, C.RESET, C.RESET, C.GREEN, C.RESET],
         title="Whisper Benchmark"
     )
 
@@ -2593,8 +2630,20 @@ def benchmark_whisper(cfg):
         if ok_results:
             fastest = min(ok_results, key=lambda r: r["median_s"])
             print()
-            success(f"Fastest: {fastest['model']} at {fastest['speed_x']}x realtime")
+            info("How to read the results:")
+            info(f"  {C.DIM}Speed = how many times faster than real-time. Higher is better.{C.RESET}")
+            info(f"  {C.DIM}10x = 1 minute of audio transcribed in 6 seconds{C.RESET}")
+            info(f"  {C.DIM}50x = 1 minute of audio transcribed in ~1 second{C.RESET}")
+            print()
+            success(f"Fastest: {C.BOLD}{fastest['model']}{C.RESET} at {C.GREEN}{fastest['speed_x']}x{C.RESET} realtime")
+
+            # Show practical estimate
+            if fastest["speed_x"] > 0:
+                mins_per_min = 60.0 / fastest["speed_x"]
+                info(f"  {C.DIM}→ A 4-minute song would be transcribed in ~{mins_per_min * 4:.1f} seconds{C.RESET}")
+
             if fastest["model"] != cfg.get("whisper_model"):
+                print()
                 if ask_yn(f"Switch to {fastest['model']}?", default=False):
                     cfg["whisper_model"] = fastest["model"]
                     save_config(cfg)
@@ -2940,11 +2989,7 @@ def _launch_inner(cfg, procs, lhs):
                 pause(); return
 
         port = cfg.get("translation_port", DEFAULT_TRANSLATION_PORT)
-        hp = bi.get("hp", "/health")
-        st = check_server(cfg["translation_host"], port, hp)
-        # Also try /v1/models as fallback (llama-cpp-python serves OpenAI API)
-        if not st["up"]:
-            st = check_server(cfg["translation_host"], port, "/v1/models")
+        st = check_translation_server(cfg["translation_host"], port, bi)
         if st["up"]:
             success("llama.cpp server already running!")
         else:
@@ -2973,7 +3018,8 @@ def _launch_inner(cfg, procs, lhs):
             def _trans_ready():
                 if p.poll() is not None:
                     return None  # crashed
-                return check_server(cfg["translation_host"], port, "/health")["up"]
+                # llama-cpp-python doesn't have /health — try /v1/models too
+                return check_translation_server(cfg["translation_host"], port, bi)["up"]
 
             ready = spin_wait(
                 lambda: _trans_ready() is True,
@@ -3176,9 +3222,7 @@ def _runtime_menu(cfg, procs, lhs, bk):
 
             # Quick status check
             ws_up = check_server(cfg["whisper_host"], cfg["whisper_port"], "/health")["up"]
-            ts_up = check_server(cfg["translation_host"], cfg["translation_port"], bi.get("hp", "/health"))["up"]
-            if not ts_up:
-                ts_up = check_server(cfg["translation_host"], cfg["translation_port"], "/v1/models")["up"]
+            ts_up = check_translation_server(cfg["translation_host"], cfg["translation_port"], bi)["up"]
 
             ws_dot = f"{C.GREEN}●{C.RESET}" if ws_up else f"{C.RED}●{C.RESET}"
             ts_dot = f"{C.GREEN}●{C.RESET}" if ts_up else f"{C.RED}●{C.RESET}"
