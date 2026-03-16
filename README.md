@@ -62,33 +62,46 @@ The setup wizard runs on first launch — detects your hardware, installs depend
 ## Architecture
 
 ```mermaid
-graph LR
-    subgraph ext["Browser Extension"]
-        P["popup.js — Settings UI"]
-        B["background.js — Server Proxy"]
-        A["audio-capture.js — Pipeline"]
-        C["content.js — Lifecycle"]
-        S["subtitle-window.js — Overlay"]
-    end
+graph TD
 
-    subgraph srv["Local Servers"]
-        W["Whisper Server :5001\nfaster-whisper + yt-dlp"]
-        T["Translation LLM :5000\nllama.cpp / Ollama"]
-    end
+    %% MAIN FLOW
+    A([Extension Start]) --> B["Get video URL + settings<br/>background.js"]
+    B --> C["Capture audio stream<br/>audio-capture.js"]
+    C --> D["Whisper Server (5001)<br/>Transcribe audio"]
+    D --> E{"Text received?"}
 
-    B -- "video URL + settings" --> W
-    W -- "transcribed text" --> B
-    B -- "source text" --> T
-    T -- "translated text" --> B
-    B -- "subtitles" --> S
+    %% DECISION AS NODES
+    E --> Y([Yes]) --> F["Translate via LLM (5000)<br/>Translation server"]
+    E --> N([No]) --> G["Mark empty"]
 
-    style W fill:#7c3aed,stroke:#5b21b6,color:#fff
-    style T fill:#16a34a,stroke:#15803d,color:#fff
-    style P fill:#f87171,stroke:#dc2626,color:#fff
+    F --> H["Send subtitles to overlay<br/>subtitle-window.js"]
+    G --> H
+
+    H --> M{"More audio<br/>chunks?"}
+
+    M --> Y2([Yes]) --> C
+    M --> N2([No]) --> J([Done])
+
+    %% PARALLEL PATH AS NODE
+    C -.-> P([Parallel]) -.-> K["Transcribe next chunk"]
+    K -.-> H
+
+    %% COLORS
+    style A fill:#f59e0b,stroke:#d97706,color:#fff
     style B fill:#60a5fa,stroke:#2563eb,color:#fff
-    style A fill:#60a5fa,stroke:#2563eb,color:#fff
-    style C fill:#4ade80,stroke:#16a34a,color:#fff
-    style S fill:#4ade80,stroke:#16a34a,color:#fff
+    style C fill:#3b82f6,stroke:#1d4ed8,color:#fff
+    style D fill:#7c3aed,stroke:#5b21b6,color:#fff
+    style F fill:#16a34a,stroke:#15803d,color:#fff
+    style G fill:#94a3b8,stroke:#475569,color:#fff
+    style H fill:#4ade80,stroke:#16a34a,color:#fff
+    style J fill:#22c55e,stroke:#16a34a,color:#fff
+
+    %% Decision Nodes (Yes, No, Parallel)
+    style Y fill:#0284c7,stroke:#0369a1,color:#fff
+    style N fill:#475569,stroke:#334155,color:#fff
+    style Y2 fill:#0284c7,stroke:#0369a1,color:#fff
+    style N2 fill:#475569,stroke:#334155,color:#fff
+    style P fill:#0ea5e9,stroke:#0369a1,color:#fff
 ```
 
 ---
@@ -100,58 +113,40 @@ graph TD
     A([Start]) --> B["Download full audio via yt-dlp"]
     B --> C["Slice chunk N from audio"]
     C --> D["Whisper: Transcribe"]
-    D --> E{"Speech\nfound?"}
-    E -->|Yes| F["LLM: Translate"]
-    E -->|No| G["Mark empty"]
+    D --> E{"Speech<br/>found?"}
+
+    %% DECISION NODES
+    E --> Y([Yes]) --> F["LLM: Translate"]
+    E --> N([No]) --> G["Mark empty"]
+
     F --> H["Cache + display subtitles"]
     G --> H
-    H --> I{"More\nchunks?"}
-    I -->|Yes| C
-    I -->|No| J([Done])
-    C -.->|"Parallel"| K["Transcribe chunk N+1"]
+
+    H --> M{"More<br/>chunks?"}
+
+    M --> Y2([Yes]) --> C
+    M --> N2([No]) --> J([Done])
+
+    %% Parallel node
+    C -.-> P([Parallel]) -.-> K["Transcribe chunk N+1"]
     K -.-> H
 
+    %% Colors (same as original)
     style D fill:#7c3aed,stroke:#5b21b6,color:#fff
     style F fill:#16a34a,stroke:#15803d,color:#fff
     style A fill:#f59e0b,stroke:#d97706,color:#fff
     style J fill:#22c55e,stroke:#16a34a,color:#fff
+
+    %% Decision Nodes (same design)
+    style Y fill:#0284c7,stroke:#0369a1,color:#fff
+    style N fill:#475569,stroke:#334155,color:#fff
+    style Y2 fill:#0284c7,stroke:#0369a1,color:#fff
+    style N2 fill:#475569,stroke:#334155,color:#fff
+    style P fill:#0ea5e9,stroke:#0369a1,color:#fff
 ```
 
 Yume hides latency by **transcribing chunk N+1 while translating chunk N** — Whisper and the LLM never wait for each other.
 
----
-
-## Features
-
-```mermaid
-mindmap
-  root((Yume))
-    Transcription
-      faster-whisper on GPU
-      9 Whisper models + turbo
-      Hallucination filter
-      Music-optimized thresholds
-    Translation
-      llama.cpp / Ollama / LM Studio
-      5 language pairs
-      Batch translation + caching
-      Custom prompts editor
-    Romanization
-      Romaji — Japanese, instant
-      Pinyin — Chinese, instant
-      Revised — Korean, instant
-      LLM fallback for RU/AR
-    Interface
-      Draggable subtitle overlay
-      Glass blur effect
-      Custom fonts per line
-      SRT export
-    Performance
-      Parallel pipeline
-      LRU translation cache
-      Batch romanization
-      Download-once architecture
-```
 
 ---
 
