@@ -21,6 +21,7 @@ Transcription · Translation · Romanization
 
 ---
 
+https://github.com/user-attachments/assets/48ee3790-7635-4321-8246-308689e53210
 
 Yume captures audio from any video in your browser, transcribes it with [faster-whisper](https://github.com/SYSTRAN/faster-whisper) running on your GPU, translates it with a local LLM, and overlays subtitles in real-time. Everything runs on your machine — no API keys, no subscriptions, no data leaves your computer.
 
