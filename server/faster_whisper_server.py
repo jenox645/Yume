@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Yume -- Faster-Whisper Server v5.4.2
+Yume -- Faster-Whisper Server v5.5.0
 Word-level timestamps + pause re-splitting + security hardening
 Parallel startup: Flask starts before model loads. Prewarm inference on load.
 All output is ASCII-safe for Windows cp932/cp1252 locales.
@@ -216,7 +216,7 @@ stream_url_cache = {}  # bounded: max STREAM_URL_CACHE_MAX entries
 STREAM_URL_TTL = 300  # 5 minutes (YouTube stream URLs expire)
 
 # YouTube auth (set from config at startup)
-youtube_auth_method = "deno"    # "deno" or "cookies"
+youtube_auth_method = "cookies"    # "cookies" or "deno"
 cookies_browser = "chrome"
 
 # Translation server info (read from config, reported in /health so extension can auto-discover)
@@ -281,7 +281,7 @@ def health():
     is_ready = model is not None
     base = {
         "status": "ready" if is_ready else "loading",
-        "version": "5.4.2",
+        "version": "5.5.0",
         "prepare_supported": True,
         "ytdlp_available": _check_ytdlp(),
     }
@@ -412,13 +412,30 @@ def get_config():
 
 _ytdlp_cache = {"available": None, "checked_at": 0}
 
+def _ytdlp_cmd():
+    """Return the yt-dlp command prefix.
+
+    When youtube_auth_method == 'deno', we MUST use the pip-installed yt-dlp
+    (python -m yt_dlp) because only pip-installed yt-dlp discovers pip-installed
+    plugins like bgutil-ytdlp-pot-provider.
+
+    A standalone yt-dlp binary (tools/yt-dlp.exe) does NOT search site-packages
+    for plugins — so the PO token plugin would be invisible to it.
+    """
+    if youtube_auth_method == "deno":
+        # Use pip-installed yt-dlp so it finds pip-installed bgutil plugin
+        return [sys.executable, "-m", "yt_dlp"]
+    # Default: standalone binary (faster startup, works for cookies mode)
+    return ["yt-dlp"]
+
+
 def _check_ytdlp():
     """Check if yt-dlp is available (cached for 60s)."""
     now = time.time()
     if _ytdlp_cache["available"] is not None and now - _ytdlp_cache["checked_at"] < 60:
         return _ytdlp_cache["available"]
     try:
-        result = subprocess.run(["yt-dlp", "--version"], capture_output=True, timeout=5)
+        result = subprocess.run(_ytdlp_cmd() + ["--version"], capture_output=True, timeout=10)
         available = result.returncode == 0
     except Exception:
         available = False
@@ -620,25 +637,44 @@ def _download_full_audio(url):
     is_yt = _is_youtube_url(url)
     strategies = []
 
-    # Base auth: cookies only (no player_client override) — most compatible
+    # Auth strategy:
+    #   "deno" mode: bgutil-ytdlp-pot-provider generates PO tokens via deno.
+    #     The plugin hooks into yt-dlp automatically — no extra args needed.
+    #     Deno is found via PATH. If bgutil fails, we fall back to cookies.
+    #   "cookies" mode: borrows the user's browser YouTube login session.
+    #
     cookie_args = []
-    if youtube_auth_method == "cookies":
+    try:
         cookie_args = ["--cookies-from-browser", _resolve_browser_cookies()]
+    except Exception:
+        pass
 
     if is_yt:
-        # Strategy A: cookies + default player (most compatible)
-        strategies.append(("cookies+default", [*cookie_args]))
-        # Strategy B: cookies + tv,web player (works for some restricted videos)
-        strategies.append(("cookies+tv,web", [
-            "--extractor-args", "youtube:player_client=tv,web", *cookie_args
-        ]))
-        # Strategy C: cookies + mweb player (mobile fallback)
-        strategies.append(("cookies+mweb", [
-            "--extractor-args", "youtube:player_client=mweb", *cookie_args
-        ]))
-        # Strategy D: no auth at all (works for non-restricted videos)
-        if cookie_args:
+        if youtube_auth_method == "deno":
+            # Try 1: bgutil PO token (no extra args — plugin handles everything)
+            strategies.append(("deno+default", []))
+            strategies.append(("deno+tv,web", [
+                "--extractor-args", "youtube:player_client=tv,web"
+            ]))
+            # Try 2: cookies fallback (always available as backup)
+            if cookie_args:
+                strategies.append(("cookies-fallback", [*cookie_args]))
+                strategies.append(("cookies+tv,web", [
+                    "--extractor-args", "youtube:player_client=tv,web", *cookie_args
+                ]))
+            # Try 3: no auth (last resort, works for public non-restricted videos)
             strategies.append(("no-auth", []))
+        else:
+            # Pure cookies mode
+            strategies.append(("cookies+default", [*cookie_args]))
+            strategies.append(("cookies+tv,web", [
+                "--extractor-args", "youtube:player_client=tv,web", *cookie_args
+            ]))
+            strategies.append(("cookies+mweb", [
+                "--extractor-args", "youtube:player_client=mweb", *cookie_args
+            ]))
+            if cookie_args:
+                strategies.append(("no-auth", []))
     else:
         strategies.append(("default", [*cookie_args]))
 
@@ -650,7 +686,7 @@ def _download_full_audio(url):
                 print(f"[Yume] Trying yt-dlp ({tag}): {url[:80]}...")
                 result = subprocess.run(
                     [
-                        "yt-dlp",
+                        *_ytdlp_cmd(),
                         *fmt_args,
                         "-x", "--audio-format", "wav",
                         "--postprocessor-args", "ffmpeg:-ar 16000 -ac 1",
@@ -680,8 +716,10 @@ def _download_full_audio(url):
                 last_error = _friendlify_ytdlp_error(raw_err)
                 print(f"[Yume] yt-dlp ({tag}) failed: {last_error[:150]}")
 
-                # If DRM/auth error and we haven't tried cookies yet, skip to next strategy
-                if 'drm' in stderr_lower or 'sign in' in stderr_lower:
+                # If auth error, skip to next strategy (try cookies fallback)
+                if ('drm' in stderr_lower or 'sign in' in stderr_lower
+                        or 'forbidden' in stderr_lower or 'invalid token' in stderr_lower
+                        or 'bot' in stderr_lower):
                     break  # skip nofmt pass, move to next auth strategy
 
             except subprocess.TimeoutExpired:
@@ -825,7 +863,7 @@ def prepare_direct():
             print(f"[Yume] ffmpeg failed, trying yt-dlp on stream URL...")
             output_template = os.path.join(tmp_dir, "full_audio.%(ext)s")
             result = subprocess.run(
-                ["yt-dlp", "-x", "--audio-format", "wav",
+                [*_ytdlp_cmd(), "-x", "--audio-format", "wav",
                  "--postprocessor-args", "ffmpeg:-ar 16000 -ac 1",
                  "--no-playlist", "--no-cache-dir", "--no-exec",
                  "-o", output_template, "--", stream_url],
@@ -1060,13 +1098,20 @@ def cache_status():
 def _build_auth_args(url):
     """Build yt-dlp auth arguments for non-download calls (get-url, prepare).
     Download calls handle their own multi-strategy retries.
+    For deno mode: bgutil plugin works transparently (no args needed).
+    We still add cookies as backup for non-download calls.
     """
     args = []
 
     if _is_youtube_url(url):
-        # Use default player client for stream URL extraction (most compatible)
         if youtube_auth_method == "cookies":
             args.extend(["--cookies-from-browser", _resolve_browser_cookies()])
+        elif youtube_auth_method == "deno":
+            # bgutil plugin handles auth transparently — but add cookies as backup
+            try:
+                args.extend(["--cookies-from-browser", _resolve_browser_cookies()])
+            except Exception:
+                pass
     elif youtube_auth_method == "cookies":
         args.extend(["--cookies-from-browser", _resolve_browser_cookies()])
 
@@ -1125,7 +1170,7 @@ def _get_stream_url(url):
 
     for fmt_args in format_attempts:
         result = subprocess.run(
-            ["yt-dlp", "--get-url", *fmt_args, "--no-playlist", "--no-exec",
+            [*_ytdlp_cmd(), "--get-url", *fmt_args, "--no-playlist", "--no-exec",
              *auth_args, "--", url],
             capture_output=True, text=True, timeout=30
         )
@@ -1202,7 +1247,7 @@ def _download_audio_segment_fallback(url, start_time, duration, output_path):
 
         result = subprocess.run(
             [
-                "yt-dlp",
+                *_ytdlp_cmd(),
                 "--download-sections", f"*{start_time}-{start_time + duration}",
                 "--force-keyframes-at-cuts",
                 "-x", "--audio-format", "wav",
@@ -1589,6 +1634,203 @@ def _transcribe_file(audio_path, language, start_offset=0.0):
 # STARTUP  (ALL ASCII -- no em-dashes, no box-drawing chars)
 # ============================================================================
 
+# ============================================================================
+# BGUTIL PO TOKEN SERVER MANAGEMENT
+# ============================================================================
+# bgutil-ytdlp-pot-provider needs a local HTTP server on port 4416 that
+# solves YouTube's BotGuard challenge and generates PO tokens.
+# Yume manages this server automatically when youtube_auth_method == "deno".
+#
+# Architecture:
+#   yt-dlp -> bgutil plugin (pip) -> HTTP request to 127.0.0.1:4416
+#   bgutil server (deno) -> runs BotGuard JS -> returns PO token
+# ============================================================================
+
+BGUTIL_PORT = 4416
+_bgutil_proc = None  # Managed subprocess
+
+def _bgutil_server_dir():
+    """Where the bgutil server files live."""
+    return Path(__file__).parent.parent / "tools" / "bgutil-ytdlp-pot-provider" / "server"
+
+def _is_bgutil_server_ready():
+    """Check if bgutil HTTP server is responding."""
+    try:
+        import urllib.request
+        resp = urllib.request.urlopen(f"http://127.0.0.1:{BGUTIL_PORT}/ping", timeout=3)
+        return resp.status == 200
+    except Exception:
+        return False
+
+def _setup_bgutil_server():
+    """Download and set up the bgutil server if not already present.
+    Downloads the repo as a zip from GitHub, extracts, runs deno install.
+    Returns True if the server directory is ready.
+    """
+    server_dir = _bgutil_server_dir()
+    main_ts = server_dir / "src" / "main.ts"
+
+    if main_ts.exists():
+        print(f"  bgutil server:    found at {server_dir}")
+        return True
+
+    print("  bgutil server:    not found — downloading...")
+    repo_parent = server_dir.parent.parent  # tools/
+    repo_parent.mkdir(parents=True, exist_ok=True)
+
+    # Download the repo zip from GitHub
+    zip_path = repo_parent / "bgutil-ytdlp-pot-provider.zip"
+    try:
+        import urllib.request
+        url = "https://github.com/Brainicism/bgutil-ytdlp-pot-provider/archive/refs/tags/1.3.1.zip"
+        print(f"  bgutil server:    downloading from GitHub...")
+        urllib.request.urlretrieve(url, str(zip_path))
+    except Exception as e:
+        print(f"  bgutil server:    download failed: {e}")
+        return False
+
+    # Extract
+    try:
+        import zipfile
+        with zipfile.ZipFile(str(zip_path), 'r') as zf:
+            zf.extractall(str(repo_parent))
+        zip_path.unlink(missing_ok=True)
+
+        # Rename extracted dir (bgutil-ytdlp-pot-provider-1.3.1 -> bgutil-ytdlp-pot-provider)
+        extracted = repo_parent / "bgutil-ytdlp-pot-provider-1.3.1"
+        target = repo_parent / "bgutil-ytdlp-pot-provider"
+        if extracted.exists():
+            if target.exists():
+                shutil.rmtree(str(target))
+            extracted.rename(target)
+        print(f"  bgutil server:    extracted")
+    except Exception as e:
+        print(f"  bgutil server:    extract failed: {e}")
+        zip_path.unlink(missing_ok=True)
+        return False
+
+    # Install dependencies with deno
+    if not main_ts.exists():
+        print(f"  bgutil server:    main.ts not found at {main_ts}")
+        return False
+
+    print(f"  bgutil server:    installing dependencies (deno install)...")
+    try:
+        r = subprocess.run(
+            ["deno", "install", "--allow-scripts=npm:canvas", "--frozen"],
+            cwd=str(server_dir),
+            capture_output=True, text=True, timeout=180
+        )
+        if r.returncode == 0:
+            print(f"  bgutil server:    dependencies installed")
+        else:
+            # Try without --frozen flag (may not exist in all deno versions)
+            r2 = subprocess.run(
+                ["deno", "install", "--allow-scripts=npm:canvas"],
+                cwd=str(server_dir),
+                capture_output=True, text=True, timeout=180
+            )
+            if r2.returncode == 0:
+                print(f"  bgutil server:    dependencies installed (without --frozen)")
+            else:
+                print(f"  bgutil server:    deno install failed: {(r2.stderr or '')[-200:]}")
+                return False
+    except Exception as e:
+        print(f"  bgutil server:    deno install failed: {e}")
+        return False
+
+    return True
+
+
+def _start_bgutil_server():
+    """Start the bgutil HTTP server on port 4416 as a background process.
+    Returns True if the server starts successfully.
+    """
+    global _bgutil_proc
+
+    # Already running?
+    if _is_bgutil_server_ready():
+        print(f"  bgutil server:    already running on port {BGUTIL_PORT}")
+        return True
+
+    server_dir = _bgutil_server_dir()
+    node_modules = server_dir / "node_modules"
+    main_ts = server_dir / "src" / "main.ts"
+
+    if not main_ts.exists():
+        print(f"  bgutil server:    main.ts not found — cannot start")
+        return False
+
+    # Determine working directory — deno needs to run from node_modules
+    # to resolve npm dependencies
+    cwd = str(node_modules) if node_modules.exists() else str(server_dir)
+    main_path = str(main_ts) if not node_modules.exists() else str(server_dir / "src" / "main.ts")
+
+    # Compute relative path from cwd to main.ts
+    try:
+        main_rel = os.path.relpath(str(main_ts), cwd)
+    except ValueError:
+        main_rel = str(main_ts)
+
+    print(f"  bgutil server:    starting on port {BGUTIL_PORT}...")
+    try:
+        _bgutil_proc = subprocess.Popen(
+            [
+                "deno", "run",
+                "--no-prompt",
+                "--allow-env", "--allow-net", "--allow-ffi=.",
+                "--allow-read=.", "--allow-sys",
+                main_rel,
+                "--port", str(BGUTIL_PORT),
+            ],
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+        )
+
+        # Wait for server to be ready (max 30s)
+        for i in range(30):
+            time.sleep(1)
+            if _is_bgutil_server_ready():
+                print(f"  bgutil server:    ready on port {BGUTIL_PORT} (PO token generation active)")
+                return True
+            # Check if process died
+            if _bgutil_proc.poll() is not None:
+                stderr = ""
+                try:
+                    stderr = _bgutil_proc.stderr.read().decode('utf-8', errors='replace')[-300:]
+                except Exception:
+                    pass
+                print(f"  bgutil server:    process exited with code {_bgutil_proc.returncode}")
+                if stderr:
+                    print(f"  bgutil server:    stderr: {stderr}")
+                _bgutil_proc = None
+                return False
+
+        print(f"  bgutil server:    timed out waiting for port {BGUTIL_PORT}")
+        return False
+
+    except Exception as e:
+        print(f"  bgutil server:    start failed: {e}")
+        return False
+
+
+def _stop_bgutil_server():
+    """Stop the bgutil server on exit."""
+    global _bgutil_proc
+    if _bgutil_proc and _bgutil_proc.poll() is None:
+        try:
+            _bgutil_proc.terminate()
+            _bgutil_proc.wait(timeout=5)
+        except Exception:
+            try:
+                _bgutil_proc.kill()
+            except Exception:
+                pass
+    _bgutil_proc = None
+
+
 def main():
     _cleanup_stale_temps()
     signal.signal(signal.SIGTERM, _shutdown_handler)
@@ -1634,18 +1876,32 @@ def main():
         translation_port = cfg.get("translation_port", translation_port)
         translation_backend = cfg.get("translation_backend", translation_backend)
 
-    # Handle 'auto' device
+    # Handle 'auto' device — use CTranslate2's detection (not torch!)
+    # torch.cuda.is_available() can be False even when CTranslate2 has CUDA support
     if device == "auto":
         try:
-            import torch
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        except ImportError:
-            device = "cpu"
+            import ctranslate2
+            if "cuda" in ctranslate2.get_supported_compute_types("cuda"):
+                device = "cuda"
+            else:
+                device = "cpu"
+        except Exception:
+            # Fallback: try torch, then nvidia-smi
+            try:
+                import torch
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+            except ImportError:
+                try:
+                    # subprocess is already imported at module level
+                    r = subprocess.run(["nvidia-smi"], capture_output=True, timeout=5)
+                    device = "cuda" if r.returncode == 0 else "cpu"
+                except Exception:
+                    device = "cpu"
     if compute_type == "auto":
         compute_type = "float16" if device == "cuda" else "int8"
 
     print("=" * 70)
-    print("  YUME -- Whisper Server v5.4.2")
+    print("  YUME -- Whisper Server v5.5.0")
     print("=" * 70)
     print(f"  Model:            {model_name}")
     print(f"  Device:           {device}")
@@ -1683,26 +1939,99 @@ def main():
         print("  Pre-fetch mode will not work without it.")
         print("")
     else:
-        v = subprocess.run(["yt-dlp", "--version"], capture_output=True, text=True)
+        v = subprocess.run([*_ytdlp_cmd(), "--version"], capture_output=True, text=True)
         print(f"  yt-dlp:           {v.stdout.strip()}")
 
     # Auth method viability check
+    #
+    # How "deno" auth works:
+    #   YouTube requires a "proof-of-origin" (PO) token to prove you're a real browser.
+    #   The bgutil-ytdlp-pot-provider plugin solves YouTube's BotGuard challenge using
+    #   Deno as a JavaScript runtime, then passes the PO token to yt-dlp automatically.
+    #   Once installed, yt-dlp uses it transparently — no extra yt-dlp arguments needed.
+    #
+    # Requirements: deno >= 2.0 in PATH + bgutil-ytdlp-pot-provider pip package
+    #
     if youtube_auth_method == "deno":
         deno_found = False
         try:
-            subprocess.run(["deno", "--version"], capture_output=True, timeout=5)
-            deno_found = True
+            r = subprocess.run(["deno", "--version"], capture_output=True, text=True, timeout=5)
+            deno_found = r.returncode == 0
+            if deno_found:
+                deno_ver = r.stdout.split('\n')[0].strip()
+                print(f"  Deno:             {deno_ver}")
         except Exception:
             pass
-        if not deno_found:
+
+        if deno_found:
+            # Deno mode requires pip-installed yt-dlp (not standalone binary)
+            # because only pip yt-dlp discovers pip-installed plugins (like bgutil).
+            pip_ytdlp_ok = False
+            try:
+                r = subprocess.run(
+                    [sys.executable, "-m", "yt_dlp", "--version"],
+                    capture_output=True, text=True, timeout=10
+                )
+                pip_ytdlp_ok = r.returncode == 0
+                if pip_ytdlp_ok:
+                    print(f"  yt-dlp (pip):     {r.stdout.strip()}")
+            except Exception:
+                pass
+
+            if not pip_ytdlp_ok:
+                print("  yt-dlp (pip):     not found — installing...")
+                try:
+                    subprocess.run(
+                        [sys.executable, "-m", "pip", "install", "-q",
+                         "--no-warn-script-location", "yt-dlp"],
+                        capture_output=True, timeout=120
+                    )
+                    print("  yt-dlp (pip):     installed")
+                except Exception as e:
+                    print(f"  yt-dlp (pip):     install failed ({e})")
+
+            # Check if bgutil PO token plugin is installed
+            # bgutil is a yt-dlp plugin — detect via pip show, not importlib
+            bgutil_installed = False
+            try:
+                r = subprocess.run(
+                    [sys.executable, "-m", "pip", "show", "bgutil-ytdlp-pot-provider"],
+                    capture_output=True, text=True, timeout=10
+                )
+                bgutil_installed = r.returncode == 0
+            except Exception:
+                pass
+
+            if not bgutil_installed:
+                print("  PO Token plugin:  not found — installing bgutil-ytdlp-pot-provider...")
+                try:
+                    subprocess.run(
+                        [sys.executable, "-m", "pip", "install", "-q",
+                         "--no-warn-script-location", "bgutil-ytdlp-pot-provider"],
+                        capture_output=True, timeout=120
+                    )
+                    print("  PO Token plugin:  installed (YouTube BotGuard bypass via Deno)")
+                except Exception as e:
+                    print(f"  PO Token plugin:  install failed ({e})")
+                    print("  YouTube may require sign-in. Fallback: set youtube_auth_method='cookies'")
+            else:
+                print("  PO Token plugin:  bgutil-ytdlp-pot-provider (active)")
+
+            # Setup and start the bgutil HTTP server (port 4416)
+            # This is the actual PO token generation server that the plugin connects to
+            if _setup_bgutil_server():
+                _start_bgutil_server()
+                atexit.register(_stop_bgutil_server)
+            else:
+                print("  bgutil server:    setup failed — YouTube downloads may fail")
+                print("  bgutil server:    will try cookies fallback automatically")
+        else:
             print("")
             print("  WARNING: youtube_auth_method is 'deno' but Deno is not installed.")
-            print("  Auto-switching to 'cookies' auth with browser: firefox")
-            print("  To fix: install Deno, or set youtube_auth_method='cookies' in config.")
+            print("  Auto-switching to 'cookies' auth.")
+            print("  To fix: install Deno (https://deno.land), or set youtube_auth_method='cookies'.")
             youtube_auth_method = "cookies"
             if cookies_browser == "chrome":
-                # If still default chrome, switch to firefox (more common on Linux)
-                import platform
                 if platform.system() != "Windows":
                     cookies_browser = "firefox"
             print(f"  Now using: cookies ({cookies_browser})")

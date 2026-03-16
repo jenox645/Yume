@@ -1,5 +1,5 @@
 // ============================================================================
-// AUDIO CAPTURE v3.9.0 - Download-once + parallel pipeline (Yume v5.4.2)
+// AUDIO CAPTURE v3.9.0 - Download-once + parallel pipeline (Yume v5.5.0)
 // Translation and romanization are SEPARATE API calls
 // ============================================================================
 
@@ -28,6 +28,7 @@ class AudioCapture {
 
     // Generation counter — incremented on stop, used to kill stale promises
     this.generation = 0;
+    this._readySignaled = false;
 
     // Playback tracking
     this.video              = null;
@@ -95,6 +96,7 @@ class AudioCapture {
     this.videoId     = this._getVideoId();
     this.videoUrl    = window.location.href;
     this.isCapturing = true;
+    this._readySignaled = false;
 
     // Read settings
     try {
@@ -154,18 +156,7 @@ class AudioCapture {
     if (restored && this.fetchedChunks.size >= this.totalChunks) {
       // All chunks already cached — go straight to playback
       DEBUG.success('AudioCapture', 'All chunks restored from session — skipping transcription');
-      window.dispatchEvent(new CustomEvent('display-status', {
-        detail: { message: 'Restored from cache \u2713', type: 'success' }
-      }));
-      // Guard: only signal ready if current playback chunk has segments
-      const curChunk = this._chunkForTime(this.video?.currentTime || 0);
-      if (this.subtitleChunks[curChunk]?.length > 0) {
-        this._signalReady();
-      } else {
-        window.dispatchEvent(new CustomEvent('display-status', {
-          detail: { message: 'Restored — no speech at current position', type: 'info' }
-        }));
-      }
+      this._signalReady();
       this.timeUpdateHandler = () => this._onTimeUpdate();
       video.addEventListener('timeupdate', this.timeUpdateHandler);
       DEBUG.success('AudioCapture', 'Session restore complete — playback ready');
@@ -184,15 +175,9 @@ class AudioCapture {
     }));
 
     await this._fetchChunk(startChunk);
-    // Only signal Ready if the chunk at current playback time has segments
-    const currentChunk = this._chunkForTime(this.video?.currentTime || 0);
-    if (this.subtitleChunks[currentChunk]?.length > 0) {
-      this._signalReady();
-    } else {
-      window.dispatchEvent(new CustomEvent('display-status', {
-        detail: { message: 'Listening... (no speech yet)', type: 'info' }
-      }));
-    }
+    // First chunk is done — signal Ready (pipeline is working).
+    // Subtitles will appear when playback reaches a position with vocals.
+    this._signalReady();
 
     this.timeUpdateHandler = () => this._onTimeUpdate();
     video.addEventListener('timeupdate', this.timeUpdateHandler);
@@ -505,8 +490,7 @@ class AudioCapture {
       this._addDiag(chunkIndex, 'ok', translated.length, elapsed,
         `w:${whisperTime}s t:${transTime}s r:${romaTime}s "${preview}"`);
       this._dispatchProgress();
-
-      if (chunkIndex === this._chunkForTime(this.video?.currentTime || 0) && this.subtitleChunks[chunkIndex]?.length > 0) this._signalReady();
+      this._checkAndSignalReady(chunkIndex);
 
     } catch (error) {
       const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
@@ -579,8 +563,7 @@ class AudioCapture {
       this._addDiag(chunkIndex, 'ok', translated.length, elapsed,
         `w:${whisperTime}s t:${transTime}s r:${romaTime}s "${preview}"`);
       this._dispatchProgress();
-
-      if (chunkIndex === this._chunkForTime(this.video?.currentTime || 0) && this.subtitleChunks[chunkIndex]?.length > 0) this._signalReady();
+      this._checkAndSignalReady(chunkIndex);
 
     } catch (error) {
       if (gen !== this.generation) return; // stale, ignore
@@ -590,7 +573,14 @@ class AudioCapture {
     }
   }
 
+  _checkAndSignalReady(chunkIndex) {
+    // Ready already signaled on first chunk completion.
+    // This method just dispatches progress updates.
+  }
+
   _signalReady() {
+    if (this._readySignaled) return;
+    this._readySignaled = true;
     window.dispatchEvent(new CustomEvent('prefetch-ready', { detail: { chunkIndex: 0 } }));
   }
 

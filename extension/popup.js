@@ -1,4 +1,4 @@
-// Yume - Popup Script v5.4.2
+// Yume - Popup Script v5.5.0
 console.log('[Yume Popup] Script loaded');
 
 // ============================================================================
@@ -295,9 +295,9 @@ async function checkServers() {
   } catch (e) { whisperEl.className = 'status-indicator disconnected'; }
 
   try {
-    // Try multiple health endpoints — different backends use different paths
-    let t = await sendBg(`${tUrl}/health`);
-    if (!t.healthy) t = await sendBg(`${tUrl}/v1/models`);
+    // Try multiple health endpoints — /v1/models works for all backends
+    let t = await sendBg(`${tUrl}/v1/models`);
+    if (!t.healthy) t = await sendBg(`${tUrl}/health`);
     if (!t.healthy) t = await sendBg(`${tUrl}/api/tags`);  // Ollama
     if (!t.healthy && tPort !== 11434) t = await sendBg('http://localhost:11434/api/tags');
     // Also try just connecting (some servers don't have /health)

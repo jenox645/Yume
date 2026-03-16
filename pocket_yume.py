@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pocket Yume CLI v5.4.2 -- Cross-platform installer & launcher for Yume AI Subtitles
+Pocket Yume CLI v5.5.0 -- Cross-platform installer & launcher for Yume AI Subtitles
 Complete rewrite: smart port management, API token auth, Windows cp1252 fix
 Supports: Windows, Linux, macOS
 """
@@ -41,7 +41,7 @@ def _run(cmd, timeout=30, **kw):
 # Japanese text may appear in logs. Wrapping stdout here breaks ANSI
 # color rendering on Windows terminals.
 
-VERSION = "5.4.2"
+VERSION = "5.5.0"
 
 # Named constants
 KiB = 1024
@@ -134,7 +134,7 @@ BACKEND_INFO = {
         "name": "llama.cpp (built-in)",
         "desc": "DEFAULT. Drop a .gguf in models/translation/, Yume loads it directly.",
         "dh": "127.0.0.1", "dp": DEFAULT_TRANSLATION_PORT,
-        "hp": "/health", "ap": "/v1/chat/completions",
+        "hp": "/v1/models", "ap": "/v1/chat/completions",
         "inst": (
             "pip install llama-cpp-python\n"
             "  GPU (CUDA):  CMAKE_ARGS=\"-DGGML_CUDA=on\" pip install llama-cpp-python\n"
@@ -576,6 +576,31 @@ def detect_gpu():
             _log.debug('[detect_gpu] wmic-amd failed: %s', e)
 
     return r
+
+def _detect_cpu_name():
+    """Get the CPU brand string (e.g. 'Intel Core i7-12700K' or 'AMD Ryzen 9 5900X')."""
+    try:
+        # Linux: /proc/cpuinfo
+        cpuinfo = Path("/proc/cpuinfo")
+        if cpuinfo.exists():
+            for line in cpuinfo.read_text().splitlines():
+                if line.startswith("model name"):
+                    return line.split(":", 1)[1].strip()
+        # Windows: wmic
+        if IS_WIN:
+            r = _run(["wmic", "cpu", "get", "name"], timeout=5)
+            lines = [l.strip() for l in r.stdout.splitlines() if l.strip() and l.strip() != "Name"]
+            if lines:
+                return lines[0]
+        # macOS: sysctl
+        if IS_MAC:
+            r = _run(["sysctl", "-n", "machdep.cpu.brand_string"], timeout=5)
+            if r.stdout.strip():
+                return r.stdout.strip()
+    except Exception:
+        pass
+    return platform.processor() or "Unknown CPU"
+
 
 def detect_ram_gb():
     try:
@@ -1181,9 +1206,78 @@ def install_deno():
         if de.exists() and not IS_WIN:
             os.chmod(de, UNIX_EXEC_MODE)
         success("Deno extracted")
-        return True
     except Exception as e:
         error(f"Failed: {e}"); return False
+
+    # Install the PO token plugin — this is what actually uses deno for YouTube auth
+    info("Installing YouTube PO token plugin (bgutil-ytdlp-pot-provider)...")
+    info(f"{C.DIM}This plugin uses Deno to solve YouTube's bot-detection challenges.{C.RESET}")
+    info(f"{C.DIM}Once installed, yt-dlp uses it automatically — no extra steps needed.{C.RESET}")
+    try:
+        r = _run([
+            sys.executable, "-m", "pip", "install", "-q",
+            "--no-warn-script-location", "bgutil-ytdlp-pot-provider"
+        ], timeout=120)
+        if r.returncode == 0:
+            success("PO token plugin installed")
+        else:
+            warn("PO token plugin install failed — YouTube may require sign-in")
+            info(f"{C.DIM}You can retry manually: pip install bgutil-ytdlp-pot-provider{C.RESET}")
+    except Exception as e:
+        warn(f"PO token plugin install failed: {e}")
+
+    # Download and set up the bgutil PO token server
+    # This is the actual server that generates PO tokens using deno
+    info("Setting up bgutil PO token server...")
+    info(f"{C.DIM}This downloads the server code from GitHub and installs its dependencies.{C.RESET}")
+    bgutil_dir = TOOLS_DIR / "bgutil-ytdlp-pot-provider"
+    server_dir = bgutil_dir / "server"
+    main_ts = server_dir / "src" / "main.ts"
+
+    if main_ts.exists():
+        success("bgutil server already set up")
+    else:
+        zip_url = "https://github.com/Brainicism/bgutil-ytdlp-pot-provider/archive/refs/tags/1.3.1.zip"
+        zip_path = TOOLS_DIR / "bgutil.zip"
+        if download_file(zip_url, zip_path, "bgutil server"):
+            try:
+                with zipfile.ZipFile(zip_path) as zf:
+                    zf.extractall(TOOLS_DIR)
+                zip_path.unlink(missing_ok=True)
+                # Rename extracted dir
+                extracted = TOOLS_DIR / "bgutil-ytdlp-pot-provider-1.3.1"
+                if extracted.exists():
+                    if bgutil_dir.exists():
+                        shutil.rmtree(bgutil_dir)
+                    extracted.rename(bgutil_dir)
+                success("bgutil server extracted")
+
+                # Install dependencies with deno
+                if main_ts.exists():
+                    deno = find_tool("deno") or "deno"
+                    info("Installing bgutil server dependencies (deno install)...")
+                    try:
+                        r = _run([deno, "install", "--allow-scripts=npm:canvas", "--frozen"],
+                                 cwd=str(server_dir), timeout=180)
+                        if r.returncode != 0:
+                            r = _run([deno, "install", "--allow-scripts=npm:canvas"],
+                                     cwd=str(server_dir), timeout=180)
+                        if r.returncode == 0:
+                            success("bgutil server dependencies installed")
+                        else:
+                            warn("deno install failed — server may not start")
+                    except Exception as e:
+                        warn(f"deno install failed: {e}")
+                else:
+                    warn("main.ts not found after extraction")
+            except Exception as e:
+                error(f"Extract failed: {e}")
+                zip_path.unlink(missing_ok=True)
+        else:
+            warn("bgutil server download failed")
+            info(f"{C.DIM}YouTube auth will fall back to browser cookies.{C.RESET}")
+
+    return True
 
 def install_ollama():
     if IS_WIN:
@@ -1602,32 +1696,49 @@ def _menu_ytdlp(cfg):
 def _menu_yt_auth(cfg):
     while True:
         header("YouTube Authentication")
-        info("YouTube sometimes blocks automated downloads. Yume can work around this")
-        info("in two ways:")
+        info("YouTube blocks automated downloads to prevent bots.")
+        info("Yume needs a way to prove you're a real person.")
         print()
-        cur = cfg.get("youtube_auth_method", "deno")
+        info(f"{C.BOLD}Browser Cookies (recommended, default){C.RESET}")
+        info(f"{C.DIM}  Borrows your YouTube login from Chrome/Firefox/Edge.{C.RESET}")
+        info(f"{C.DIM}  Requirement: be logged into YouTube in your browser.{C.RESET}")
+        info(f"{C.DIM}  No extra software needed. Works offline after login.{C.RESET}")
+        print()
+        info(f"{C.BOLD}Deno (advanced, no YouTube account needed){C.RESET}")
+        info(f"{C.DIM}  Uses a small program (Deno) to solve YouTube's bot challenge.{C.RESET}")
+        info(f"{C.DIM}  Generates a 'proof-of-origin' token without any login.{C.RESET}")
+        info(f"{C.DIM}  Requires: internet connection + Deno installed (~35 MB).{C.RESET}")
+        info(f"{C.DIM}  Yume runs a local server (port 4416) to generate tokens.{C.RESET}")
+        print()
+        cur = cfg.get("youtube_auth_method", "cookies")
         info(f"Current method: {C.BOLD}{cur}{C.RESET}"); print()
         ch = ask_choice("Select method:", [
-            ("Deno (recommended)", "A small program that solves YouTube's bot checks automatically.\n      No login needed. Yume installs it for you (~35 MB)."),
-            ("Browser Cookies", "Yume borrows your browser's YouTube login session.\n      Works if you're logged into YouTube in Chrome/Firefox/etc.\n      No extra software needed."),
+            ("Browser Cookies (recommended)", "Uses your browser's YouTube login. No extra software."),
+            ("Deno (no account needed)", "Solves YouTube's bot challenge via a local server. Needs internet."),
             ("Back", None)
-        ], default=0 if cur == "deno" else 1)
+        ], default=0 if cur == "cookies" else 1)
         if ch == -1 or ch == 2: return
         elif ch == 0:
-            cfg["youtube_auth_method"] = "deno"; save_config(cfg); success("Set to Deno")
-            if not find_tool("deno"):
-                if ask_yn("Deno not installed. Download now?"): install_deno()
-            pause()
-        elif ch == 1:
             cfg["youtube_auth_method"] = "cookies"; save_config(cfg)
             browsers = ["chrome", "firefox", "edge", "brave", "opera", "chromium", "safari"]
-            bc = ask_choice("Which browser?",
+            bc = ask_choice("Which browser are you logged into YouTube with?",
                 [(b.capitalize(), None) for b in browsers] + [("Back", None)],
                 default=0)
             if 0 <= bc < len(browsers):
                 cfg["cookies_browser"] = browsers[bc]; save_config(cfg)
-                success(f"Cookies from: {browsers[bc]}")
-                warn("Make sure you're logged into YouTube in that browser!")
+                success(f"Using cookies from: {browsers[bc]}")
+                info("Make sure you're logged into YouTube in that browser.")
+            pause()
+        elif ch == 1:
+            cfg["youtube_auth_method"] = "deno"; save_config(cfg); success("Set to Deno")
+            if not find_tool("deno"):
+                if ask_yn("Deno not installed. Download and set up now?"): install_deno()
+            else:
+                # Check if bgutil server is set up
+                bgutil_main = TOOLS_DIR / "bgutil-ytdlp-pot-provider" / "server" / "src" / "main.ts"
+                if not bgutil_main.exists():
+                    info("PO token server not set up yet.")
+                    if ask_yn("Set up now? (downloads ~5 MB from GitHub)"): install_deno()
             pause()
 
 def _menu_ffmpeg():
@@ -1643,21 +1754,58 @@ def _menu_ffmpeg():
 
 def _menu_deno(cfg):
     while True:
-        header("Deno"); p = find_tool("deno")
+        header("Deno (YouTube Authentication)"); p = find_tool("deno")
         (success if p else info)(f"{'Installed: '+p if p else 'Not installed'}")
         print()
-        info(f"Deno is a small program that helps Yume bypass YouTube's bot detection.")
-        info(f"It's {C.GREEN}optional{C.RESET} — you can use your browser's cookies instead.")
+        info("YouTube blocks automated downloads with a 'bot detection' challenge.")
+        info("Deno is a JavaScript runtime that solves this challenge automatically.")
+        info(f"{C.DIM}How it works: Deno runs YouTube's BotGuard script to generate a{C.RESET}")
+        info(f"{C.DIM}'proof-of-origin' (PO) token that proves you're a real browser.{C.RESET}")
+        info(f"{C.DIM}The bgutil-ytdlp-pot-provider plugin connects this to yt-dlp.{C.RESET}")
+        print()
+
+        # Check if bgutil plugin is installed (it's a yt-dlp plugin, not importable)
+        bgutil_ok = False
+        try:
+            r = _run([sys.executable, "-m", "pip", "show", "bgutil-ytdlp-pot-provider"], timeout=10)
+            bgutil_ok = r.returncode == 0
+        except Exception:
+            pass
+
+        if p and bgutil_ok:
+            success("PO token plugin: installed (YouTube auth fully working)")
+        elif p:
+            warn("Deno installed but PO token plugin missing")
+            info(f"{C.DIM}Install it: pip install bgutil-ytdlp-pot-provider{C.RESET}")
+        else:
+            warn("Deno not installed — YouTube may block downloads")
+
         info(f"Current YouTube auth method: {C.BOLD}{cfg.get('youtube_auth_method', 'deno')}{C.RESET}")
         ch = ask_choice("Options:", [
-            ("Install Deno", "~35 MB download"),
-            ("Switch to cookies", "Use browser cookies instead"),
+            ("Install Deno + PO token plugin", "Downloads Deno (~35 MB) and installs the YouTube auth plugin"),
+            ("Install PO token plugin only", "If Deno is already installed, just add the yt-dlp plugin"),
+            ("Switch to browser cookies", "Use your browser's YouTube login instead of Deno"),
             ("Back", None)
-        ], default=2)
-        if ch == -1 or ch == 2: return
+        ], default=3)
+        if ch == -1 or ch == 3: return
         elif ch == 0:
             install_deno(); cfg["youtube_auth_method"] = "deno"; save_config(cfg); pause()
         elif ch == 1:
+            info("Installing PO token plugin...")
+            try:
+                r = _run([
+                    sys.executable, "-m", "pip", "install", "-q",
+                    "--no-warn-script-location", "bgutil-ytdlp-pot-provider"
+                ], timeout=120)
+                if r.returncode == 0:
+                    success("PO token plugin installed")
+                    cfg["youtube_auth_method"] = "deno"; save_config(cfg)
+                else:
+                    error("Install failed")
+            except Exception as e:
+                error(f"Failed: {e}")
+            pause()
+        elif ch == 2:
             cfg["youtube_auth_method"] = "cookies"; save_config(cfg)
             success("Switched to cookies"); pause()
 
@@ -3380,21 +3528,31 @@ def setup_wizard(cfg):
             if not ae or ask_yn("Install FFmpeg?"):
                 install_ffmpeg()
 
-        if not find_tool("deno"):
-            print(); info("Deno is optional -- handles YouTube JS challenges.")
-            ch = ask_choice("YouTube auth:", [
-                ("Install Deno", "Automatic, ~35 MB"),
-                ("Browser cookies", "No download, must be logged in"),
-                ("Skip", None),
-            ], default=0, allow_back=False)
-            if ch == 0:
-                install_deno(); cfg["youtube_auth_method"] = "deno"
-            elif ch == 1:
-                cfg["youtube_auth_method"] = "cookies"
-                browsers = ["chrome", "firefox", "edge", "brave", "safari"]
-                bc = ask_choice("Browser?", [(b.capitalize(), None) for b in browsers], default=0, allow_back=False)
-                cfg["cookies_browser"] = browsers[bc]
-            save_config(cfg)
+        # YouTube authentication — always ask during first run
+        print()
+        header("YouTube Authentication")
+        info("YouTube blocks automated downloads to prevent bots.")
+        info("Yume needs a way to prove you're a real person.")
+        print()
+        ch = ask_choice("How do you want to authenticate with YouTube?", [
+            ("Browser Cookies (recommended)",
+             "Uses your browser's YouTube login. Be logged into YouTube in your browser."),
+            ("Deno (no account needed)",
+             "Downloads Deno (~35 MB) + sets up a local server that solves YouTube's\n"
+             "      bot challenge without any login. Requires internet connection."),
+            ("Skip for now", "You can set this up later in Settings."),
+        ], default=0, allow_back=False)
+        if ch == 0:
+            cfg["youtube_auth_method"] = "cookies"
+            browsers = ["chrome", "firefox", "edge", "brave", "safari"]
+            bc = ask_choice("Which browser are you logged into YouTube with?",
+                            [(b.capitalize(), None) for b in browsers],
+                            default=0, allow_back=False)
+            cfg["cookies_browser"] = browsers[bc]
+            success(f"Using cookies from: {browsers[bc]}")
+        elif ch == 1:
+            install_deno(); cfg["youtube_auth_method"] = "deno"
+        save_config(cfg)
 
         if "python_deps" in missing:
             if not ae or ask_yn("Install Python packages?"):
@@ -3564,12 +3722,22 @@ def main_menu():
         if gpu["has_nvidia"]:
             gs = f"{C.GREEN}{gpu['name']}{C.RESET}"
         elif gpu["has_amd"]:
-            gs = f"{C.CYAN}{gpu['name']} (AMD){C.RESET}"
+            gs = f"{C.RED}{gpu['name']} (AMD){C.RESET}"
         else:
-            gs = f"{C.YELLOW}CPU only (no dedicated GPU){C.RESET}"
+            # Show CPU name instead of just "CPU only"
+            cpu_name = _detect_cpu_name()
+            if "intel" in cpu_name.lower():
+                gs = f"{C.BLUE}CPU: {cpu_name}{C.RESET}"
+            elif "amd" in cpu_name.lower():
+                gs = f"{C.RED}CPU: {cpu_name}{C.RESET}"
+            else:
+                gs = f"{C.YELLOW}CPU: {cpu_name}{C.RESET}"
+
+        # Show actual device the server will use
+        device_label = cfg.get("whisper_device", "auto")
         bn = BACKEND_INFO.get(cfg.get("translation_backend", "llamacpp"), {}).get("name", "?")
         panel(
-            f"{C.DIM}GPU        {C.RESET}  {gs}\n"
+            f"{C.DIM}Hardware   {C.RESET}  {gs}\n"
             f"{C.DIM}Speech AI  {C.RESET}  {C.CYAN}{cfg['whisper_model']}{C.RESET}  on  {cfg['whisper_host']}:{cfg['whisper_port']}\n"
             f"{C.DIM}Translator {C.RESET}  {C.MAGENTA}{bn}{C.RESET}  on  {cfg['translation_host']}:{cfg['translation_port']}",
             style=C.DIM,

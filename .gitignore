@@ -227,6 +227,7 @@ tools/ffmpeg
 tools/ffmpeg.exe
 tools/deno.exe
 tools/ffprobe.exe
+tools/bgutil-ytdlp-pot-provider/
 
 # macOs
 .DS_Store

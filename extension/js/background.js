@@ -1,5 +1,5 @@
 // ============================================================================
-// BACKGROUND SERVICE WORKER (Manifest V3) - Yume v5.4.2
+// BACKGROUND SERVICE WORKER (Manifest V3) - Yume v5.5.0
 // Handles server health, transcription, translation, romanization proxy
 // Translation & romanization are SEPARATE calls (never combined)
 // ============================================================================
@@ -73,14 +73,33 @@ async function _getApiToken(whisperUrl) {
   return apiToken;
 }
 
-// Authenticated fetch to whisper server (auto-includes API token)
+// Authenticated fetch to whisper server (auto-includes API token).
+// If the server returns 403 (stale token after server restart), we clear
+// the cached token, re-discover via /health, and retry ONCE.
 async function _whisperFetch(url, options = {}, timeoutMs = 30000) {
   const { settings } = await chrome.storage.local.get(['settings']);
   const whisperUrl = settings?.whisperUrl || 'http://localhost:5001';
   const token = await _getApiToken(whisperUrl);
   const headers = { ...options.headers };
   if (token) headers['X-API-Token'] = token;
-  return _fetchWithTimeout(url, { ...options, headers }, timeoutMs);
+  const resp = await _fetchWithTimeout(url, { ...options, headers }, timeoutMs);
+
+  // 403 = server rejected our token (likely restarted with a new one)
+  if (resp.status === 403) {
+    console.warn('[Background] 403 — stale API token, re-discovering...');
+    // Clear cached token so _getApiToken re-fetches from /health
+    apiToken = null;
+    try { await chrome.storage.session.remove(['apiToken']); } catch (e) { /* ok */ }
+    const newToken = await _getApiToken(whisperUrl);
+    if (newToken && newToken !== token) {
+      console.log('[Background] New API token acquired, retrying request');
+      const retryHeaders = { ...options.headers };
+      retryHeaders['X-API-Token'] = newToken;
+      return _fetchWithTimeout(url, { ...options, headers: retryHeaders }, timeoutMs);
+    }
+  }
+
+  return resp;
 }
 
 // ============================================================================
@@ -107,13 +126,13 @@ chrome.runtime.onInstalled.addListener((details) => {
   console.log('[Background] Extension installed/updated:', details.reason);
   if (details.reason === 'install') {
     // Fresh install — set all defaults
-    chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS }, installTime: Date.now(), version: '5.4.2' });
+    chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS }, installTime: Date.now(), version: '5.5.0' });
   } else if (details.reason === 'update') {
     // Update — merge new defaults into existing settings (preserves user changes)
     chrome.storage.local.get(['settings'], (result) => {
       const existing = result.settings || {};
       const merged = { ...DEFAULT_SETTINGS, ...existing };
-      chrome.storage.local.set({ settings: merged, version: '5.4.2' });
+      chrome.storage.local.set({ settings: merged, version: '5.5.0' });
       console.log('[Background] Settings preserved across update');
     });
   }

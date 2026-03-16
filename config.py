@@ -35,7 +35,7 @@ DEFAULT_CONFIG = {
     "translation_port": DEFAULT_TRANSLATION_PORT,
     "translation_model": "",
     "gguf_model_path": "",
-    "youtube_auth_method": "deno",
+    "youtube_auth_method": "cookies",
     "cookies_browser": "chrome",
     "first_run_complete": False,
 }
