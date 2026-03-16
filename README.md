@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/banner.png" alt="Yume Banner" width="800"/>
+<img src="https://raw.githubusercontent.com/jenox645/Yume/main/assets/banner.png" alt="Yume Banner" width="800"/>
 
 # Yume
 
@@ -8,7 +8,7 @@
 
 Transcription · Translation · Romanization
 
-[![Version](https://img.shields.io/badge/version-5.5.0-blue)]()
+[![Version](https://img.shields.io/badge/version-5.6.0-blue)]()
 [![Python](https://img.shields.io/badge/python-3.10+-green)]()
 [![Chrome](https://img.shields.io/badge/chrome-MV3-yellow)]()
 [![Firefox](https://img.shields.io/badge/firefox-MV3-orange)]()
@@ -22,6 +22,7 @@ Transcription · Translation · Romanization
 ---
 
 https://github.com/user-attachments/assets/48ee3790-7635-4321-8246-308689e53210
+
 
 Yume captures audio from any video in your browser, transcribes it with [faster-whisper](https://github.com/SYSTRAN/faster-whisper) running on your GPU, translates it with a local LLM, and overlays subtitles in real-time. Everything runs on your machine — no API keys, no subscriptions, no data leaves your computer.
 
@@ -236,7 +237,7 @@ Change the method anytime: **Settings > YouTube Auth**
 | Extension can't connect | Check both dots are green in the popup |
 | No subtitles on music | Thresholds are tuned for music in v5.0+ |
 | Translation server red dot | Fixed in v5.4.2 — update to latest |
-| Auto-detect picks CPU with NVIDIA | Fixed in v5.5.0 — uses CTranslate2 detection |
+| Auto-detect picks CPU with NVIDIA | Fixed in v5.6.0 — uses CTranslate2 detection |
 | "Server not reachable" on start | Normal — server loads model first, extension retries |
 | First 30s show "no speech" | If the song has an instrumental intro, this is normal |
 
@@ -255,6 +256,28 @@ Change the method anytime: **Settings > YouTube Auth**
 <details>
 <summary><strong>Changelog</strong></summary>
 
+### v5.6.0
+- **Fixed**: Translation silently empty — batch parser dropped translations without `[N]` markers, fallback only checked array length not content. Added positional fallback + content-aware gap detection.
+- **Fixed**: Server cached empty transcription results forever — chunks that Whisper returned 0 segments for were cached and served stale on every re-run. Empty results are no longer cached.
+- **Fixed**: Session storage restored stale empty/untranslated chunks on page reload — Clear Cache now clears session storage, session restore rejects all-empty or untranslated sessions
+- **Fixed**: Session saved placeholder segments (with `english: ''`) before translation completed — now only saves fully translated chunks
+- **Fixed**: pip install failures now show actual error messages (stderr) instead of generic "Failed"
+- **Fixed**: llama-cpp-python install shows elapsed time so users know it's not frozen
+- **Fixed**: Windows build tools detection before pip install (prevents cryptic C++ errors)
+- **Fixed**: YouTube auth wizard wording clarifies "cookie browser" is not "extension browser"
+- **Fixed**: Naming consistency — "PocketYume" references corrected to "Pocket Yume" (CLI) vs "Yume" (project)
+- **Fixed**: User-Agent in update checker now matches current version
+- **Added**: Integration tests — config-to-behavior tracing prevents silent no-op features (deno-class bugs)
+- **Added**: Dead config detection test flags config keys that exist but don't affect behavior
+- **Added**: GitHub issue templates (bug report, feature request)
+- **Added**: `--version` CLI flag
+- **Improved**: Diagnostics show `[cached]` tag, translation quality `[2/3 translated]`, and "try Clear Cache" hints
+- **Improved**: CLI log viewer filters health check noise, prioritizes `[Yume]` pipeline output
+- **Improved**: .gitignore trimmed from 232 lines of boilerplate to ~60 Yume-relevant lines
+- **Improved**: CONTRIBUTING.md expanded with concrete "good first issue" tasks
+- **Improved**: DEVELOPER_GUIDE.md documents testing without a GPU
+- **Improved**: CI now runs integration tests
+
 ### v5.5.0
 - **Fixed**: YouTube auth — implemented proper Deno PO token support via bgutil server (port 4416)
 - **Fixed**: YouTube auth was a no-op since v1 — "deno" mode ran with zero authentication
@@ -271,6 +294,7 @@ Change the method anytime: **Settings > YouTube Auth**
 - **Added**: YouTube Authentication documentation section in README
 - **Improved**: Setup wizard explains cookies vs deno clearly during first run
 - **Improved**: Deno menu shows full bgutil server status + plugin status
+- **Improved**: README restructured, no emojis, collapsible changelog
 
 ### v5.4.2
 - **Fixed**: Translation "not reachable" — tries multiple health endpoints for each backend

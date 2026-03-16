@@ -1,5 +1,5 @@
 // ============================================================================
-// SUBTITLE WINDOW v5.5.0 - Chunk counter, ready toast, per-line fonts
+// SUBTITLE WINDOW v5.6.0 - Chunk counter, ready toast, per-line fonts
 // ============================================================================
 
 class SubtitleWindow {

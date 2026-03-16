@@ -1,10 +1,10 @@
 # Architecture
 
-> PocketYume v5.5.0 · ~10,700 lines across 14 source files
+> Yume v5.6.0 · Pocket Yume CLI · ~12,500 lines across 15 source files
 
 ## Overview
 
-PocketYume is a browser extension + local server system. The extension captures video URLs, the servers process audio, and the extension renders subtitles.
+Yume is a browser extension + local server system. The extension captures video URLs, the servers process audio, and the extension renders subtitles.
 
 ```
 ┌─ Browser Extension ──────────────────────────────────┐
@@ -62,18 +62,18 @@ PocketYume is a browser extension + local server system. The extension captures 
 
 | File | Lines | Role |
 |------|-------|------|
-| `pocket_yume.py` | 3,369 | CLI: installer, launcher, port management, benchmarks |
-| `config.py` | 133 | Config: load, save, validate, export, import. All port constants defined here. |
-| `faster_whisper_server.py` | 1,677 | Flask server: Whisper STT, hallucination filter, audio download, cache |
-| `audio-capture.js` | 1,060 | Pipeline engine: chunking, parallel transcribe+translate, subtitle timing |
-| `popup.js` | 1,019 | Extension popup: settings, diagnostics, stats, model switching |
-| `background.js` | 761 | Service worker: server proxy, translation cache (LRU-500), token management |
-| `content.js` | 374 | Content script: lifecycle, URL change detection, subtitle event dispatch |
-| `subtitle-window.js` | 342 | Overlay: DOM creation, drag/resize, dynamic font injection, RTL, alignment |
+| `pocket_yume.py` | 3,897 | CLI: installer, launcher, port management, benchmarks |
+| `config.py` | 131 | Config: load, save, validate, export, import. All port constants defined here. |
+| `faster_whisper_server.py` | 2,118 | Flask server: Whisper STT, hallucination filter, audio download, cache |
+| `audio-capture.js` | 1,076 | Pipeline engine: chunking, parallel transcribe+translate, subtitle timing |
+| `popup.js` | 1,143 | Extension popup: settings, diagnostics, stats, model switching |
+| `background.js` | 913 | Service worker: server proxy, translation cache (LRU-500), token management |
+| `content.js` | 388 | Content script: lifecycle, URL change detection, subtitle event dispatch |
+| `subtitle-window.js` | 360 | Overlay: DOM creation, drag/resize, dynamic font injection, RTL, alignment |
 
 ## Key Design Decisions
 
-**Single-file CLI** — `pocket_yume.py` is large (3,369 lines) by design. It's a self-contained installer that users run with `python pocket_yume.py`. Config management was extracted to `config.py` as the first modular step.
+**Single-file CLI** — `pocket_yume.py` is large (~3,900 lines) by design. It's a self-contained installer that users run with `python pocket_yume.py`. Config management was extracted to `config.py` as the first modular step.
 
 **No build tools** — The extension is plain JS loaded directly by the manifest. No React, no webpack, no TypeScript. Zero build step. Users edit files and reload.
 

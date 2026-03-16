@@ -20,7 +20,7 @@ if %errorlevel% neq 0 (
 REM Check script exists
 if not exist "pocket_yume.py" (
     echo ERROR: pocket_yume.py not found!
-    echo Run this from the PocketYume folder.
+    echo Run this from the Yume folder.
     echo.
     pause
     exit /b 1

@@ -1,4 +1,4 @@
-"""PocketYume configuration — load, save, validate, export, import."""
+"""Pocket Yume configuration — load, save, validate, export, import."""
 
 import json, os, re, time, logging
 from pathlib import Path

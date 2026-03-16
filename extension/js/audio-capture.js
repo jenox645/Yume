@@ -1,5 +1,5 @@
 // ============================================================================
-// AUDIO CAPTURE v3.9.0 - Download-once + parallel pipeline (Yume v5.5.0)
+// AUDIO CAPTURE v3.9.0 - Download-once + parallel pipeline (Yume v5.6.0)
 // Translation and romanization are SEPARATE API calls
 // ============================================================================
 
@@ -258,7 +258,15 @@ class AudioCapture {
     while (this.isCapturing && !this.fetchingStopped && gen === this.generation) {
       const next = this._nextChunkToFetch();
       if (next === -1) {
-        this._addDiag(-1, 'ok', 0, 0, `Pipeline complete: ${this.fetchedChunks.size}/${this.totalChunks} chunks`);
+        const nonEmpty = Array.from(this.fetchedChunks).filter(i => 
+          this.subtitleChunks[i] && this.subtitleChunks[i].length > 0
+        ).length;
+        const total = this.fetchedChunks.size;
+        if (nonEmpty === 0 && total > 0) {
+          this._addDiag(-1, 'stopped', 0, 0, `All ${total} chunks empty — try Clear Cache and restart`);
+        } else {
+          this._addDiag(-1, 'ok', 0, 0, `Pipeline complete: ${nonEmpty} with subtitles / ${total} total`);
+        }
         this._dispatchProgress();
         break;
       }
@@ -279,7 +287,7 @@ class AudioCapture {
 
       // Phase 2: Fire translation in background (LLM server) — don't await!
       // This frees the Whisper server to handle the next chunk immediately
-      this._translateAndFinalize(next, transcribeResult.segments, transcribeResult.whisperTime, transcribeResult.t0, gen);
+      this._translateAndFinalize(next, transcribeResult.segments, transcribeResult.whisperTime, transcribeResult.t0, gen, transcribeResult.wasCached);
       // No await ^ — loop immediately to transcribe next chunk
       // The translation promise runs concurrently with next transcription
     }
@@ -402,13 +410,16 @@ class AudioCapture {
       const tWhisper = performance.now();
       const transcription = await this._retryAsync(() => this._requestTranscription(chunkIndex), 2);
       const whisperTime = ((performance.now() - tWhisper) / 1000).toFixed(1);
+      const wasCached = transcription?.cached === true;
 
       const cleanSegments = (transcription?.segments || [])
         .filter(seg => !this._isHallucination(seg.text));
 
       if (cleanSegments.length === 0) {
         const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-        this._addDiag(chunkIndex, 'empty', 0, elapsed, `${transcription?.segments?.length || 0} raw -> 0 clean`);
+        const rawCount = transcription?.segments?.length || 0;
+        const cacheTag = wasCached ? ' (server cache)' : '';
+        this._addDiag(chunkIndex, 'empty', 0, elapsed, `${rawCount} raw -> 0 clean${cacheTag}`);
         this.subtitleChunks[chunkIndex] = [];
         this.fetchedChunks.add(chunkIndex);
         this.fetchingChunks.delete(chunkIndex);
@@ -417,7 +428,7 @@ class AudioCapture {
         this.emptyChunkCount++;
         if (this.emptyChunkCount >= this.maxEmptyChunks) {
           this.fetchingStopped = true;
-          this._addDiag(chunkIndex, 'stopped', 0, 0, 'Too many empty chunks');
+          this._addDiag(chunkIndex, 'stopped', 0, 0, 'Too many empty chunks — try Clear Cache if subtitles are missing');
         }
         return null;
       }
@@ -425,7 +436,7 @@ class AudioCapture {
       this.emptyChunkCount = 0;
       if (this.fetchingStopped) { this.fetchingStopped = false; }
 
-      return { segments: cleanSegments, whisperTime, t0 };
+      return { segments: cleanSegments, whisperTime, t0, wasCached };
 
     } catch (error) {
       const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
@@ -450,7 +461,7 @@ class AudioCapture {
     const result = await this._transcribeAndFilter(chunkIndex);
     if (!result) return;
 
-    const { segments: cleanSegments, whisperTime, t0 } = result;
+    const { segments: cleanSegments, whisperTime, t0, wasCached } = result;
 
     try {
       // 2. Translate (skip entirely if translation is disabled)
@@ -486,9 +497,13 @@ class AudioCapture {
       const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
       const preview = translated[0]?.original?.substring(0, 20) || '';
       const progress = `[${this.fetchedChunks.size}/${this.totalChunks}]`;
-      DEBUG.success('AudioCapture', `Chunk ${chunkIndex} ready: ${translated.length} segs in ${elapsed}s ${progress}`);
+      const transOk = translated.filter(s => s.english && s.english.length > 0).length;
+      const transTotal = translated.length;
+      DEBUG.success('AudioCapture', `Chunk ${chunkIndex} ready: ${transTotal} segs (${transOk} translated) in ${elapsed}s ${progress}`);
+      const cacheTag = wasCached ? ' [cached]' : '';
+      const transTag = transOk < transTotal ? ` [${transOk}/${transTotal} translated]` : '';
       this._addDiag(chunkIndex, 'ok', translated.length, elapsed,
-        `w:${whisperTime}s t:${transTime}s r:${romaTime}s "${preview}"`);
+        `w:${whisperTime}s t:${transTime}s r:${romaTime}s "${preview}"${cacheTag}${transTag}`);
       this._dispatchProgress();
       this._checkAndSignalReady(chunkIndex);
 
@@ -512,7 +527,7 @@ class AudioCapture {
 
   // Phase 2: Translate + romanize + store. Runs concurrently with next transcription.
   // gen parameter ensures stale promises from old videos are silently dropped.
-  async _translateAndFinalize(chunkIndex, cleanSegments, whisperTime, t0, gen) {
+  async _translateAndFinalize(chunkIndex, cleanSegments, whisperTime, t0, gen, wasCached = false) {
     try {
       // Check generation — if video changed, silently abort
       if (gen !== this.generation) { this.fetchingChunks.delete(chunkIndex); return; }
@@ -559,9 +574,13 @@ class AudioCapture {
       const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
       const preview = translated[0]?.original?.substring(0, 20) || '';
       const progress = `[${this.fetchedChunks.size}/${this.totalChunks}]`;
-      DEBUG.success('AudioCapture', `Chunk ${chunkIndex} ready: ${translated.length} segs in ${elapsed}s ${progress} [parallel]`);
+      const transOk = translated.filter(s => s.english && s.english.length > 0).length;
+      const transTotal = translated.length;
+      DEBUG.success('AudioCapture', `Chunk ${chunkIndex} ready: ${transTotal} segs (${transOk} translated) in ${elapsed}s ${progress} [parallel]`);
+      const cacheTag = wasCached ? ' [cached]' : '';
+      const transTag = transOk < transTotal ? ` [${transOk}/${transTotal} translated]` : '';
       this._addDiag(chunkIndex, 'ok', translated.length, elapsed,
-        `w:${whisperTime}s t:${transTime}s r:${romaTime}s "${preview}"`);
+        `w:${whisperTime}s t:${transTime}s r:${romaTime}s "${preview}"${cacheTag}${transTag}`);
       this._dispatchProgress();
       this._checkAndSignalReady(chunkIndex);
 
@@ -609,9 +628,25 @@ class AudioCapture {
   async _saveToSession() {
     if (!this.videoId || this.fetchedChunks.size === 0) return;
     try {
+      // Only save chunks that are fully processed (have translations if they have text)
+      // This prevents saving placeholders with english='' before translation completes
+      const cleanChunks = {};
+      for (const [idx, segments] of Object.entries(this.subtitleChunks)) {
+        if (!segments || segments.length === 0) {
+          cleanChunks[idx] = segments; // empty chunks are fine to save
+          continue;
+        }
+        // Check if any segment has original text but no translation — that's a placeholder
+        const hasUntranslated = segments.some(seg => seg.original && !seg.english);
+        if (!hasUntranslated) {
+          cleanChunks[idx] = segments;
+        }
+        // Skip placeholder chunks — they'll be re-processed on restore
+      }
+
       const data = {
-        subtitleChunks: this.subtitleChunks,
-        fetchedChunks: [...this.fetchedChunks],
+        subtitleChunks: cleanChunks,
+        fetchedChunks: [...this.fetchedChunks].filter(i => cleanChunks[i] !== undefined),
         totalChunks: this.totalChunks,
         videoDuration: this.videoDuration,
         timestamp: Date.now()
@@ -641,6 +676,30 @@ class AudioCapture {
       if (!data || !data.subtitleChunks || !data.fetchedChunks) return false;
       // Only restore if reasonably fresh (< 30 min)
       if (Date.now() - (data.timestamp || 0) > 30 * 60 * 1000) return false;
+
+      // Reject sessions where all chunks are empty — these are stale from
+      // bad cache hits and should be re-transcribed fresh
+      const nonEmptyChunks = data.fetchedChunks.filter(i => {
+        const segs = data.subtitleChunks[i];
+        return segs && segs.length > 0;
+      });
+      if (nonEmptyChunks.length === 0 && data.fetchedChunks.length > 2) {
+        DEBUG.warn('AudioCapture', `Session has ${data.fetchedChunks.length} chunks but all empty — discarding`);
+        chrome.storage.session.remove(sessionKey).catch(() => {});
+        return false;
+      }
+
+      // Reject sessions where chunks have text but no translations — these
+      // are placeholders saved before translation completed
+      const hasUntranslated = nonEmptyChunks.some(i => {
+        const segs = data.subtitleChunks[i];
+        return segs.some(seg => seg.original && !seg.english);
+      });
+      if (hasUntranslated) {
+        DEBUG.warn('AudioCapture', 'Session has untranslated segments — discarding to re-process');
+        chrome.storage.session.remove(sessionKey).catch(() => {});
+        return false;
+      }
 
       this.subtitleChunks = data.subtitleChunks;
       this.fetchedChunks = new Set(data.fetchedChunks);
@@ -749,9 +808,12 @@ class AudioCapture {
       DEBUG.warn('AudioCapture', 'Batch translation failed, falling back', { error: err.message });
     }
 
-    // If batch returned too few, fill gaps with sequential calls
-    if (translations.length < segments.length) {
-      DEBUG.info('AudioCapture', `Batch got ${translations.length}/${segments.length}, filling gaps`);
+    // If batch returned too few OR has empty slots, fill gaps with sequential calls
+    const hasGaps = translations.length < segments.length ||
+                    translations.some((t, i) => i < segments.length && (!t || t.length === 0));
+    if (hasGaps) {
+      const filled = translations.filter(t => t && t.length > 0).length;
+      DEBUG.info('AudioCapture', `Batch got ${filled}/${segments.length} translations, filling gaps`);
       for (let i = 0; i < segments.length; i++) {
         if (translations[i] && translations[i].length > 0) continue;
         try {
@@ -1013,11 +1075,17 @@ class AudioCapture {
     this.lastShownSegment = null;
     this.emptyChunkCount  = 0;
     this.fetchingStopped  = false;
+    // Clear session storage so stale data doesn't restore on page reload
+    try {
+      if (this.videoId) {
+        chrome.storage.session.remove(`yume_${this.videoId}`);
+      }
+    } catch (e) { /* session storage may not be available */ }
     // Clear displayed subtitle
     window.dispatchEvent(new CustomEvent('display-subtitle', {
       detail: { original: '', english: '', romaji: '' }
     }));
-    console.log(`[AudioCapture] Content cache cleared (${chunkCount} chunks)`);
+    console.log(`[AudioCapture] Content cache cleared (${chunkCount} chunks + session storage)`);
     return chunkCount;
   }
 

@@ -1,6 +1,6 @@
 # Developer Guide
 
-> PocketYume v5.5.0
+> Yume v5.6.0 · Pocket Yume CLI
 
 ## Setup
 
@@ -119,6 +119,8 @@ Place the file in `extension/fonts/` and reload the extension.
 | Translation `\|\| seg.text` fallback | Shows source text as translation (misleading) | Leave `english` empty if LLM fails |
 | LLM timeout 30s default | 12B models on consumer GPUs need 15-60s | Pass `120000` explicitly to `_fetchWithTimeout` |
 | `no_speech_threshold=0.45` | Drops sung vocals over instruments | Set to 0.6+ for music content |
+| Helper functions swallowing `env=` | CUDA/ROCm build silently falls back to CPU | Always pass `env=` through any wrapper that calls `_run()` or `subprocess.run()` |
+| Config key exists but is never used | Feature looks active but is a no-op (deno bug) | Run `pytest tests/test_integration.py` — dead config detection catches this |
 
 ## Adding a New Feature
 
@@ -127,6 +129,52 @@ Place the file in `extension/fonts/` and reload the extension.
 3. Optionally add a CLI subcommand in `main()`
 4. Verify: `python -m py_compile pocket_yume.py`
 5. Test with `--verbose` to see debug output
+6. Run `pytest tests/ -v` to verify nothing broke
+
+## Testing
+
+```bash
+pytest tests/ -v                           # all tests (49 as of v5.6.0)
+pytest tests/test_integration.py -v        # integration tests
+pytest tests/test_config.py -v             # config unit tests
+pytest tests/test_server_logic.py -v       # server logic tests
+```
+
+### Test categories
+
+**Unit tests** (`test_config.py`, `test_server_logic.py`): Test individual functions — config validation, URL parsing, hallucination patterns. These are fast and need no servers.
+
+**Integration tests** (`test_integration.py`): Verify that config options actually affect behavior. These exist because of the deno incident (v1.0-v5.4.2: `youtube_auth_method="deno"` was a no-op, never caught by code review). The tests include:
+
+- **Dead config detection**: Flags any `DEFAULT_CONFIG` key that exists but is never used in application code. If you add a new config key, these tests will fail unless the key is actually used somewhere.
+- **Auth config tracing**: Verifies that `youtube_auth_method` values produce the correct yt-dlp arguments.
+- **Health check consistency**: Verifies CLI and popup use the same health endpoints per backend.
+- **Version consistency**: All 7+ files that contain version strings must agree.
+- **Subprocess hygiene**: No hardcoded `"yt-dlp"` in subprocess calls (must use `_ytdlp_cmd()`).
+- **Naming consistency**: No camelCase project name in user-facing docs (must be "Yume" or "Pocket Yume").
+
+### Testing without a GPU
+
+You can develop and test Yume on CPU. Set these in your config:
+
+```json
+{
+  "whisper_device": "cpu",
+  "whisper_model": "tiny"
+}
+```
+
+Or run the setup wizard — it auto-detects CPU mode. The `tiny` model loads in seconds and transcribes in real-time on most machines. Translation, the extension UI, subtitle rendering, and all CLI features work identically on CPU. Only transcription speed is affected.
+
+For the translation backend, Ollama is the easiest to set up without compiling anything: `ollama pull qwen2.5:3b` gives you a working translator in one command.
+
+### Adding a new config key
+
+If you add a key to `DEFAULT_CONFIG` in `config.py`:
+
+1. Use it somewhere in application code (not just display it in a menu)
+2. Run `pytest tests/test_integration.py::TestDeadConfigDetection -v` to verify it's detected
+3. If the key is intentionally display-only, add it to `EXEMPT_KEYS` in the test with a comment
 
 ## Adding a New Source Language
 

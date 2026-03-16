@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Yume -- Faster-Whisper Server v5.5.0
+Yume -- Faster-Whisper Server v5.6.0
 Word-level timestamps + pause re-splitting + security hardening
 Parallel startup: Flask starts before model loads. Prewarm inference on load.
 All output is ASCII-safe for Windows cp932/cp1252 locales.
@@ -281,7 +281,7 @@ def health():
     is_ready = model is not None
     base = {
         "status": "ready" if is_ready else "loading",
-        "version": "5.5.0",
+        "version": "5.6.0",
         "prepare_supported": True,
         "ytdlp_available": _check_ytdlp(),
     }
@@ -958,10 +958,19 @@ def transcribe_url():
 
         with prefetch_lock:
             if cache_key in subtitle_cache:
-                print(f"[Yume] Cache hit for chunk {chunk_index} of {video_id}")
-                with stats_lock:
-                    server_stats["cache_hits"] += 1
-                return jsonify(subtitle_cache[cache_key])
+                cached_result = subtitle_cache[cache_key]
+                # Don't serve cached empty results — Whisper may have been wrong
+                # (e.g., music intro confused VAD, or audio download was bad)
+                if len(cached_result.get("segments", [])) > 0:
+                    print(f"[Yume] Cache hit for chunk {chunk_index} of {video_id} ({len(cached_result['segments'])} segments)")
+                    cached_result["cached"] = True
+                    with stats_lock:
+                        server_stats["cache_hits"] += 1
+                    return jsonify(cached_result)
+                else:
+                    # Empty result cached — re-transcribe to check if Whisper does better this time
+                    print(f"[Yume] Stale empty cache for chunk {chunk_index} — re-transcribing")
+                    del subtitle_cache[cache_key]
 
         # Calculate time windows
         # Audio sent to Whisper: starts at chunk_index * step_size, lasts chunk_duration
@@ -1005,16 +1014,19 @@ def transcribe_url():
 
         result["segments"] = trimmed
         result["text"] = " ".join(s["text"] for s in trimmed)
+        result["cached"] = False
 
-        with prefetch_lock:
-            # Evict oldest entries if cache is full
-            if len(subtitle_cache) >= SUBTITLE_CACHE_MAX:
-                keys_to_remove = list(subtitle_cache.keys())[:len(subtitle_cache) - SUBTITLE_CACHE_MAX + 1]
-                for k in keys_to_remove:
-                    del subtitle_cache[k]
-            subtitle_cache[cache_key] = result
+        # Only cache results with actual segments — empty results may be wrong
+        # (Whisper VAD miss, bad audio slice, etc.) and should be retried
+        if len(trimmed) > 0:
+            with prefetch_lock:
+                if len(subtitle_cache) >= SUBTITLE_CACHE_MAX:
+                    keys_to_remove = list(subtitle_cache.keys())[:len(subtitle_cache) - SUBTITLE_CACHE_MAX + 1]
+                    for k in keys_to_remove:
+                        del subtitle_cache[k]
+                subtitle_cache[cache_key] = result
 
-        print(f"[Yume] Chunk {chunk_index} ready: {len(trimmed)} segments (from {raw_count} raw)")
+        print(f"[Yume] Chunk {chunk_index} done: {len(trimmed)} segments (from {raw_count} raw, {'cached' if len(trimmed) > 0 else 'not cached — empty'})")
         return jsonify(result)
 
     except Exception as e:
@@ -1901,7 +1913,7 @@ def main():
         compute_type = "float16" if device == "cuda" else "int8"
 
     print("=" * 70)
-    print("  YUME -- Whisper Server v5.5.0")
+    print("  YUME -- Whisper Server v5.6.0")
     print("=" * 70)
     print(f"  Model:            {model_name}")
     print(f"  Device:           {device}")

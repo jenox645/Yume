@@ -1,4 +1,4 @@
-// Yume - Popup Script v5.5.0
+// Yume - Popup Script v5.6.0
 console.log('[Yume Popup] Script loaded');
 
 // ============================================================================

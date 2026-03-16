@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Yume - AI Subtitles",
-  "version": "5.5.0",
+  "version": "5.6.0",
   "description": "You Understand More Easily - Real-time AI subtitles for any video, fully local",
   
   "permissions": [

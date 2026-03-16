@@ -36,6 +36,7 @@ jobs:
           node --check extension/js/content.js
           node --check extension/js/subtitle-window.js
           node --check extension/js/debug-system.js
+          node --check extension/popup.js
 
       - name: JSON validity
         run: |
@@ -51,6 +52,8 @@ jobs:
           v = '$VERSION'
           m = json.load(open('extension/manifest.json'))
           assert m['version'] == v, f'manifest.json: {m[\"version\"]} != {v}'
+          mf = json.load(open('extension/manifest_firefox.json'))
+          assert mf['version'] == v, f'manifest_firefox.json: {mf[\"version\"]} != {v}'
           print('All version strings consistent')
           "
 
@@ -68,5 +71,8 @@ jobs:
       - name: Install test deps
         run: pip install pytest
 
-      - name: Run Python tests
-        run: pytest tests/ -v --tb=short || true
+      - name: Run unit tests
+        run: pytest tests/test_config.py tests/test_server_logic.py -v --tb=short
+
+      - name: Run integration tests
+        run: pytest tests/test_integration.py -v --tb=short

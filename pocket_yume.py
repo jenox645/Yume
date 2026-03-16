@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pocket Yume CLI v5.5.0 -- Cross-platform installer & launcher for Yume AI Subtitles
+Pocket Yume CLI v5.6.0 -- Cross-platform installer & launcher for Yume AI Subtitles
 Complete rewrite: smart port management, API token auth, Windows cp1252 fix
 Supports: Windows, Linux, macOS
 """
@@ -41,7 +41,7 @@ def _run(cmd, timeout=30, **kw):
 # Japanese text may appear in logs. Wrapping stdout here breaks ANSI
 # color rendering on Windows terminals.
 
-VERSION = "5.5.0"
+VERSION = "5.6.0"
 
 # Named constants
 KiB = 1024
@@ -454,7 +454,7 @@ def download_file(url, dest, label="Downloading"):
     """Download a file with progress bar, speed, and ETA display."""
     dest = Path(dest); dest.parent.mkdir(parents=True, exist_ok=True)
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "PocketYume/4.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": f"Yume/{VERSION}"})
         with urllib.request.urlopen(req, timeout=180) as resp:
             total = int(resp.headers.get("content-length", 0)); dl = 0
             t0 = time.time()
@@ -643,7 +643,7 @@ def check_server(host, port, path="/health"):
     """Check if a server is responding. Handles JSON and non-JSON responses."""
     try:
         url = f"http://{host}:{port}{path}"
-        req = urllib.request.Request(url, headers={"User-Agent": "PocketYume"})
+        req = urllib.request.Request(url, headers={"User-Agent": "Yume"})
         with urllib.request.urlopen(req, timeout=3) as resp:
             body = resp.read()
             try:
@@ -675,7 +675,7 @@ def check_translation_server(host, port, backend_info=None):
 
 def check_ollama_models(host="127.0.0.1", port=DEFAULT_OLLAMA_PORT):
     try:
-        req = urllib.request.Request(f"http://{host}:{port}/api/tags", headers={"User-Agent": "PocketYume"})
+        req = urllib.request.Request(f"http://{host}:{port}/api/tags", headers={"User-Agent": "Yume"})
         with urllib.request.urlopen(req, timeout=3) as resp:
             return [m["name"] for m in json.loads(resp.read()).get("models", [])]
     except Exception:
@@ -869,7 +869,7 @@ def discover_api_token(host, port):
 
 
     try:
-        req = urllib.request.Request(f"http://{host}:{port}/health", headers={"User-Agent": "PocketYume"})
+        req = urllib.request.Request(f"http://{host}:{port}/health", headers={"User-Agent": "Yume"})
         with urllib.request.urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read())
             token = data.get("api_token") or data.get("token")
@@ -889,7 +889,7 @@ def discover_api_token(host, port):
 def _server_get(host, port, path, timeout=5):
     """GET request with API token auth."""
     try:
-        headers = {"User-Agent": "PocketYume"}
+        headers = {"User-Agent": "Yume"}
         token = discover_api_token(host, port)
         if token:
             headers["X-API-Token"] = token
@@ -904,7 +904,7 @@ def _server_post(host, port, path, data=None, timeout=30):
     """POST request with API token auth."""
     try:
         body = json.dumps(data or {}).encode("utf-8")
-        headers = {"Content-Type": "application/json", "User-Agent": "PocketYume"}
+        headers = {"Content-Type": "application/json", "User-Agent": "Yume"}
         token = discover_api_token(host, port)
         if token:
             headers["X-API-Token"] = token
@@ -1317,6 +1317,16 @@ def install_python_deps():
     if not req.exists():
         SERVER_DIR.mkdir(parents=True, exist_ok=True)
         req.write_text("faster-whisper>=1.0.0\nflask>=2.3.0\nflask-cors>=4.0.0\n")
+
+    # On Windows, check for C++ build tools before attempting install
+    # (faster-whisper's CTranslate2 dependency may need compilation)
+    if IS_WIN and not _has_build_tools():
+        warn("C++ build tools not detected.")
+        info("If the install fails, you may need Visual Studio Build Tools:")
+        info("  https://visualstudio.microsoft.com/visual-cpp-build-tools/")
+        info("  Select 'Desktop development with C++' during installation.")
+        print()
+
     info("Installing Whisper server Python packages...")
     try:
         r = _run(
@@ -1324,7 +1334,21 @@ def install_python_deps():
             timeout=600
         )
         if r.returncode != 0:
-            raise subprocess.CalledProcessError(r.returncode, "pip install")
+            error("pip install failed. Error output:")
+            # Show the actual error so the user knows what went wrong
+            stderr_text = (r.stderr or "").strip()
+            if stderr_text:
+                for line in stderr_text.splitlines()[-15:]:
+                    print(f"    {C.DIM}{line}{C.RESET}")
+            else:
+                print(f"    {C.DIM}(no error output captured — try running with --verbose){C.RESET}")
+            if IS_WIN and ("Microsoft Visual C++" in (r.stderr or "") or "cl.exe" in (r.stderr or "")):
+                print()
+                error("This looks like a missing C++ compiler.")
+                info("Install Visual Studio Build Tools:")
+                info("  https://visualstudio.microsoft.com/visual-cpp-build-tools/")
+                info("  Select 'Desktop development with C++' during installation.")
+            return False
         success("Done!")
         return True
     except Exception as e:
@@ -1388,6 +1412,50 @@ def install_llamacpp_python():
     """Install llama-cpp-python + server deps (uvicorn, fastapi), with GPU support if NVIDIA detected."""
     gpu = detect_gpu()
 
+    def _pip_install_with_progress(cmd, label, timeout=600, env=None):
+        """Run pip install showing elapsed time so user knows it's not frozen."""
+        info(f"{label}...")
+        info(f"{C.DIM}This may take several minutes for large downloads. Please wait.{C.RESET}")
+        t0 = time.time()
+        stop_event = threading.Event()
+        def _timer():
+            while not stop_event.is_set():
+                elapsed = int(time.time() - t0)
+                m, s = divmod(elapsed, 60)
+                sys.stdout.write(f"\r  {C.CYAN}...{C.RESET} {m}m{s:02d}s elapsed   ")
+                sys.stdout.flush()
+                stop_event.wait(5)
+        t = threading.Thread(target=_timer, daemon=True)
+        t.start()
+        try:
+            kw = {"timeout": timeout}
+            if env is not None:
+                kw["env"] = env
+            r = _run(cmd, **kw)
+            stop_event.set()
+            elapsed = int(time.time() - t0)
+            m, s = divmod(elapsed, 60)
+            sys.stdout.write(f"\r{' ' * 40}\r")
+            sys.stdout.flush()
+            if r.returncode == 0:
+                success(f"{label} — done in {m}m{s:02d}s")
+                return True
+            else:
+                error(f"{label} — failed after {m}m{s:02d}s")
+                stderr_text = (r.stderr or "").strip()
+                if stderr_text:
+                    for line in stderr_text.splitlines()[-10:]:
+                        print(f"    {C.DIM}{line}{C.RESET}")
+                return False
+        except subprocess.TimeoutExpired:
+            stop_event.set()
+            error(f"{label} — timed out after {timeout//60} minutes")
+            return False
+        except Exception as e:
+            stop_event.set()
+            error(f"{label} — error: {e}")
+            return False
+
     # Step 0: On Linux/macOS, ensure build tools exist (ninja, cmake, gcc)
     # Windows uses prebuilt wheels, so this is only needed on Unix
     if not IS_WIN:
@@ -1410,35 +1478,22 @@ def install_llamacpp_python():
     # Step 1: Install llama-cpp-python
     installed = False
     if gpu["has_nvidia"]:
-        info("NVIDIA GPU detected. Installing llama-cpp-python with CUDA...")
         if IS_WIN:
-            try:
-                r = _run([
-                    sys.executable, "-m", "pip", "install", "llama-cpp-python",
-                    "--extra-index-url", "https://abetlen.github.io/llama-cpp-python/whl/cu124",
-                    "-q", "--no-warn-script-location"
-                ], timeout=600)
-                if r.returncode == 0:
-                    success("llama-cpp-python (CUDA) installed!"); installed = True
-            except Exception as e:
-                _log.debug('[install_llamacpp_python] pip-cuda-prebuilt failed: %s', e)
-
+            installed = _pip_install_with_progress([
+                sys.executable, "-m", "pip", "install", "llama-cpp-python",
+                "--extra-index-url", "https://abetlen.github.io/llama-cpp-python/whl/cu124",
+                "-q", "--no-warn-script-location"
+            ], "Installing llama-cpp-python (CUDA prebuilt)", timeout=600)
 
             if not installed:
                 warn("Prebuilt failed, trying CPU version...")
         else:
             env = os.environ.copy()
             env["CMAKE_ARGS"] = "-DGGML_CUDA=on"
-            try:
-                r = _run([
-                    sys.executable, "-m", "pip", "install", "llama-cpp-python",
-                    "--force-reinstall", "--no-cache-dir", "-q"
-                ], env=env, timeout=600)
-                if r.returncode == 0:
-                    success("llama-cpp-python (CUDA) installed!"); installed = True
-            except Exception as e:
-                _log.debug('[install_llamacpp_python] pip-cuda-source failed: %s', e)
-
+            installed = _pip_install_with_progress([
+                sys.executable, "-m", "pip", "install", "llama-cpp-python",
+                "--force-reinstall", "--no-cache-dir", "-q"
+            ], "Building llama-cpp-python (CUDA from source)", timeout=600, env=env)
 
             if not installed:
                 warn("CUDA build failed, trying CPU...")
@@ -1452,16 +1507,10 @@ def install_llamacpp_python():
             # ROCm / HIP build
             env = os.environ.copy()
             env["CMAKE_ARGS"] = "-DGGML_HIP=on"
-            try:
-                r = _run([
-                    sys.executable, "-m", "pip", "install", "llama-cpp-python",
-                    "--force-reinstall", "--no-cache-dir"
-                ], env=env, timeout=900)
-                if r.returncode == 0:
-                    success("llama-cpp-python (ROCm/HIP) installed!"); installed = True
-            except Exception as e:
-                _log.debug('[install_llamacpp_python] pip-rocm-hip failed: %s', e)
-
+            installed = _pip_install_with_progress([
+                sys.executable, "-m", "pip", "install", "llama-cpp-python",
+                "--force-reinstall", "--no-cache-dir"
+            ], "Building llama-cpp-python (ROCm/HIP from source)", timeout=900, env=env)
 
             if not installed:
                 warn("ROCm build failed. Check that ROCm is installed:")
@@ -1470,40 +1519,19 @@ def install_llamacpp_python():
                 info("Falling back to CPU...")
 
     if not installed:
-        info("Installing llama-cpp-python (CPU)...")
-
         # Try prebuilt CPU wheel first (no ninja/cmake/gcc needed!)
-        info("Trying prebuilt CPU wheel...")
-        try:
-            r = _run([
-                sys.executable, "-m", "pip", "install", "llama-cpp-python",
-                "--extra-index-url", "https://abetlen.github.io/llama-cpp-python/whl/cpu",
-                "--no-warn-script-location"
-            ], timeout=300)
-            if r.returncode == 0:
-                success("llama-cpp-python (prebuilt CPU) installed!"); installed = True
-        except Exception as e:
-            _log.debug('[install_llamacpp_python] pip-cpu-prebuilt failed: %s', e)
-
-
+        installed = _pip_install_with_progress([
+            sys.executable, "-m", "pip", "install", "llama-cpp-python",
+            "--extra-index-url", "https://abetlen.github.io/llama-cpp-python/whl/cpu",
+            "--no-warn-script-location"
+        ], "Installing llama-cpp-python (prebuilt CPU)", timeout=300)
 
         if not installed:
             warn("Prebuilt wheel not available, building from source...")
-            # Show output on Linux so user can see compilation progress
-            stdout_opt = None if IS_LIN else subprocess.DEVNULL
-            try:
-                r = _run([
-                    sys.executable, "-m", "pip", "install", "llama-cpp-python",
-                    "--no-warn-script-location"
-                ], timeout=900, stdout=stdout_opt)
-                if r.returncode == 0:
-                    success("llama-cpp-python installed!"); installed = True
-                else:
-                    error("Build failed. Check error output above.")
-            except subprocess.TimeoutExpired:
-                error("Build timed out (15 min). The machine may be too slow for compilation.")
-            except Exception as e:
-                error(f"Failed: {e}")
+            installed = _pip_install_with_progress([
+                sys.executable, "-m", "pip", "install", "llama-cpp-python",
+                "--no-warn-script-location"
+            ], "Building llama-cpp-python (CPU from source)", timeout=900)
 
     # Step 2: Install server dependencies (uvicorn, fastapi, etc.)
     if installed:
@@ -1545,7 +1573,7 @@ def hf_list_gguf(repo):
     try:
         req = urllib.request.Request(
             f"https://huggingface.co/api/models/{repo}/tree/main",
-            headers={"User-Agent": "PocketYume/3.2"}
+            headers={"User-Agent": f"Yume/{VERSION}"}
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
             files = json.loads(resp.read())
@@ -2013,7 +2041,7 @@ def _test_translation(cfg):
         data = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(
             f"http://{h}:{p}{bi['ap']}", data=data,
-            headers={"Content-Type": "application/json", "User-Agent": "PocketYume"},
+            headers={"Content-Type": "application/json", "User-Agent": "Yume"},
             method="POST"
         )
         info("Waiting...")
@@ -2093,11 +2121,11 @@ def recommend_whisper_model(gpu_info=None):
 
 
 def check_for_updates():
-    """Check GitHub for newer PocketYume releases."""
+    """Check GitHub for newer Yume releases."""
     try:
         req = urllib.request.Request(
             "https://api.github.com/repos/jenox645/Yume/releases/latest",
-            headers={"User-Agent": "PocketYume/5.1", "Accept": "application/vnd.github.v3+json"}
+            headers={"User-Agent": f"Yume/{VERSION}", "Accept": "application/vnd.github.v3+json"}
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -3226,7 +3254,7 @@ def _launch_inner(cfg, procs, lhs):
             ss = BASE_DIR / "faster_whisper_server.py"  # backward compat: root dir
         if not ss.exists():
             error(f"Whisper server script not found in server/ or root")
-            info("Fix: Re-extract PocketYume or run Setup again")
+            info("Fix: Re-extract Yume or run Setup again")
             pause(); return
 
         dev = cfg["whisper_device"]; comp = cfg["whisper_compute_type"]
@@ -3348,7 +3376,16 @@ def _runtime_menu(cfg, procs, lhs, bk):
                 try:
                     with open(lp, encoding="utf-8", errors="replace") as f:
                         lines = f.readlines()
-                    for l in lines[-15:]:
+                    # Show informative lines first (Yume pipeline output), then recent access logs
+                    # Filter out noisy health check polling that drowns real info
+                    yume_lines = [l for l in lines if "[Yume]" in l or "error" in l.lower() or "fail" in l.lower() or "warn" in l.lower()]
+                    access_lines = [l for l in lines if "HTTP/" in l and "/health" not in l]
+                    other_lines = [l for l in lines if l not in yume_lines and l not in access_lines and "GET /health" not in l]
+                    # Combine: last 10 Yume lines + last 5 non-health access lines
+                    shown = yume_lines[-10:] + access_lines[-5:] + other_lines[-5:]
+                    if not shown:
+                        shown = lines[-15:]
+                    for l in shown[-20:]:
                         print(f"    {C.DIM}{l.rstrip()}{C.RESET}")
                 except Exception as e:
                     warn(f"Could not read: {e}")
@@ -3545,6 +3582,8 @@ def setup_wizard(cfg):
         if ch == 0:
             cfg["youtube_auth_method"] = "cookies"
             browsers = ["chrome", "firefox", "edge", "brave", "safari"]
+            print()
+            info("This only affects audio downloading — the extension itself works in any browser.")
             bc = ask_choice("Which browser are you logged into YouTube with?",
                             [(b.capitalize(), None) for b in browsers],
                             default=0, allow_back=False)
@@ -3788,6 +3827,10 @@ def main():
     else:
         enable_ansi()
 
+    if "--version" in sys.argv:
+        print(f"Yume v{VERSION} (Pocket Yume CLI)")
+        return
+
     for d in [TOOLS_DIR, SERVER_DIR, CONFIG_DIR, MODELS_DIR, GGUF_DIR, LOGS_DIR]:
         d.mkdir(parents=True, exist_ok=True)
 
@@ -3840,6 +3883,7 @@ def main():
             print(f"    benchmark           Test Whisper model speeds on your hardware")
             print(f"    help                This message")
             print(f"    --verbose / -v      Enable debug logging to stderr")
+            print(f"    --version           Print version and exit")
             print(f"    --no-color          Disable colored output\n")
         else:
             print(f"  Unknown: {cmd}. Try: python pocket_yume.py help")

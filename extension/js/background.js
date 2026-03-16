@@ -1,5 +1,5 @@
 // ============================================================================
-// BACKGROUND SERVICE WORKER (Manifest V3) - Yume v5.5.0
+// BACKGROUND SERVICE WORKER (Manifest V3) - Yume v5.6.0
 // Handles server health, transcription, translation, romanization proxy
 // Translation & romanization are SEPARATE calls (never combined)
 // ============================================================================
@@ -126,13 +126,13 @@ chrome.runtime.onInstalled.addListener((details) => {
   console.log('[Background] Extension installed/updated:', details.reason);
   if (details.reason === 'install') {
     // Fresh install — set all defaults
-    chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS }, installTime: Date.now(), version: '5.5.0' });
+    chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS }, installTime: Date.now(), version: '5.6.0' });
   } else if (details.reason === 'update') {
     // Update — merge new defaults into existing settings (preserves user changes)
     chrome.storage.local.get(['settings'], (result) => {
       const existing = result.settings || {};
       const merged = { ...DEFAULT_SETTINGS, ...existing };
-      chrome.storage.local.set({ settings: merged, version: '5.5.0' });
+      chrome.storage.local.set({ settings: merged, version: '5.6.0' });
       console.log('[Background] Settings preserved across update');
     });
   }
@@ -771,15 +771,30 @@ async function handleTranslateBatch(batchText, count, sendResponse) {
 function _parseBatchResponse(raw, expectedCount) {
   const lines = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
   const result = new Array(expectedCount).fill('');
+
+  // Strategy 1: Parse by [N] or N) markers (preferred — unambiguous)
+  let markerHits = 0;
   for (const line of lines) {
     const m = line.match(/^\[(\d+)\]\s*(.+)/) || line.match(/^(\d+)[.)]\s*(.+)/);
     if (m) {
       const idx = parseInt(m[1]) - 1;
-      if (idx >= 0 && idx < expectedCount) result[idx] = m[2].trim();
+      if (idx >= 0 && idx < expectedCount) {
+        result[idx] = _cleanTranslation(m[2].trim());
+        markerHits++;
+      }
     }
   }
-  // Return whatever was correctly parsed by [N] markers.
-  // No positional fallback — misaligned translations are worse than missing ones.
+
+  // Strategy 2: Positional fallback — if LLM returned plain lines without numbering
+  // Only use when NO markers were found (avoids mixing strategies)
+  if (markerHits === 0 && lines.length > 0) {
+    console.log(`[Background] Batch: no [N] markers found in ${lines.length} lines, using positional fallback`);
+    for (let i = 0; i < Math.min(lines.length, expectedCount); i++) {
+      const cleaned = _cleanTranslation(lines[i]);
+      if (cleaned) result[i] = cleaned;
+    }
+  }
+
   return result;
 }
 

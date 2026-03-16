@@ -32,7 +32,7 @@ echo ""
 # Check script
 if [ ! -f "pocket_yume.py" ]; then
     echo "ERROR: pocket_yume.py not found!"
-    echo "Run this from the PocketYume folder."
+    echo "Run this from the Yume folder."
     exit 1
 fi
 
