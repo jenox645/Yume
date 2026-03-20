@@ -1,4 +1,4 @@
-// Yume - Popup Script v5.6.0
+// Yume - Popup Script v5.7.0
 console.log('[Yume Popup] Script loaded');
 
 // ============================================================================
@@ -295,14 +295,32 @@ async function checkServers() {
   } catch (e) { whisperEl.className = 'status-indicator disconnected'; }
 
   try {
-    // Try multiple health endpoints — /v1/models works for all backends
-    let t = await sendBg(`${tUrl}/v1/models`);
-    if (!t.healthy) t = await sendBg(`${tUrl}/health`);
-    if (!t.healthy) t = await sendBg(`${tUrl}/api/tags`);  // Ollama
-    if (!t.healthy && tPort !== 11434) t = await sendBg('http://localhost:11434/api/tags');
-    // Also try just connecting (some servers don't have /health)
-    if (!t.healthy) t = await sendBg(`${tUrl}/`);
-    translationEl.className = 'status-indicator ' + (t.healthy ? 'connected' : 'disconnected');
+    // Only try the endpoint that matches the backend — avoids 404 spam in translation logs.
+    // llama.cpp / LM Studio / custom: /v1/models
+    // Ollama: /api/tags (port 11434)
+    let t;
+    const isOllama = tPort === 11434;
+    if (isOllama) {
+      t = await sendBg(`${tUrl}/api/tags`);
+    } else {
+      t = await sendBg(`${tUrl}/v1/models`);
+    }
+    // Also check Ollama on default port if not already checked and main check failed
+    if (!t.healthy && !isOllama) {
+      t = await sendBg('http://localhost:11434/api/tags');
+    }
+
+    if (t.healthy) {
+      translationEl._failCount = 0;
+      translationEl.className = 'status-indicator connected';
+    } else {
+      translationEl._failCount = (translationEl._failCount || 0) + 1;
+      // Only show red after 3 consecutive failures (avoids flicker during long translations)
+      if (translationEl._failCount >= 3) {
+        translationEl.className = 'status-indicator disconnected';
+      }
+      // else keep whatever class it had before (stays green if just temporarily busy)
+    }
     const portEl = document.getElementById('translationInfo');
     if (portEl) portEl.textContent = `localhost:${tPort}`;
   } catch (e) { translationEl.className = 'status-indicator disconnected'; }
@@ -509,12 +527,13 @@ document.getElementById('glassBlur')?.addEventListener('input', (e) => {
 });
 document.getElementById('glassBlur')?.addEventListener('change', () => saveSettings(false));
 
-// Glass radius slider
+// Corner radius slider (works independently of glass effect)
 document.getElementById('glassRadius')?.addEventListener('input', (e) => {
   const v = e.target.value;
   document.getElementById('glassRadiusVal').textContent = v + 'px';
+  const glassOn = document.getElementById('glassEnabled').checked;
   const blur = parseInt(document.getElementById('glassBlur').value) || 18;
-  _applyGlass(true, blur, parseInt(v));
+  _applyGlass(glassOn, blur, parseInt(v));
 });
 document.getElementById('glassRadius')?.addEventListener('change', () => saveSettings(false));
 
@@ -800,11 +819,11 @@ async function fetchDiagnostics() {
       return;
     }
     logEl.innerHTML = d.log.map(entry => {
-      const badge = `<span class="diag-badge ${entry.status}">${entry.status}</span>`;
+      const badge = `<span class="diag-badge ${_escapeHtml(entry.status)}">${_escapeHtml(entry.status)}</span>`;
       const segs = entry.segments > 0 ? `<span class="diag-segs">${entry.segments}</span>` : '';
       const elapsed = entry.elapsed ? `${entry.elapsed}s` : '';
       const chunkLabel = entry.chunk >= 0 ? `#${entry.chunk}` : 'prep';
-      return `<div class="diag-entry"><span class="diag-time">${entry.time}</span><span class="diag-chunk">${chunkLabel}</span>${badge}${segs}<span class="diag-detail">${elapsed} ${entry.details || ''}</span></div>`;
+      return `<div class="diag-entry"><span class="diag-time">${_escapeHtml(entry.time)}</span><span class="diag-chunk">${chunkLabel}</span>${badge}${segs}<span class="diag-detail">${_escapeHtml(elapsed + ' ' + (entry.details || ''))}</span></div>`;
     }).join('');
     logEl.scrollTop = logEl.scrollHeight;
   } catch (e) { statusEl.textContent = 'Content script not loaded'; logEl.innerHTML = ''; }

@@ -8,8 +8,8 @@
 
 Transcription · Translation · Romanization
 
-[![Version](https://img.shields.io/badge/version-5.6.0-blue)]()
-[![Python](https://img.shields.io/badge/python-3.10+-green)]()
+[![Version](https://img.shields.io/badge/version-5.7.0-blue)]()
+[![Python](https://img.shields.io/badge/python-3.8+-green)]()
 [![Chrome](https://img.shields.io/badge/chrome-MV3-yellow)]()
 [![Firefox](https://img.shields.io/badge/firefox-MV3-orange)]()
 [![Stars](https://img.shields.io/github/stars/jenox645/Yume?style=flat-square)](https://github.com/jenox645/Yume/stargazers)
@@ -184,7 +184,7 @@ Download via CLI: **Tools → Download Translation Model**
 | **RAM** | 8 GB | 16+ GB |
 | **GPU** | None (CPU works) | NVIDIA 4+ GB VRAM |
 | **Disk** | 5 GB | 10+ GB |
-| **Python** | 3.10 | 3.11+ |
+| **Python** | 3.8 | 3.11+ |
 
 | GPU | Support | Notes |
 |-----|---------|-------|
@@ -240,6 +240,17 @@ Change the method anytime: **Settings > YouTube Auth**
 | Auto-detect picks CPU with NVIDIA | Fixed in v5.6.0 — uses CTranslate2 detection |
 | "Server not reachable" on start | Normal — server loads model first, extension retries |
 | First 30s show "no speech" | If the song has an instrumental intro, this is normal |
+| `cublas64_12.dll not found` | CUDA Toolkit incomplete — install from https://developer.nvidia.com/cuda-downloads or `pip install nvidia-cublas-cu12`. Yume auto-falls back to CPU in v5.7.0. |
+| Japanese shows but English is empty | Fixed in v5.6.0 — translation parser now handles unnumbered LLM responses |
+| All chunks show "empty" after re-run | Press Clear Cache in the popup, then re-enable. Fixed in v5.6.0. |
+
+### Known Limitations
+
+These are design or upstream limitations, not bugs:
+
+- **Whisper misses soft vocals over loud music** — Whisper's internal voice activity detection is not tuned for singing. First 10-15 seconds of quiet vocals over instrumentation may be missed. Fix requires fine-tuning the Whisper model (training package exists).
+- **Translation is slow on large models** — A 12B Q6 model takes 10-20 seconds per dense chunk on consumer GPUs. Use a 3B or 7B model for faster subtitles, or wait for NLLB fast-translation mode (planned).
+- **`word_timestamps` and `pause_threshold` config keys have no effect** — The server hardcodes these values for music optimization. They exist in config but changing them does nothing. Tracked as known technical debt.
 
 ---
 
@@ -255,6 +266,40 @@ Change the method anytime: **Settings > YouTube Auth**
 
 <details>
 <summary><strong>Changelog</strong></summary>
+
+### v5.7.0
+- **Fixed:** Whisper forced to CPU due to config override; CLI-resolved GPU now takes priority.
+- **Fixed:** Server startup crash (`import logging` missing); added import completeness tests.
+- **Fixed:** `_get_audio_duration` removed by accident; restored to fix `/prepare` failures.
+- **Fixed:** Temp directory leak on failed downloads (~50 MB each).
+- **Fixed:** Stream URL cache never evicted; max size now enforced.
+- **Fixed:** XSS in popup diagnostics via unescaped `entry.details`.
+- **Fixed:** Translation cache serving stale results after model switch; added TTL.
+- **Fixed:** Update check freezing menu offline; now runs asynchronously.
+- **Fixed:** Whisper cache misdetected `mobiuslabsgmbh` models.
+- **Fixed:** Cookies mode had 0 strategies when extraction failed; added `no-auth` fallback.
+- **Fixed:** faster-whisper requires Python 3.10+; now enforced.
+- **Fixed:** Partial downloads left corrupt files; now cleaned up automatically.
+- **Fixed:** No disk space check before large downloads; now enforced.
+- **Fixed:** Missing or invalid pip caused crashes; added pip validation.
+- **Fixed:** Invalid JSON config crashed silently; now warns and falls back to defaults.
+- **Fixed:** `_slice_audio` crashed if audio was deleted mid-operation.
+- **Fixed:** Panel border misaligned with ANSI-colored titles.
+- **Fixed:** Corner radius wrongly tied to Glass Effect toggle.
+- **Fixed:** Translation server status incorrect when busy; improved health check logic.
+- **Fixed:** `UnicodeDecodeError` on non-UTF-8 model metadata; set `PYTHONUTF8=1`.
+- **Fixed:** Health check spam hitting wrong endpoints; now targets backend-specific routes.
+- **Fixed:** Excessive werkzeug logging in non-verbose mode.
+- **Fixed:** Various Pylance warnings (`result` unbound, None reads, type mismatches).
+- **Changed:** Settings now show resolved device (e.g. `cuda (auto)`); cleaner runtime menu header; dead config keys marked as no-op.
+- **Changed:** Default YouTube auth is always `cookies`; deno fallback display corrected.
+- **Added:** `SECURITY.md`; PR template (`.github/PULL_REQUEST_TEMPLATE.md`); `pyrightconfig.json`; AST-based import completeness tests.
+- **Added:** Server stats now track cache misses alongside hits; ffmpeg presence checked on startup; health check validates ffprobe, pip, and tool executability.
+- **Added:** Setup wizard installation summary with per-component pass/fail; improved Python 3.13+ build tools warning.
+- **Added:** WanaKana attribution header (v5.3.1, MIT); server `--verbose` flag for debug logging; Installation Architecture documentation in `DEVELOPER_GUIDE.md`.
+- **Improved:** Prewarm detects CUDA library failures and automatically falls back to CPU.
+- **Improved:** Benchmark suppresses HuggingFace warnings and offers CPU fallback on cuBLAS errors.
+ 
 
 ### v5.6.0
 - **Fixed**: Translation silently empty — batch parser dropped translations without `[N]` markers, fallback only checked array length not content. Added positional fallback + content-aware gap detection.

@@ -1,6 +1,6 @@
 # Developer Guide
 
-> Yume v5.6.0 · Pocket Yume CLI
+> Yume v5.7.0 · Pocket Yume CLI
 
 ## Setup
 
@@ -121,6 +121,18 @@ Place the file in `extension/fonts/` and reload the extension.
 | `no_speech_threshold=0.45` | Drops sung vocals over instruments | Set to 0.6+ for music content |
 | Helper functions swallowing `env=` | CUDA/ROCm build silently falls back to CPU | Always pass `env=` through any wrapper that calls `_run()` or `subprocess.run()` |
 | Config key exists but is never used | Feature looks active but is a no-op (deno bug) | Run `pytest tests/test_integration.py` — dead config detection catches this |
+| `tempfile.mkdtemp()` without cleanup | Failed downloads leak ~50MB dirs in system temp | Always `shutil.rmtree(tmp_dir)` in error/finally paths |
+| Caching empty results | Stale empty cache served forever on re-runs | Never cache results with 0 segments — they may be transient failures |
+| `innerHTML` with user content | XSS if Whisper returns `<script>` in hallucinated text | Always use `_escapeHtml()` for any text from Whisper/LLM responses |
+| Translation cache with no TTL | Model switch serves old model's translations | Set a TTL (30 min) so cache expires after model changes |
+| Batch parser drops unnumbered LLM output | Translation looks empty when LLM responds without `[N]` markers | Use positional fallback when no markers found, check content not just array length |
+| Session saves untranslated placeholders | Page reload restores `english: ''` segments | Only save fully translated chunks to session storage |
+| `cublas64_12.dll` not found | CUDA Toolkit incomplete — model loads but inference crashes | Detect in prewarm, auto-fall back to CPU, show install instructions |
+| Unbounded caches | Memory grows forever on long-running servers | Always enforce `_CACHE_MAX` with eviction on insert |
+| Server config overlay overwrites CLI args | CLI resolves `auto` → `cuda`, but server reads config and gets `auto` back | Don't load `whisper_device`/`whisper_compute_type` from config in server — CLI already resolves them |
+| Missing stdlib import | Adding `logging.basicConfig()` without `import logging` crashes server on startup | Run `pytest tests/test_integration.py` — `TestImportCompleteness` catches this via AST |
+| Translation server shows red while busy | LLM takes 10-20s per request, health endpoint times out | Use socket connect fallback + require 3 consecutive failures before showing disconnected |
+| Non-UTF-8 bytes in model metadata | llama.cpp log callback hits `UnicodeDecodeError` on tokenizer metadata | Set `PYTHONUTF8=1` in the translation subprocess environment |
 
 ## Adding a New Feature
 
@@ -134,7 +146,7 @@ Place the file in `extension/fonts/` and reload the extension.
 ## Testing
 
 ```bash
-pytest tests/ -v                           # all tests (49 as of v5.6.0)
+pytest tests/ -v                           # all tests (54 as of v5.7.0)
 pytest tests/test_integration.py -v        # integration tests
 pytest tests/test_config.py -v             # config unit tests
 pytest tests/test_server_logic.py -v       # server logic tests
@@ -183,3 +195,51 @@ If you add a key to `DEFAULT_CONFIG` in `config.py`:
 3. Add hallucination patterns to `HALLUCINATION_PATTERNS` in `faster_whisper_server.py`
 4. Add fonts to `CJK_FONTS` in `popup.js` for the new language's script
 5. If RTL: add direction handling in `subtitle-window.js` `updateSubtitle()`
+
+## Installation Architecture
+
+The setup wizard (`pocket_yume.py setup_wizard()`) runs on first launch. Here's what it does and where it can fail:
+
+```
+START_YUME.bat/sh/command
+  └─ python pocket_yume.py
+       └─ main() → main_menu() → setup_wizard(cfg)
+            ├─ System scan (GPU, RAM, disk)
+            ├─ Component check:
+            │   ├─ yt-dlp binary (find_tool → PATH + tools/)
+            │   ├─ FFmpeg binary (find_tool → PATH + tools/)
+            │   ├─ Deno binary (optional)
+            │   ├─ faster-whisper (import check)
+            │   ├─ llama-cpp-python (import check)
+            │   ├─ uvicorn + fastapi (import check)
+            │   └─ GGUF model files (models/translation/)
+            ├─ Install missing:
+            │   ├─ install_ytdlp()      → downloads binary to tools/
+            │   ├─ install_ffmpeg()     → downloads + extracts to tools/
+            │   ├─ install_python_deps() → pip install -r requirements.txt
+            │   ├─ install_llamacpp_python() → pip install with CUDA/ROCm/CPU
+            │   └─ browse_hf()         → downloads GGUF to models/translation/
+            ├─ YouTube auth config
+            └─ save_config(cfg)
+```
+
+### Known installation failure points
+
+| Step | Failure | Symptom | Handling |
+|------|---------|---------|----------|
+| `install_python_deps()` | Missing C++ build tools on Windows | `Microsoft Visual C++ is required` | Detects missing MSVC, shows download URL |
+| `install_llamacpp_python()` | CUDA prebuilt wheel unavailable for Python version | Silent fallback to CPU | Shows elapsed timer, falls back through: CUDA prebuilt → CUDA source → CPU prebuilt → CPU source |
+| `install_llamacpp_python()` | ROCm not installed on AMD Linux | `cannot find -lhipblas` | Shows ROCm install commands per distro |
+| `install_llamacpp_python()` | No ninja/cmake on Linux/macOS | Build from source fails | `_install_build_tools()` auto-installs via package manager |
+| `install_ffmpeg()` | Download URL changed | 404 error | Shows "URL may have changed, try updating Yume" |
+| `install_ytdlp()` | GitHub rate-limited | Download fails | Caught by `download_file()` error handler |
+| `browse_hf()` | HuggingFace rate-limited | Slow or failed download | User sees progress bar, can retry |
+| Server launch | `cublas64_12.dll` missing | Model loads but transcription crashes | Prewarm detects and auto-falls back to CPU |
+| Server launch | Port already in use | Server won't bind | `ensure_port_free()` offers to kill or reassign |
+| Server launch | Python 3.13+ incompatible wheels | `pip install` fails for binary packages | Not yet handled — document minimum Python |
+
+### Python version compatibility
+
+`faster-whisper` and `llama-cpp-python` ship pre-built wheels for specific Python versions. If the user has a version without wheels (e.g., Python 3.14), pip falls back to building from source, which requires C++ build tools. The wizard handles this on Linux/macOS (`_install_build_tools()`) but on Windows, the user must install Visual Studio Build Tools manually.
+
+Tested Python versions: 3.10, 3.11, 3.12, 3.13. Python 3.14 works but requires build tools on all platforms.

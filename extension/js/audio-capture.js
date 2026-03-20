@@ -1,5 +1,5 @@
 // ============================================================================
-// AUDIO CAPTURE v3.9.0 - Download-once + parallel pipeline (Yume v5.6.0)
+// AUDIO CAPTURE v3.9.0 - Download-once + parallel pipeline (Yume v5.7.0)
 // Translation and romanization are SEPARATE API calls
 // ============================================================================
 

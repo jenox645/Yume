@@ -1,5 +1,5 @@
 // ============================================================================
-// SUBTITLE WINDOW v5.6.0 - Chunk counter, ready toast, per-line fonts
+// SUBTITLE WINDOW v5.7.0 - Chunk counter, ready toast, per-line fonts
 // ============================================================================
 
 class SubtitleWindow {
@@ -104,20 +104,21 @@ class SubtitleWindow {
     if (s.windowShadow === false) this.element.style.boxShadow = 'none';
     else this.element.style.boxShadow = '';
 
+    // Corner radius — always applied (independent of glass effect)
+    const radius = s.glassRadius ?? 0;
+    this.element.style.borderRadius = radius > 0 ? `${radius}px` : '';
+
     // Glass effect — transparent blur behind subtitles
     if (s.glassEnabled) {
       const blur = s.glassBlur ?? 18;
-      const radius = s.glassRadius ?? 20;
       this.element.style.backdropFilter = `blur(${blur}px) saturate(1.3)`;
       this.element.style.webkitBackdropFilter = `blur(${blur}px) saturate(1.3)`;
-      this.element.style.borderRadius = `${radius}px`;
       this.element.style.border = '1px solid rgba(255, 255, 255, 0.15)';
       // Make background more transparent so glass shows through
       this.element.style.background = `rgba(${r}, ${g}, ${b}, ${Math.min(opacity, 0.45)})`;
     } else {
       this.element.style.backdropFilter = 'none';
       this.element.style.webkitBackdropFilter = 'none';
-      this.element.style.borderRadius = '';
       this.element.style.border = '';
     }
 

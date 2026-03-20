@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Yume -- Faster-Whisper Server v5.6.0
+Yume -- Faster-Whisper Server v5.7.0
 Word-level timestamps + pause re-splitting + security hardening
 Parallel startup: Flask starts before model loads. Prewarm inference on load.
 All output is ASCII-safe for Windows cp932/cp1252 locales.
@@ -22,6 +22,7 @@ import platform
 import secrets
 import signal
 import re
+import logging
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -237,6 +238,7 @@ server_stats = {
     "total_whisper_time": 0.0,
     "downloads_completed": 0,
     "cache_hits": 0,
+    "cache_misses": 0,
     "errors": 0,
     "last_chunk_whisper_time": 0.0,
     "last_chunk_segments": 0,
@@ -281,7 +283,7 @@ def health():
     is_ready = model is not None
     base = {
         "status": "ready" if is_ready else "loading",
-        "version": "5.6.0",
+        "version": "5.7.0",
         "prepare_supported": True,
         "ytdlp_available": _check_ytdlp(),
     }
@@ -666,15 +668,16 @@ def _download_full_audio(url):
             strategies.append(("no-auth", []))
         else:
             # Pure cookies mode
-            strategies.append(("cookies+default", [*cookie_args]))
-            strategies.append(("cookies+tv,web", [
-                "--extractor-args", "youtube:player_client=tv,web", *cookie_args
-            ]))
-            strategies.append(("cookies+mweb", [
-                "--extractor-args", "youtube:player_client=mweb", *cookie_args
-            ]))
             if cookie_args:
-                strategies.append(("no-auth", []))
+                strategies.append(("cookies+default", [*cookie_args]))
+                strategies.append(("cookies+tv,web", [
+                    "--extractor-args", "youtube:player_client=tv,web", *cookie_args
+                ]))
+                strategies.append(("cookies+mweb", [
+                    "--extractor-args", "youtube:player_client=mweb", *cookie_args
+                ]))
+            # Always include no-auth as last resort (public videos work without cookies)
+            strategies.append(("no-auth", []))
     else:
         strategies.append(("default", [*cookie_args]))
 
@@ -787,6 +790,11 @@ def _download_full_audio(url):
         except Exception as e:
             print(f"[Yume] ffmpeg error: {e}")
 
+    # All strategies failed — clean up temp dir before returning error
+    try:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    except Exception:
+        pass
     return None, last_error
 
 
@@ -893,6 +901,10 @@ def prepare_direct():
 
 def _slice_audio(full_audio_path, start_time, duration):
     """Slice a segment from a local audio file. Instant operation."""
+    if not os.path.exists(full_audio_path):
+        print(f"[Yume] Slice failed: source file missing ({full_audio_path})")
+        return None
+
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
     tmp.close()
 
@@ -982,6 +994,9 @@ def transcribe_url():
         owned_end = whisper_start + step_size
 
         print(f"[Yume] Chunk {chunk_index}: whisper [{whisper_start}s-{whisper_start + whisper_duration}s], owns [{owned_start}s-{owned_end}s]")
+
+        with stats_lock:
+            server_stats["cache_misses"] += 1
 
         # Try prepared full audio first (fast local slice), fall back to stream URL
         audio_path = None
@@ -1180,6 +1195,7 @@ def _get_stream_url(url):
         [],  # no format = let yt-dlp pick
     ]
 
+    last_stderr = ""
     for fmt_args in format_attempts:
         result = subprocess.run(
             [*_ytdlp_cmd(), "--get-url", *fmt_args, "--no-playlist", "--no-exec",
@@ -1189,14 +1205,19 @@ def _get_stream_url(url):
         if result.returncode == 0 and result.stdout.strip().startswith("http"):
             stream_url = result.stdout.strip().split('\n')[0]
             print(f"[Yume] Stream URL obtained and cached")
+            # Evict oldest if cache full
+            if len(stream_url_cache) >= STREAM_URL_CACHE_MAX:
+                oldest_key = min(stream_url_cache, key=lambda k: stream_url_cache[k].get("timestamp", 0))
+                stream_url_cache.pop(oldest_key, None)
             stream_url_cache[url] = {"stream_url": stream_url, "timestamp": time.time()}
             return stream_url
-        stderr_lower = (result.stderr or '').lower()
+        last_stderr = (result.stderr or '')
+        stderr_lower = last_stderr.lower()
         if 'requested format' in stderr_lower:
             continue  # try next format
         break  # non-format error, stop trying
 
-    print(f"[Yume] yt-dlp get-url failed: {(result.stderr or '')[:200]}")
+    print(f"[Yume] yt-dlp get-url failed: {last_stderr[:200]}")
     return None
 
 
@@ -1243,9 +1264,13 @@ def _download_audio_segment(url, start_time, duration):
 
     except subprocess.TimeoutExpired:
         print("[Yume] Download timed out")
+        try: shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception: pass
         return None
     except Exception as e:
         print(f"[Yume] Download error: {e}")
+        try: shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception: pass
         return None
 
 
@@ -1293,7 +1318,7 @@ def _download_audio_segment_fallback(url, start_time, duration, output_path):
 # ============================================================================
 
 # Lazy-loaded romanizers (only import when first needed)
-_kakasi = None
+_kakasi = None   # type: ignore[assignment]  # pykakasi.kakasi instance, False if unavailable, None if unchecked
 _pinyin_available = False
 
 def _get_kakasi():
@@ -1316,7 +1341,7 @@ def _romanize_japanese(text):
     if not kakasi:
         return None
     try:
-        result = kakasi.convert(text)
+        result = kakasi.convert(text)  # type: ignore[union-attr]
         parts = []
         for item in result:
             r = item.get('hepburn', '') or item.get('passport', '') or item.get('orig', '')
@@ -1587,7 +1612,7 @@ def _transcribe_file(audio_path, language, start_offset=0.0):
 
     # CRITICAL: Serialize model access. CTranslate2 is NOT thread-safe.
     with transcribe_lock:
-        segments_iter, info = model.transcribe(audio_path, **params)
+        segments_iter, info = model.transcribe(audio_path, **params)  # type: ignore[arg-type]
         raw_segments = list(segments_iter)  # consume inside lock
 
     segments = []
@@ -1811,7 +1836,7 @@ def _start_bgutil_server():
             if _bgutil_proc.poll() is not None:
                 stderr = ""
                 try:
-                    stderr = _bgutil_proc.stderr.read().decode('utf-8', errors='replace')[-300:]
+                    stderr = _bgutil_proc.stderr.read().decode('utf-8', errors='replace')[-300:] if _bgutil_proc.stderr else ""
                 except Exception:
                     pass
                 print(f"  bgutil server:    process exited with code {_bgutil_proc.returncode}")
@@ -1863,7 +1888,16 @@ def main():
     parser.add_argument('--no-word-timestamps', action='store_true', help='Disable word-level timestamps')
     parser.add_argument('--pause-threshold', type=float, default=0.25, help='Seconds of silence to split segments')
     parser.add_argument('--config', type=str, default=None, help='Path to yume_config.json')
+    parser.add_argument('--verbose', '-v', action='store_true', help='Enable debug logging')
     args = parser.parse_args()
+
+    # Configure logging level
+    if args.verbose or os.environ.get("LOG_LEVEL", "").upper() == "DEBUG":
+        logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+    else:
+        logging.basicConfig(level=logging.WARNING)
+        # Suppress Flask/werkzeug access logs and dev server warning when not verbose
+        logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
     # Start with CLI defaults, then overlay config file values
     model_name = args.model
@@ -1877,8 +1911,10 @@ def main():
         with open(args.config, encoding="utf-8") as f:
             cfg = json.load(f)
         model_name = cfg.get("whisper_model", model_name)
-        device = cfg.get("whisper_device", device)
-        compute_type = cfg.get("whisper_compute_type", compute_type)
+        # NOTE: whisper_device and whisper_compute_type are NOT loaded from config here.
+        # The CLI resolves "auto" → "cuda"/"cpu" before launching the server,
+        # and passes the resolved value via --device and --compute-type.
+        # Loading from config would overwrite the CLI's resolved value back to "auto".
         use_word_timestamps = cfg.get("word_timestamps", use_word_timestamps)
         pause_threshold = cfg.get("pause_threshold", pause_threshold)
         port = cfg.get("whisper_port", port)
@@ -1913,7 +1949,7 @@ def main():
         compute_type = "float16" if device == "cuda" else "int8"
 
     print("=" * 70)
-    print("  YUME -- Whisper Server v5.6.0")
+    print("  YUME -- Whisper Server v5.7.0")
     print("=" * 70)
     print(f"  Model:            {model_name}")
     print(f"  Device:           {device}")
@@ -1953,6 +1989,18 @@ def main():
     else:
         v = subprocess.run([*_ytdlp_cmd(), "--version"], capture_output=True, text=True)
         print(f"  yt-dlp:           {v.stdout.strip()}")
+
+    # Check ffmpeg — required for audio slicing and format conversion
+    if shutil.which("ffmpeg"):
+        v = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, timeout=5)
+        ffver = v.stdout.split('\n')[0].split(' ')[2] if v.returncode == 0 else "?"
+        print(f"  ffmpeg:           {ffver}")
+    else:
+        print("")
+        print("  WARNING: ffmpeg not found in PATH!")
+        print("  Audio slicing will fail. Subtitles will not work.")
+        print("  Run the Pocket Yume setup wizard to install ffmpeg.")
+        print("")
 
     # Auth method viability check
     #
@@ -2102,13 +2150,39 @@ def main():
         # Prewarm: run a tiny dummy inference to trigger CUDA kernel compilation
         # and KV cache allocation. This moves the first-inference penalty from
         # the user's first real request to startup time.
+        import numpy as np
+        _dummy = np.zeros(16000, dtype=np.float32)  # 1 second of silence
         try:
-            import numpy as np
-            _dummy = np.zeros(16000, dtype=np.float32)  # 1 second of silence
             list(model.transcribe(_dummy, language="en"))
             print("  Prewarm:          done (CUDA kernels compiled)")
         except Exception as pw_err:
-            print(f"  Prewarm:          skipped ({pw_err})")
+            pw_msg = str(pw_err)
+            # Detect missing CUDA runtime libraries (cuBLAS, cuDNN, etc.)
+            # CTranslate2 reports CUDA support but the actual DLLs aren't installed
+            cuda_lib_missing = any(lib in pw_msg.lower() for lib in [
+                "cublas", "cudnn", "cudart", "cufft", "cusolver",
+                "is not found or cannot be loaded",
+            ])
+            if cuda_lib_missing and device == "cuda":
+                print(f"  Prewarm:          CUDA library missing: {pw_msg[:80]}")
+                print("")
+                print("  WARNING: CUDA libraries are incomplete.")
+                print("  The model loaded but inference requires cuBLAS/cuDNN.")
+                print("  Falling back to CPU mode automatically.")
+                print("")
+                # Reload model on CPU
+                try:
+                    del model
+                    device = "cpu"
+                    compute_type = "int8"
+                    model = WhisperModel(model_name, device="cpu", compute_type="int8")
+                    # Retry prewarm on CPU
+                    list(model.transcribe(_dummy, language="en"))
+                    print(f"  Prewarm:          done (CPU fallback)")
+                except Exception as cpu_err:
+                    print(f"  Prewarm:          CPU fallback also failed: {cpu_err}")
+            else:
+                print(f"  Prewarm:          skipped ({pw_err})")
 
         print("=" * 70)
         print("  MODEL LOADED -- Server ready")

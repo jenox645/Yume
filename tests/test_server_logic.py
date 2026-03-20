@@ -179,7 +179,9 @@ class TestVersionConsistency:
         import json
         content = Path(__file__).parent.parent.joinpath("pocket_yume.py").read_text()
         import re
-        py_version = re.search(r'VERSION\s*=\s*"(\d+\.\d+\.\d+)"', content).group(1)
+        match = re.search(r'VERSION\s*=\s*"(\d+\.\d+\.\d+)"', content)
+        assert match, "VERSION not found in pocket_yume.py"
+        py_version = match.group(1)
 
         manifest = json.loads(
             Path(__file__).parent.parent.joinpath("extension/manifest.json").read_text()

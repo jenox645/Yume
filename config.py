@@ -1,5 +1,7 @@
 """Pocket Yume configuration — load, save, validate, export, import."""
 
+from __future__ import annotations  # Allows int | str type hint syntax
+
 import json, os, re, time, logging
 from pathlib import Path
 
@@ -48,7 +50,13 @@ def load_config() -> dict:
     if CONFIG_FILE.exists():
         try:
             with open(CONFIG_FILE, encoding="utf-8") as f:
-                return {**DEFAULT_CONFIG, **json.load(f)}
+                data = json.load(f)
+            if not isinstance(data, dict):
+                _log.warning('[load_config] Config file is not a JSON object — using defaults')
+                return dict(DEFAULT_CONFIG)
+            return {**DEFAULT_CONFIG, **data}
+        except json.JSONDecodeError as e:
+            _log.warning('[load_config] Config file is corrupted (invalid JSON: %s) — using defaults', e)
         except Exception as e:
             _log.debug('[load_config] config-parse failed: %s', e)
     return dict(DEFAULT_CONFIG)

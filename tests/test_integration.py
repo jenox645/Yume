@@ -1,4 +1,4 @@
-"""Integration tests for Yume v5.6.0.
+"""Integration tests for Yume v5.7.0.
 
 These tests verify that config options actually affect behavior.
 They exist because of the deno incident: youtube_auth_method="deno"
@@ -323,3 +323,135 @@ class TestNamingConsistency:
                 f"{doc} contains 'PocketYume' (should be 'Yume' or 'Pocket Yume'):\n" +
                 "\n".join(f"  line {n}: {l[:80]}" for n, l in occurrences)
             )
+
+
+# ---------------------------------------------------------------------------
+# 7. PYTHON COMPATIBILITY
+#    Ensure no Python 3.10+ syntax is used without __future__ annotations.
+#    This caught a real bug: config.py used `int | str` which crashes on 3.9.
+# ---------------------------------------------------------------------------
+
+class TestPythonCompatibility:
+    """Verify all Python files work on Python 3.8+."""
+
+    def test_no_bare_union_types(self):
+        """Files using X | Y type hints must have 'from __future__ import annotations'.
+
+        Without this import, `int | str` in function signatures raises TypeError
+        on Python 3.8/3.9. This test caught a real crash reported by a user.
+        """
+        for py_file in ROOT.glob("**/*.py"):
+            if "__pycache__" in str(py_file) or "wanakana" in str(py_file):
+                continue
+            content = py_file.read_text(encoding="utf-8", errors="replace")
+
+            # Check for X | Y in function signatures (def foo(x: int | str) or -> int | None)
+            has_union_hints = False
+            for line in content.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("#") or stripped.startswith("//"):
+                    continue
+                if re.match(r"def \w+\(.*:\s*\w+\s*\|\s*\w+", line):
+                    has_union_hints = True
+                    break
+                if re.match(r"def \w+\(.*\)\s*->\s*\w+\s*\|\s*\w+", line):
+                    has_union_hints = True
+                    break
+
+            if has_union_hints:
+                has_future = "from __future__ import annotations" in content
+                assert has_future, (
+                    f"{py_file.relative_to(ROOT)} uses X | Y type hints but is missing "
+                    f"'from __future__ import annotations'. This crashes on Python 3.8/3.9."
+                )
+
+    def test_python_version_check_exists(self):
+        """pocket_yume.py must check Python version before importing config."""
+        content = (ROOT / "pocket_yume.py").read_text(encoding="utf-8")
+        assert "sys.version_info" in content, (
+            "pocket_yume.py should check Python version early to give a clear error"
+        )
+        # The check must appear BEFORE the config import
+        version_check_pos = content.index("sys.version_info")
+        config_import_pos = content.index("from config import")
+        assert version_check_pos < config_import_pos, (
+            "Python version check must appear before 'from config import' "
+            "so users see a friendly message instead of a TypeError traceback"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 7. IMPORT COMPLETENESS
+#    Every stdlib module used at module level must be imported.
+#    This catches the v5.7.0 bug: logging.basicConfig() used but
+#    'import logging' was missing from the server.
+# ---------------------------------------------------------------------------
+
+class TestImportCompleteness:
+    """Verify Python files import all modules they use."""
+
+    # Standard library modules that are commonly used via module.function()
+    STDLIB_MODULES = {
+        "os", "sys", "json", "time", "shutil", "platform", "subprocess",
+        "threading", "logging", "re", "tempfile", "signal", "atexit",
+        "argparse", "secrets", "base64", "io", "zipfile", "tarfile",
+    }
+
+    def _get_imports(self, source):
+        """Extract all imported module names from source."""
+        import ast
+        tree = ast.parse(source)
+        imports = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    imports.add(alias.name.split('.')[0])
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imports.add(node.module.split('.')[0])
+        return imports
+
+    def _get_module_references(self, source):
+        """Find all 'module.something' references in source (excluding comments/strings/URLs)."""
+        import ast
+        refs = set()
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            return refs
+        for node in ast.walk(tree):
+            # Check Attribute nodes: module.function()
+            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+                if node.value.id in self.STDLIB_MODULES:
+                    refs.add(node.value.id)
+        return refs
+
+    def test_server_imports_complete(self):
+        """Server must import every stdlib module it uses."""
+        src = (ROOT / "server" / "faster_whisper_server.py").read_text(encoding="utf-8")
+        imports = self._get_imports(src)
+        refs = self._get_module_references(src)
+        missing = refs - imports
+        assert not missing, (
+            f"Server uses these modules but doesn't import them: {missing}\n"
+            f"This causes NameError at runtime (v5.7.0 bug: logging was missing)"
+        )
+
+    def test_pocket_yume_imports_complete(self):
+        """CLI must import every stdlib module it uses."""
+        src = (ROOT / "pocket_yume.py").read_text(encoding="utf-8")
+        imports = self._get_imports(src)
+        refs = self._get_module_references(src)
+        missing = refs - imports
+        assert not missing, (
+            f"pocket_yume.py uses these modules but doesn't import them: {missing}"
+        )
+
+    def test_config_imports_complete(self):
+        """Config module must import every stdlib module it uses."""
+        src = (ROOT / "config.py").read_text(encoding="utf-8")
+        imports = self._get_imports(src)
+        refs = self._get_module_references(src)
+        missing = refs - imports
+        assert not missing, (
+            f"config.py uses these modules but doesn't import them: {missing}"
+        )

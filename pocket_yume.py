@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pocket Yume CLI v5.6.0 -- Cross-platform installer & launcher for Yume AI Subtitles
+Pocket Yume CLI v5.7.0 -- Cross-platform installer & launcher for Yume AI Subtitles
 Complete rewrite: smart port management, API token auth, Windows cp1252 fix
 Supports: Windows, Linux, macOS
 """
@@ -9,7 +9,16 @@ import os, sys, json, time, shutil, platform, subprocess, urllib.request, urllib
 from pathlib import Path
 import socket as _socket
 
+# Python version check — give a clear message instead of a cryptic TypeError
+if sys.version_info < (3, 10):
+    print(f"\n  Yume requires Python 3.10 or newer.")
+    print(f"  You are running Python {sys.version.split()[0]}")
+    print(f"  Download the latest Python from: https://www.python.org/downloads/")
+    print(f"  On Windows, make sure to check 'Add Python to PATH' during installation.\n")
+    sys.exit(1)
+
 _log = logging.getLogger('pocket_yume')
+_update_result = None  # Background update check result: [latest, url, checked] or None
 
 # Import extracted config module
 from config import DEFAULT_CONFIG, CONFIG_FILE, CONFIG_DIR, load_config, save_config
@@ -41,7 +50,7 @@ def _run(cmd, timeout=30, **kw):
 # Japanese text may appear in logs. Wrapping stdout here breaks ANSI
 # color rendering on Windows terminals.
 
-VERSION = "5.6.0"
+VERSION = "5.7.0"
 
 # Named constants
 KiB = 1024
@@ -229,7 +238,9 @@ def panel(text, title="", style="", width=None, pad=1):
     # Title in top border
     if title:
         t = f" {title} "
-        top = f"{b['tl']}{t}{b['h'] * (w - 2 - len(t))}{b['tr']}"
+        # Strip ANSI for width calculation (colored titles made border too short)
+        t_visible = len(re.sub(r'\x1b\[[0-9;]*m', '', t))
+        top = f"{b['tl']}{t}{b['h'] * max(0, w - 2 - t_visible)}{b['tr']}"
     else:
         top = f"{b['tl']}{b['h'] * (w - 2)}{b['tr']}"
     bot = f"{b['bl']}{b['h'] * (w - 2)}{b['br']}"
@@ -458,6 +469,13 @@ def download_file(url, dest, label="Downloading"):
         with urllib.request.urlopen(req, timeout=180) as resp:
             total = int(resp.headers.get("content-length", 0)); dl = 0
             t0 = time.time()
+            # Check disk space if content-length is known
+            if total > 0:
+                free = disk_free_gb(dest.parent) * GiB
+                if free < total * 1.5:  # need 1.5x for download + extraction
+                    print(f"\r  {C.RED}✗{C.RESET}  {label} — Not enough disk space " + " " * 20)
+                    info(f"Need ~{total * 1.5 / MiB:.0f} MB, have {free / MiB:.0f} MB free")
+                    return False
             with open(dest, "wb") as f:
                 while True:
                     chunk = resp.read(DOWNLOAD_CHUNK_SIZE)  # 64KB chunks
@@ -491,14 +509,28 @@ def download_file(url, dest, label="Downloading"):
         print(f"\r  {C.RED}✗{C.RESET}  {label} — HTTP {e.code}: {e.reason}" + " " * 20)
         if e.code == 404:
             info("The download URL may have changed. Try updating Yume.")
+        _cleanup_partial(dest)
         return False
     except urllib.error.URLError as e:
         print(f"\r  {C.RED}✗{C.RESET}  {label} — Connection failed: {e.reason}" + " " * 20)
         info("Check your internet connection and try again")
+        _cleanup_partial(dest)
         return False
     except Exception as e:
         print(f"\r  {C.RED}✗{C.RESET}  {label} — FAILED: {e}" + " " * 20)
+        _cleanup_partial(dest)
         return False
+
+
+def _cleanup_partial(path):
+    """Remove a partially downloaded file so it doesn't corrupt future installs."""
+    try:
+        p = Path(path)
+        if p.exists():
+            p.unlink()
+            _log.debug('[download] Cleaned up partial download: %s', p.name)
+    except Exception:
+        pass
 
 
 
@@ -639,6 +671,14 @@ def find_tool(name):
         if b2.exists(): return str(b2)
     return shutil.which(name)
 
+def _try_import(module_name):
+    """Check if a Python module can be imported. Returns True/False."""
+    try:
+        __import__(module_name)
+        return True
+    except ImportError:
+        return False
+
 def check_server(host, port, path="/health"):
     """Check if a server is responding. Handles JSON and non-JSON responses."""
     try:
@@ -656,21 +696,29 @@ def check_server(host, port, path="/health"):
 
 
 def check_translation_server(host, port, backend_info=None):
-    """Check translation server with fallback endpoints (different backends use different paths)."""
+    """Check translation server health.
+    Only tries the backend's configured health endpoint, then falls back to
+    a raw socket connect. This avoids flooding the server with 404s on
+    endpoints it doesn't support (e.g., /health, /api/tags on llama.cpp)."""
     bi = backend_info or BACKEND_INFO.get("llamacpp", {})
-    # Try the backend's configured health path first
-    paths_to_try = [bi.get("hp", "/health"), "/v1/models", "/health", "/api/tags", "/"]
-    # Deduplicate while preserving order
-    seen = set()
-    unique = []
-    for p in paths_to_try:
-        if p not in seen:
-            seen.add(p)
-            unique.append(p)
-    for path in unique:
-        st = check_server(host, port, path)
-        if st["up"]:
-            return st
+    primary = bi.get("hp", "/v1/models")
+
+    # Try the configured endpoint
+    st = check_server(host, port, primary)
+    if st["up"]:
+        return st
+
+    # The LLM might be busy with inference (10-20s per request).
+    # A raw socket connect proves the server is alive even when HTTP times out.
+    try:
+        s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        s.settimeout(2)
+        s.connect((host, int(port)))
+        s.close()
+        return {"up": True, "data": {"status": "busy"}}
+    except Exception:
+        pass
+
     return {"up": False, "data": {}}
 
 def check_ollama_models(host="127.0.0.1", port=DEFAULT_OLLAMA_PORT):
@@ -1149,6 +1197,17 @@ def install_ffmpeg():
                             d.write(s.read())
             zp.unlink(missing_ok=True)
             print(f"\r  {C.GREEN}+{C.RESET}  Extracted" + " " * 30)
+            # Verify the binary actually works
+            ff = TOOLS_DIR / "ffmpeg.exe"
+            if ff.exists():
+                r = _run([str(ff), "-version"], timeout=5)
+                if r.returncode != 0:
+                    warn("ffmpeg extracted but fails to run — try downloading manually")
+                    return False
+            else:
+                error("ffmpeg.exe not found after extraction — zip may have different structure")
+                info("Download manually: https://ffmpeg.org/download.html")
+                return False
             return True
         except Exception as e:
             print(f"\r  {C.RED}x{C.RESET}  Failed: {e}")
@@ -1309,8 +1368,32 @@ def install_ollama():
         except Exception as e:
             error(f"Failed: {e}"); return False
 
+def _check_pip():
+    """Verify pip is available. Returns True if pip works."""
+    r = _run([sys.executable, "-m", "pip", "--version"], timeout=10)
+    if r.returncode != 0:
+        error("pip is not installed or not working!")
+        if IS_WIN:
+            info("If you installed Python from the Windows Store, pip may be missing.")
+            info("Re-install Python from https://python.org and check 'Add to PATH'.")
+        else:
+            info("Install pip:")
+            pm = _detect_package_manager()
+            if pm == "apt":
+                info("  sudo apt install python3-pip")
+            elif pm == "dnf":
+                info("  sudo dnf install python3-pip")
+            else:
+                info(f"  {sys.executable} -m ensurepip --upgrade")
+        return False
+    return True
+
+
 def install_python_deps():
     """Install flask + faster-whisper deps."""
+    if not _check_pip():
+        return False
+
     req = SERVER_DIR / "requirements.txt"
     if not req.exists():
         req = BASE_DIR / "requirements.txt"  # backward compat
@@ -1410,6 +1493,9 @@ def _has_build_tools():
 
 def install_llamacpp_python():
     """Install llama-cpp-python + server deps (uvicorn, fastapi), with GPU support if NVIDIA detected."""
+    if not _check_pip():
+        return False
+
     gpu = detect_gpu()
 
     def _pip_install_with_progress(cmd, label, timeout=600, env=None):
@@ -1808,7 +1894,7 @@ def _menu_deno(cfg):
         else:
             warn("Deno not installed — YouTube may block downloads")
 
-        info(f"Current YouTube auth method: {C.BOLD}{cfg.get('youtube_auth_method', 'deno')}{C.RESET}")
+        info(f"Current YouTube auth method: {C.BOLD}{cfg.get('youtube_auth_method', 'cookies')}{C.RESET}")
         ch = ask_choice("Options:", [
             ("Install Deno + PO token plugin", "Downloads Deno (~35 MB) and installs the YouTube auth plugin"),
             ("Install PO token plugin only", "If Deno is already installed, just add the yt-dlp plugin"),
@@ -2177,14 +2263,26 @@ def health_check(cfg):
     results.append(("Disk ≥ 5 GB", disk >= 5, f"{disk:.1f} GB free"))
 
     # 2. Tools
-    for t in ["yt-dlp", "ffmpeg"]:
+    for t in ["yt-dlp", "ffmpeg", "ffprobe"]:
         p = find_tool(t)
-        results.append((f"{t} installed", p is not None, p or "not found"))
+        if p:
+            # Verify tool actually runs (not just exists)
+            r = _run([p, "--version" if t == "yt-dlp" else "-version"], timeout=5)
+            if r.returncode == 0:
+                results.append((f"{t} installed", True, p))
+            else:
+                results.append((f"{t} installed", False, f"found at {p} but fails to run"))
+        else:
+            results.append((f"{t} installed", False, "not found"))
     dn = find_tool("deno")
     if cfg.get("youtube_auth_method") != "cookies":
         results.append(("deno installed", dn is not None, dn or "not found (needed for YouTube)"))
 
     # 3. Python packages
+    # Check pip first
+    pip_r = _run([sys.executable, "-m", "pip", "--version"], timeout=10)
+    results.append(("pip available", pip_r.returncode == 0, 
+                     pip_r.stdout.split()[1] if pip_r.returncode == 0 else "not found — install python3-pip"))
     for pkg, name in [("faster_whisper", "faster-whisper"), ("flask", "Flask"),
                        ("flask_cors", "Flask-CORS"), ("llama_cpp", "llama-cpp-python")]:
         try:
@@ -2251,11 +2349,31 @@ def settings_menu(cfg):
         bi = BACKEND_INFO.get(cfg.get("translation_backend", "llamacpp"), BACKEND_INFO["custom"])
         ym = cfg['youtube_auth_method']
         if ym == 'cookies': ym += f" ({cfg.get('cookies_browser', 'chrome')})"
+
+        # Resolve auto device/precision for display
+        dev_raw = cfg['whisper_device']; comp_raw = cfg['whisper_compute_type']
+        gpu = detect_gpu()
+        if dev_raw == "auto":
+            if gpu["has_nvidia"]:
+                dev_display = f"{C.GREEN}cuda{C.RESET} (auto)"
+            elif gpu.get("has_amd") and not IS_WIN:
+                dev_display = f"{C.RED}cuda{C.RESET} (auto, ROCm)"
+            else:
+                dev_display = "cpu (auto)"
+        else:
+            dev_display = dev_raw
+        if comp_raw == "auto":
+            resolved_comp = "float16" if "cuda" in dev_display and gpu.get("vram_mb", 0) >= 8000 else (
+                "int8_float16" if "cuda" in dev_display else "int8")
+            comp_display = f"{resolved_comp} (auto)"
+        else:
+            comp_display = comp_raw
+
         table(
             ["Setting", "Value"],
             [
                 [f"{C.GOLD}Whisper Model{C.RESET}", cfg['whisper_model']],
-                [f"{C.GOLD}Device / Precision{C.RESET}", f"{cfg['whisper_device']} / {cfg['whisper_compute_type']}"],
+                [f"{C.GOLD}Device / Precision{C.RESET}", f"{dev_display} / {comp_display}"],
                 [f"{C.GOLD}Whisper Address{C.RESET}", f"{cfg['whisper_host']}:{cfg['whisper_port']}"],
                 ["", ""],
                 [f"{C.MAGENTA}Translation{C.RESET}", bi['name']],
@@ -2263,8 +2381,8 @@ def settings_menu(cfg):
                 [f"{C.MAGENTA}TL Model{C.RESET}", cfg.get('translation_model', '—')],
                 ["", ""],
                 [f"{C.CYAN}Chunk Duration{C.RESET}", f"{cfg['chunk_duration']}s (audio processed in this many seconds at a time)"],
-                [f"{C.CYAN}Word Timestamps{C.RESET}", ("Yes" if cfg['word_timestamps'] else "No") + " (break subtitles at words vs sentences)"],
-                [f"{C.CYAN}Pause Threshold{C.RESET}", f"{cfg['pause_threshold']}s (silence before splitting a subtitle line)"],
+                [f"{C.DIM}Word Timestamps{C.RESET}", f"{C.DIM}{'Yes' if cfg['word_timestamps'] else 'No'} (no effect — server overrides for music optimization){C.RESET}"],
+                [f"{C.DIM}Pause Threshold{C.RESET}", f"{C.DIM}{cfg['pause_threshold']}s (no effect — requires word_timestamps which is forced off){C.RESET}"],
                 ["", ""],
                 [f"{C.YELLOW}YouTube Auth{C.RESET}", ym],
             ],
@@ -2523,6 +2641,7 @@ def _is_whisper_model_cached(model_name):
             f"models--Systran--faster-whisper-{model_name}",
             f"models--guillaumekln--faster-whisper-{model_name}",
             f"models--openai--whisper-{model_name}",
+            f"models--mobiuslabsgmbh--faster-whisper-{model_name}",
         ]
         for entry in cache_dir.iterdir():
             for pat in patterns:
@@ -2702,6 +2821,16 @@ def benchmark_whisper(cfg):
         try:
             from faster_whisper import WhisperModel
 
+            # Suppress HuggingFace Hub warnings during download
+            # (unauthenticated request warnings, Windows symlink warnings)
+            import warnings
+            warnings.filterwarnings("ignore", message=".*huggingface.*")
+            warnings.filterwarnings("ignore", message=".*symlinks.*")
+            os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+            os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+            # Suppress HF logging (WARNING level messages about tokens/symlinks)
+            logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+
             # Measure load time
             t0 = time.time()
             model = WhisperModel(model_name, device=device, compute_type=compute)
@@ -2750,20 +2879,78 @@ def benchmark_whisper(cfg):
             except Exception as e:
                 _log.debug('[benchmark_whisper] cuda-cleanup failed: %s', e)
 
-
-
         except Exception as e:
-            err_msg = str(e)[:60]
-            error(f"Failed: {err_msg}")
-            results.append({
-                "model": model_name,
-                "load_s": 0,
-                "median_s": 0,
-                "rtf": 0,
-                "speed_x": 0,
-                "segments": 0,
-                "status": f"FAIL: {err_msg}",
-            })
+            err_msg = str(e)
+            short_err = err_msg[:80]
+            error(f"Failed: {short_err}")
+
+            # Detect missing CUDA libraries and offer CPU fallback
+            is_cuda_lib_error = any(lib in err_msg.lower() for lib in [
+                "cublas", "cudnn", "cudart", "cufft", "cusolver", "cusparse",
+                "nvcuda", "is not found or cannot be loaded", "cuda",
+            ])
+
+            if is_cuda_lib_error and device in ("cuda", "auto"):
+                print()
+                warn("CUDA libraries are missing or incomplete.")
+                info("This usually means the NVIDIA CUDA Toolkit isn't fully installed.")
+                if IS_WIN:
+                    info("Fix: Install CUDA Toolkit from https://developer.nvidia.com/cuda-downloads")
+                    info("     Or install cuBLAS via: pip install nvidia-cublas-cu12")
+                else:
+                    info("Fix: Install CUDA Toolkit for your distro, or:")
+                    info("     pip install nvidia-cublas-cu12")
+
+                if ask_yn("Retry this model on CPU instead?", default=True):
+                    try:
+                        info(f"Retrying {model_name} on CPU...")
+                        from faster_whisper import WhisperModel as WM2
+                        t0 = time.time()
+                        model = WM2(model_name, device="cpu", compute_type="int8")
+                        load_time = time.time() - t0
+                        success(f"Loaded on CPU in {load_time:.1f}s")
+
+                        info(f"{C.DIM}Running 3 transcription passes (5s test audio each)...{C.RESET}")
+                        times = []
+                        for run in range(3):
+                            t0 = time.time()
+                            segs, _ = model.transcribe(str(test_wav), language="ja",
+                                                       vad_filter=False, word_timestamps=False)
+                            list(segs)
+                            times.append(time.time() - t0)
+
+                        median_time = sorted(times)[len(times) // 2]
+                        speed = 5.0 / median_time if median_time > 0 else 0
+                        results.append({
+                            "model": f"{model_name} (CPU)",
+                            "load_s": round(load_time, 1),
+                            "median_s": round(median_time, 3),
+                            "rtf": round(median_time / 5.0, 3),
+                            "speed_x": round(speed, 1),
+                            "segments": 0,
+                            "status": "OK",
+                        })
+                        success(f"CPU median: {median_time:.3f}s for 5s audio ({speed:.1f}x realtime)")
+                        del model
+                    except Exception as e2:
+                        error(f"CPU fallback also failed: {str(e2)[:60]}")
+                        results.append({
+                            "model": model_name, "load_s": 0, "median_s": 0, "rtf": 0,
+                            "speed_x": 0, "segments": 0,
+                            "status": f"FAIL: {short_err}",
+                        })
+                else:
+                    results.append({
+                        "model": model_name, "load_s": 0, "median_s": 0, "rtf": 0,
+                        "speed_x": 0, "segments": 0,
+                        "status": f"FAIL: {short_err}",
+                    })
+            else:
+                results.append({
+                    "model": model_name, "load_s": 0, "median_s": 0, "rtf": 0,
+                    "speed_x": 0, "segments": 0,
+                    "status": f"FAIL: {short_err}",
+                })
 
     # Clean up test audio
     try: test_wav.unlink()
@@ -3188,7 +3375,11 @@ def _launch_inner(cfg, procs, lhs):
             LOGS_DIR.mkdir(parents=True, exist_ok=True)
             lp = LOGS_DIR / "translation_server.log"
             lh = open(lp, "w", encoding="utf-8", errors="replace"); lhs.append(lh)
-            p = subprocess.Popen(cmd, stdout=lh, stderr=subprocess.STDOUT, env=env)
+            # PYTHONUTF8=1 prevents UnicodeDecodeError in llama_cpp's log callback
+            # when model metadata contains non-UTF-8 bytes
+            tl_env = env.copy()
+            tl_env["PYTHONUTF8"] = "1"
+            p = subprocess.Popen(cmd, stdout=lh, stderr=subprocess.STDOUT, env=tl_env)
             procs.append(("Translation", p))
             info(f"Log: {lp}")
             def _trans_ready():
@@ -3318,15 +3509,14 @@ def _launch_inner(cfg, procs, lhs):
 
     # --- READY ---
     clear()
-    print(); gold_hr(); print()
-    print(center(f"{C.GREEN}{C.BOLD}  Yume is running!  {C.RESET}"))
     print()
+    success(f"Yume is running!  {C.DIM}v{VERSION}{C.RESET}")
     tn = BACKEND_INFO.get(bk, {}).get("name", bk)
     print(f"  {C.CYAN}Whisper{C.RESET}      http://{cfg['whisper_host']}:{cfg['whisper_port']}")
     print(f"  {C.MAGENTA}Translation{C.RESET}  http://{cfg['translation_host']}:{cfg['translation_port']}  ({tn})")
     print()
-    print(center(f"{C.DIM}Chrome -> Japanese video -> Yume extension -> Enable{C.RESET}"))
-    print(); gold_hr()
+    info(f"{C.DIM}Chrome -> Japanese video -> Yume extension -> Enable{C.RESET}")
+    print()
 
     _runtime_menu(cfg, procs, lhs, bk)
 
@@ -3394,7 +3584,7 @@ def _runtime_menu(cfg, procs, lhs, bk):
     try:
         while True:
             clear()
-            header("Runtime")
+            print()
             if not _check_procs():
                 warn("A server has stopped unexpectedly.")
                 dead = [(n, p) for n, p in procs if p.poll() is not None]
@@ -3463,6 +3653,14 @@ def setup_wizard(cfg):
 
     section("System Scan")
     gpu = detect_gpu(); ram = detect_ram_gb(); disk = disk_free_gb()
+
+    # Warn about Python versions that may lack prebuilt wheels
+    pyver = f"{sys.version_info.major}.{sys.version_info.minor}"
+    if sys.version_info >= (3, 13):
+        warn(f"Python {pyver} detected — some packages may need to build from source.")
+        info("This requires C++ build tools. If installs fail, use Python 3.11 or 3.12.")
+        print()
+
     (success if gpu["has_nvidia"] or (gpu.get("has_amd") and not IS_WIN) else warn)(
         f"GPU:  {gpu['name'] or 'None'}" + (
             f" ({gpu['vram_mb']} MB)" if gpu["has_nvidia"]
@@ -3653,8 +3851,37 @@ def setup_wizard(cfg):
     except Exception as e:
         _log.debug('[setup_wizard] config-backup failed: %s', e)
 
+    # ── Installation summary ──
+    print()
+    section("Installation Summary")
+    checks = [
+        ("yt-dlp", find_tool("yt-dlp") is not None),
+        ("ffmpeg", find_tool("ffmpeg") is not None),
+        ("faster-whisper", _try_import("faster_whisper")),
+    ]
+    bk = cfg.get("translation_backend", "llamacpp")
+    if bk == "llamacpp":
+        checks.append(("llama-cpp-python", _try_import("llama_cpp")))
+        checks.append(("GGUF model", len(find_gguf_models()) > 0))
+    elif bk == "ollama":
+        checks.append(("Ollama", check_server("127.0.0.1", cfg.get("translation_port", 11434), "/api/tags")["up"]))
 
-    print(); success(f"{C.BOLD}Setup complete! Config backed up.{C.RESET}"); pause()
+    all_ok = True
+    for name, ok in checks:
+        if ok:
+            success(f"{name}")
+        else:
+            error(f"{name} — not installed")
+            all_ok = False
+
+    print()
+    if all_ok:
+        success(f"{C.BOLD}Setup complete! All components installed.{C.RESET}")
+    else:
+        warn("Setup finished with missing components.")
+        info("Run 'python pocket_yume.py health' to see details.")
+        info("Missing components can be installed from the Tools menu.")
+    pause()
     return cfg
 
 # ────
@@ -3781,13 +4008,21 @@ def main_menu():
             f"{C.DIM}Translator {C.RESET}  {C.MAGENTA}{bn}{C.RESET}  on  {cfg['translation_host']}:{cfg['translation_port']}",
             style=C.DIM,
         )
-        # Async update check (non-blocking)
-        try:
-            latest, url = check_for_updates()
-            if latest:
-                print(f"  {C.YELLOW}⬆{C.RESET}  Update available: v{latest}  {C.DIM}{url}{C.RESET}")
-        except Exception as e:
-            _log.debug('[main_menu] update-check failed: %s', e)
+        # Update check — truly non-blocking (runs in background thread)
+        # Shows result on next menu render if available
+        global _update_result
+        if _update_result is None:
+            _update_result = [None, None, False]  # [latest, url, checked]
+            def _bg_check():
+                global _update_result
+                try:
+                    l, u = check_for_updates()
+                    _update_result = [l, u, True]
+                except Exception:
+                    _update_result = [None, None, True]
+            threading.Thread(target=_bg_check, daemon=True).start()
+        if _update_result[2] and _update_result[0]:
+            print(f"  {C.YELLOW}⬆{C.RESET}  Update available: v{_update_result[0]}  {C.DIM}{_update_result[1]}{C.RESET}")
 
 
 

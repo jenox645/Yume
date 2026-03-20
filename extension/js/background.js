@@ -1,5 +1,5 @@
 // ============================================================================
-// BACKGROUND SERVICE WORKER (Manifest V3) - Yume v5.6.0
+// BACKGROUND SERVICE WORKER (Manifest V3) - Yume v5.7.0
 // Handles server health, transcription, translation, romanization proxy
 // Translation & romanization are SEPARATE calls (never combined)
 // ============================================================================
@@ -12,6 +12,7 @@ console.log('[Background] Service worker initializing...');
 
 const translationCache = new Map();
 const TRANSLATION_CACHE_MAX = 500;
+const TRANSLATION_CACHE_TTL = 30 * 60 * 1000; // 30 min — forces re-translate after model switch
 
 const romanizationCache = new Map();
 const ROMANIZATION_CACHE_MAX = 300;
@@ -19,6 +20,11 @@ const ROMANIZATION_CACHE_MAX = 300;
 function _getCachedTranslation(text) {
   const hit = translationCache.get(text);
   if (hit) {
+    // TTL check — stale entries evicted (user may have switched models)
+    if (hit.ts && Date.now() - hit.ts > TRANSLATION_CACHE_TTL) {
+      translationCache.delete(text);
+      return null;
+    }
     // Move to end of Map for true LRU (Map preserves insertion order)
     translationCache.delete(text);
     translationCache.set(text, hit);
@@ -32,7 +38,7 @@ function _setCachedTranslation(text, value) {
     const oldestKey = translationCache.keys().next().value;
     translationCache.delete(oldestKey);
   }
-  translationCache.set(text, { value });
+  translationCache.set(text, { value, ts: Date.now() });
 }
 
 
@@ -126,13 +132,13 @@ chrome.runtime.onInstalled.addListener((details) => {
   console.log('[Background] Extension installed/updated:', details.reason);
   if (details.reason === 'install') {
     // Fresh install — set all defaults
-    chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS }, installTime: Date.now(), version: '5.6.0' });
+    chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS }, installTime: Date.now(), version: '5.7.0' });
   } else if (details.reason === 'update') {
     // Update — merge new defaults into existing settings (preserves user changes)
     chrome.storage.local.get(['settings'], (result) => {
       const existing = result.settings || {};
       const merged = { ...DEFAULT_SETTINGS, ...existing };
-      chrome.storage.local.set({ settings: merged, version: '5.6.0' });
+      chrome.storage.local.set({ settings: merged, version: '5.7.0' });
       console.log('[Background] Settings preserved across update');
     });
   }
