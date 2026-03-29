@@ -9,6 +9,9 @@ Yume runs entirely on your machine. No data leaves your computer — no cloud AP
 - Token discovery restricted to `chrome-extension://` and `moz-extension://` origins — web pages cannot obtain it
 - Host header validation blocks DNS rebinding attacks (rejects non-localhost requests)
 - All URLs validated before passing to subprocess (prevents argument injection)
+- No shell invocation — all subprocess calls use explicit argv lists; no `shell=True`, no `os.system()`, no `curl | sh`
+- XSS prevention — all dynamic content in popup innerHTML is escaped via `_escapeHtml()`; subtitle overlay uses `textContent` only
+- All Python dependencies pinned to exact versions (`==`) to prevent supply-chain attacks from untested upgrades
 - Browser cookies accessed read-only for YouTube authentication (never modified or stored)
 
 ## Reporting a vulnerability

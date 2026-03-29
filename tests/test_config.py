@@ -1,6 +1,5 @@
 """Tests for config.py — load, save, validate, export, import."""
 import json
-import os
 import sys
 import tempfile
 from pathlib import Path
@@ -9,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import (
-    DEFAULT_CONFIG, load_config, save_config, validate_port,
+    DEFAULT_CONFIG, validate_port,
     validate_host, config_export, config_import
 )
 

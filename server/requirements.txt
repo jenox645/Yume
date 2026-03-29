@@ -1,8 +1,10 @@
-faster-whisper>=1.0.0
-flask>=2.3.0
-flask-cors>=4.0.0
-waitress>=3.0.0
-numpy>=1.24.0
-pykakasi>=2.2.0
-pypinyin>=0.50.0
-romanization>=1.1.0
+# Yume Whisper Server — pinned dependencies
+# Update versions deliberately after testing. Run: pip install -r requirements.txt
+faster-whisper==1.2.1
+flask==3.1.3
+flask-cors==6.0.2
+waitress==3.0.2
+numpy==2.4.3
+pykakasi==2.3.0
+pypinyin==0.55.0
+romanization==2.0.0

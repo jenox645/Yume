@@ -2,7 +2,10 @@
 
 from __future__ import annotations  # Allows int | str type hint syntax
 
-import json, os, re, time, logging
+import json
+import re
+import time
+import logging
 from pathlib import Path
 
 _log = logging.getLogger('pocket_yume.config')
@@ -24,6 +27,7 @@ DEFAULT_OLLAMA_PORT = 11434
 # Defaults
 DEFAULT_CONFIG = {
     "whisper_model": "large-v3",
+    "whisper_model_name": "",
     "whisper_device": "auto",
     "whisper_compute_type": "auto",
     "whisper_host": "127.0.0.1",
@@ -39,6 +43,7 @@ DEFAULT_CONFIG = {
     "gguf_model_path": "",
     "youtube_auth_method": "cookies",
     "cookies_browser": "chrome",
+    "romanization_prompt": "",
     "first_run_complete": False,
 }
 
@@ -56,7 +61,25 @@ def load_config() -> dict:
                 return dict(DEFAULT_CONFIG)
             return {**DEFAULT_CONFIG, **data}
         except json.JSONDecodeError as e:
-            _log.warning('[load_config] Config file is corrupted (invalid JSON: %s) — using defaults', e)
+            # Common cause: user manually edited the file with unescaped backslashes
+            # (e.g., C:\Users\... instead of C:\\Users\\... in JSON)
+            print(f"\n  !  Config file has invalid JSON: {e}")
+            print(f"     File: {CONFIG_FILE}")
+            # Try to recover by fixing common backslash issues
+            try:
+                raw = CONFIG_FILE.read_text(encoding="utf-8")
+                # Replace single backslashes that aren't already escaped or part of JSON escapes
+                fixed = re.sub(r'(?<!\\)\\(?![\\"/bfnrtu])', r'\\\\', raw)
+                data = json.loads(fixed)
+                if isinstance(data, dict):
+                    print("     Auto-recovered by fixing backslash escapes.")
+                    print("     Tip: Use forward slashes (/) or double backslashes (\\\\) in paths.\n")
+                    save_config({**DEFAULT_CONFIG, **data})  # save the fixed version
+                    return {**DEFAULT_CONFIG, **data}
+            except Exception:
+                pass
+            print("     Using default settings. Your config file was not overwritten.")
+            print(f"     Fix the JSON manually or delete {CONFIG_FILE.name} to start fresh.\n")
         except Exception as e:
             _log.debug('[load_config] config-parse failed: %s', e)
     return dict(DEFAULT_CONFIG)

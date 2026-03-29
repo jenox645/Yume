@@ -4,7 +4,7 @@
 # AI Subtitles for Japanese Videos
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$SCRIPT_DIR"
+cd "$SCRIPT_DIR" || { echo "ERROR: Cannot cd to script directory"; exit 1; }
 
 echo "============================================================"
 echo "  POCKET YUME -- Launcher"
@@ -24,7 +24,7 @@ else
     echo "  1. brew install python3"
     echo "  2. Download from python.org"
     echo ""
-    read -p "Press Enter to close..."
+    read -rp "Press Enter to close..."
     exit 1
 fi
 
@@ -34,11 +34,11 @@ echo ""
 if [ ! -f "pocket_yume.py" ]; then
     echo "ERROR: pocket_yume.py not found!"
     echo "Run this from the Yume folder."
-    read -p "Press Enter to close..."
+    read -rp "Press Enter to close..."
     exit 1
 fi
 
 $PY pocket_yume.py "$@"
 
 echo ""
-read -p "Press Enter to close..."
+read -rp "Press Enter to close..."
