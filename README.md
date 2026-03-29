@@ -38,10 +38,6 @@ Yume captures audio from any video in your browser, transcribes it with [faster-
 
 ---
 
-| ![Image1](https://github.com/user-attachments/assets/01b99864-e46c-4406-8a3e-b64a28d45541) | ![Image2](https://github.com/user-attachments/assets/d38c6e95-137d-4d6b-b190-18d6d638bd7b) |
-|:---:|:---:|
-| ![Image3](https://github.com/user-attachments/assets/a8a594fe-eb61-4928-b6d0-ace13da21584) | ![Image4](https://github.com/user-attachments/assets/31cfe65e-4877-44b7-a059-c6d10013ee25) |
-
 ## Quick Start
 
 **1. Launch Yume**
