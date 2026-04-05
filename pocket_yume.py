@@ -673,7 +673,12 @@ def detect_gpu():
                 if line.strip():
                     r["has_amd"] = True
                     r["vendor"] = "amd"
-                    r["name"] = line.split(",")[0].strip() if "," in line else "AMD GPU"
+                    # CSV columns: device ID (card0), then product name fields
+                    fields = [f.strip() for f in line.split(",")]
+                    name = fields[-1] if len(fields) > 1 else fields[0]
+                    if not name or name.startswith("card") or name.startswith("GPU"):
+                        name = fields[1] if len(fields) > 1 else "AMD GPU"
+                    r["name"] = name if (name and not name.startswith("card")) else "AMD GPU"
                     break
             # Try to get VRAM
             try:
@@ -684,9 +689,11 @@ def detect_gpu():
                         if nums:
                             r["vram_mb"] = nums[0] // MiB if nums[0] > 1_000_000 else nums[0]
             except Exception as e:
-                _log.debug("[detect_gpu] nvidia-wmi-parse failed: %s", e)
+                _log.debug("[detect_gpu] rocm-vram-parse failed: %s", e)
 
-            return r
+            if r["name"] != "AMD GPU":
+                return r
+            # Fall through to rocminfo for a better name
     except Exception as e:
         _log.debug("[detect_gpu] nvidia-smi failed: %s", e)
 
@@ -2954,7 +2961,13 @@ def check_for_updates():
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             latest = data.get("tag_name", "").lstrip("v")
-            if latest and latest != VERSION:
+            try:
+                remote = tuple(int(x) for x in latest.split("."))
+                local = tuple(int(x) for x in VERSION.split("."))
+                is_newer = remote > local
+            except (ValueError, TypeError):
+                is_newer = False
+            if latest and is_newer:
                 return latest, data.get("html_url", "")
             return None, None
     except Exception:
@@ -4342,11 +4355,11 @@ def launch_services(cfg):
         for name, p in procs:
             try:
                 p.terminate()
-                p.wait(timeout=3)
+                p.wait(timeout=1)
             except Exception:
                 try:
                     p.kill()
-                    p.wait(timeout=2)
+                    p.wait(timeout=1)
                 except OSError:
                     pass
         for lh in lhs:
@@ -4355,7 +4368,6 @@ def launch_services(cfg):
             except OSError:
                 pass
         # Verify ports are actually freed
-        time.sleep(0.5)
         for key in ["whisper_port", "translation_port"]:
             port = cfg.get(key)
             if port and not is_port_free(port):
@@ -4796,12 +4808,12 @@ def _runtime_menu(cfg, procs, lhs, bk):
         for n, p in procs:
             try:
                 p.terminate()
-                p.wait(timeout=5)
+                p.wait(timeout=1)
                 success(f"{n} stopped")
             except Exception:
                 try:
                     p.kill()
-                    p.wait(timeout=3)
+                    p.wait(timeout=1)
                 except Exception as e:
                     _log.debug("[_runtime_menu] process-cleanup failed: %s", e)
 
@@ -4811,7 +4823,6 @@ def _runtime_menu(cfg, procs, lhs, bk):
             except OSError:
                 pass
         # Double-check ports are freed
-        time.sleep(0.5)
         for port_key in ["whisper_port", "translation_port"]:
             port = cfg.get(port_key)
             if port and not is_port_free(port):

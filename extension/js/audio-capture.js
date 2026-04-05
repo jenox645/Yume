@@ -508,6 +508,9 @@ class AudioCapture {
       const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
       this._addDiag(chunkIndex, 'error', 0, elapsed, error.message);
       this.fetchingChunks.delete(chunkIndex);
+      this.fetchedChunks.add(chunkIndex);
+      this.subtitleChunks[chunkIndex] = [];
+      this._dispatchProgress();
       if (chunkIndex === 0) {
         window.dispatchEvent(new CustomEvent('display-error', {
           detail: { message: `Failed: ${error.message}` }

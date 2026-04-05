@@ -14,14 +14,15 @@ class SubtitleWindow {
     this.currentEnglish  = '';
     this.currentRomaji   = '';
 
-    this.loadSettingsAndCreate();
+    // Create element synchronously so it's never null when events fire
+    this.create();
+    this.attachEventListeners();
+    this._loadAndApplySettings();
   }
 
-  loadSettingsAndCreate() {
+  _loadAndApplySettings() {
     chrome.storage.local.get(['settings', 'windowPosition'], (result) => {
       this.settings = result.settings || {};
-      this.create();
-      this.attachEventListeners();
       const p = result.windowPosition;
       if (p) {
         if (p.left)   this.element.style.left   = p.left;
