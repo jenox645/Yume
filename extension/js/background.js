@@ -1,5 +1,5 @@
 // ============================================================================
-// BACKGROUND SERVICE WORKER (Manifest V3) - Yume v5.7.0
+// BACKGROUND SERVICE WORKER (Manifest V3) - Yume v0.0.8
 // Handles server health, transcription, translation, romanization proxy
 // Translation & romanization are SEPARATE calls (never combined)
 // ============================================================================
@@ -16,6 +16,7 @@ const TRANSLATION_CACHE_TTL = 30 * 60 * 1000; // 30 min — forces re-translate 
 
 const romanizationCache = new Map();
 const ROMANIZATION_CACHE_MAX = 300;
+const ROMANIZATION_CACHE_TTL = 30 * 60 * 1000; // 30 min — matches translation cache
 
 function _getCachedTranslation(text) {
   const hit = translationCache.get(text);
@@ -84,7 +85,7 @@ async function _getApiToken(whisperUrl) {
 // the cached token, re-discover via /health, and retry ONCE.
 async function _whisperFetch(url, options = {}, timeoutMs = 30000) {
   const { settings } = await chrome.storage.local.get(['settings']);
-  const whisperUrl = settings?.whisperUrl || 'http://localhost:5001';
+  const whisperUrl = _whisperUrl(settings);
   const token = await _getApiToken(whisperUrl);
   const headers = { ...options.headers };
   if (token) headers['X-API-Token'] = token;
@@ -128,17 +129,21 @@ const DEFAULT_SETTINGS = {
   debugMode: true
 };
 
+// Central URL resolution — avoids hardcoded localhost:port scattered across functions
+function _whisperUrl(settings) { return settings?.whisperUrl || DEFAULT_SETTINGS.whisperUrl; }
+function _translationUrl(settings) { return settings?.translationUrl || DEFAULT_SETTINGS.translationUrl; }
+
 chrome.runtime.onInstalled.addListener((details) => {
   console.log('[Background] Extension installed/updated:', details.reason);
   if (details.reason === 'install') {
     // Fresh install — set all defaults
-    chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS }, installTime: Date.now(), version: '5.7.0' });
+    chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS }, installTime: Date.now(), version: '0.0.8' });
   } else if (details.reason === 'update') {
     // Update — merge new defaults into existing settings (preserves user changes)
     chrome.storage.local.get(['settings'], (result) => {
       const existing = result.settings || {};
       const merged = { ...DEFAULT_SETTINGS, ...existing };
-      chrome.storage.local.set({ settings: merged, version: '5.7.0' });
+      chrome.storage.local.set({ settings: merged, version: '0.0.8' });
       console.log('[Background] Settings preserved across update');
     });
   }
@@ -152,7 +157,7 @@ chrome.runtime.onInstalled.addListener((details) => {
 async function discoverSettingsFromWhisper() {
   try {
     const { settings } = await chrome.storage.local.get(['settings']);
-    const whisperUrl = settings?.whisperUrl || 'http://localhost:5001';
+    const whisperUrl = _whisperUrl(settings);
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 3000);
     // Health returns 503 during loading but still includes api_token
@@ -173,9 +178,18 @@ async function discoverSettingsFromWhisper() {
           if (fullResp.ok) {
             const full = await fullResp.json();
             if (full.translation_url && full.translation_port) {
-              const updated = { ...settings, translationUrl: full.translation_url, translationPort: full.translation_port };
+              const updated = {
+                ...settings,
+                translationUrl: full.translation_url,
+                translationPort: full.translation_port,
+              };
+              // Auto-discover prompts from CLI config (if set)
+              if (full.translation_prompt !== undefined) updated.translationPrompt = full.translation_prompt;
+              if (full.romanization_prompt !== undefined) updated.romanizationPrompt = full.romanization_prompt;
               await chrome.storage.local.set({ settings: updated });
               console.log('[Background] Auto-discovered translation URL:', full.translation_url);
+              if (full.translation_prompt) console.log('[Background] Auto-discovered custom translation prompt');
+              if (full.romanization_prompt) console.log('[Background] Auto-discovered custom romanization prompt');
             }
           }
         } catch (e) { console.warn('[Yume]', e.message || e); }
@@ -283,7 +297,28 @@ async function handleCheckServer(url, sendResponse, isWhisperServer = false) {
     } catch (e) { console.warn('[Yume]', e.message || e); }
     const loading = data?.status === 'loading';
     sendResponse({ healthy: response.ok, loading, status: response.status, data });
-  } catch (error) { sendResponse({ healthy: false, loading: false, error: error.message }); }
+  } catch (error) {
+    // HTTP timed out — try a quick TCP connect to see if the port is at least open.
+    // This catches the case where the LLM server is busy with inference (10-20s)
+    // and can't respond to HTTP, but IS running. Without this, the popup shows
+    // red dot during every translation, which is misleading.
+    if (!isWhisperServer) {
+      try {
+        const urlObj = new URL(url);
+        const tcpUrl = `${urlObj.protocol}//${urlObj.host}`;
+        const tcpController = new AbortController();
+        const tcpTimer = setTimeout(() => tcpController.abort(), 2000);
+        const tcpResp = await fetch(tcpUrl, { method: 'HEAD', signal: tcpController.signal });
+        clearTimeout(tcpTimer);
+        // Any response (even 404) means the server is running, just busy
+        sendResponse({ healthy: true, loading: false, status: tcpResp.status, data: { busy: true } });
+        return;
+      } catch (_tcpErr) {
+        // TCP also failed — server is genuinely down
+      }
+    }
+    sendResponse({ healthy: false, loading: false, error: error.message });
+  }
 }
 
 // ============================================================================
@@ -307,7 +342,7 @@ function handleSaveSettings(settings, sendResponse) {
 async function handleTranscribe(audioBase64, language, sendResponse) {
   try {
     const { settings } = await chrome.storage.local.get(['settings']);
-    const whisperUrl = settings?.whisperUrl || 'http://localhost:5001';
+    const whisperUrl = _whisperUrl(settings);
     const response = await _whisperFetch(`${whisperUrl}/transcribe`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -323,7 +358,7 @@ async function handleTranscribeUrl(msg, sendResponse) {
   _startKeepAlive();
   try {
     const { settings } = await chrome.storage.local.get(['settings']);
-    const whisperUrl = settings?.whisperUrl || 'http://localhost:5001';
+    const whisperUrl = _whisperUrl(settings);
     const body = {
       url: msg.url,
       video_id: msg.video_id,
@@ -350,7 +385,7 @@ async function handlePrepareVideo(url, videoId, sendResponse) {
   _startKeepAlive();
   try {
     const { settings } = await chrome.storage.local.get(['settings']);
-    const whisperUrl = settings?.whisperUrl || 'http://localhost:5001';
+    const whisperUrl = _whisperUrl(settings);
     const response = await _whisperFetch(`${whisperUrl}/prepare`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -375,7 +410,7 @@ async function handlePrepareDirect(streamUrl, videoId, sendResponse) {
   _startKeepAlive();
   try {
     const { settings } = await chrome.storage.local.get(['settings']);
-    const whisperUrl = settings?.whisperUrl || 'http://localhost:5001';
+    const whisperUrl = _whisperUrl(settings);
     const response = await _whisperFetch(`${whisperUrl}/prepare_direct`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -451,20 +486,64 @@ function _cleanTranslation(text) {
   return c.trim();
 }
 
+// Clean verbose LLM romanization output to extract just the romaji/pinyin/transliteration.
+// LLMs often output: "The romaji for X is: **Y** (explanation)" — we need just Y.
+function _cleanRomanization(text) {
+  if (!text) return '';
+  let c = text.trim();
+
+  // Strip markdown bold/italic
+  c = c.replace(/\*{1,3}/g, '');
+
+  // Try to extract from common LLM patterns:
+  // "...is converted to romaji as: RESULT (explanation)" → RESULT
+  // "...romaji: RESULT" → RESULT
+  // "The romaji reading is: RESULT" → RESULT
+  const extractPatterns = [
+    /(?:romaji|pinyin|romanization|transliteration|latin)\s*(?:is|reading|version)?[:\s]+["']?([^"'\n(]+)/i,
+    /(?:converted|written)\s+(?:to|as|in)\s+(?:romaji|latin|pinyin)?[:\s]*["']?([^"'\n(]+)/i,
+    /^["']([^"'\n]+)["']\s*$/,  // Quoted result on its own line
+  ];
+  for (const pattern of extractPatterns) {
+    const m = c.match(pattern);
+    if (m && m[1]) {
+      const extracted = m[1].trim();
+      // Only use if it looks like actual romanization (mostly Latin chars)
+      if (extracted.length > 0 && /^[a-zA-Zāáǎàēéěèīíǐìōóǒòūúǔùü\s',.\-!?]+$/.test(extracted)) {
+        c = extracted;
+        break;
+      }
+    }
+  }
+
+  // Strip common prefixes
+  c = c.replace(/^(Romaji|Pinyin|Romanization|Transliteration|Reading|Result)\s*[:：]\s*/i, '');
+  // Strip parenthetical notes
+  c = c.replace(/\s*\([^)]*\)\s*/g, ' ');
+  // Strip "No translation needed" and similar
+  c = c.replace(/no\s+(translation|explanation)\s+(needed|required|necessary)/gi, '');
+  // Strip remaining quotes
+  c = c.replace(/^["'「」『』]+|["'「」『』]+$/g, '');
+  // Collapse whitespace
+  c = c.replace(/\s+/g, ' ').trim();
+
+  return c;
+}
+
 async function handleTranslate(text, targetLang, sourceLang, sendResponse) {
   try {
-    // Check translation cache first
-    const cacheKey = `${sourceLang || 'ja'}||${targetLang || 'en'}||${text}`;
+    const { settings } = await chrome.storage.local.get(['settings']);
+    const translationUrl = _translationUrl(settings);
+    const lang = targetLang || settings?.targetLanguage || 'English';
+    const srcLang = sourceLang || settings?.sourceLanguage || 'ja';
+
+    // Check translation cache first (key includes URL so model switches invalidate)
+    const cacheKey = `${srcLang}||${lang}||${translationUrl}||${text}`;
     const cached = _getCachedTranslation(cacheKey);
     if (cached) {
       sendResponse({ success: true, translation: cached });
       return;
     }
-
-    const { settings } = await chrome.storage.local.get(['settings']);
-    const translationUrl = settings?.translationUrl || 'http://localhost:5000';
-    const lang = targetLang || settings?.targetLanguage || 'English';
-    const srcLang = sourceLang || settings?.sourceLanguage || 'ja';
 
     // Short, single-purpose prompt — no romanization here
     // Custom prompt from CLI settings takes priority if set
@@ -502,8 +581,8 @@ async function handleTranslate(text, targetLang, sourceLang, sendResponse) {
 async function handleRomanize(text, sourceLang, sendResponse) {
   try {
     const { settings } = await chrome.storage.local.get(['settings']);
-    const translationUrl = settings?.translationUrl || 'http://localhost:5000';
-    const whisperUrl = settings?.whisperUrl || 'http://localhost:5001';
+    const translationUrl = _translationUrl(settings);
+    const whisperUrl = _whisperUrl(settings);
     const srcLang = sourceLang || settings?.sourceLanguage || 'ja';
 
     const system = ROMANIZATION_SYSTEMS[srcLang];
@@ -512,14 +591,21 @@ async function handleRomanize(text, sourceLang, sendResponse) {
       return;
     }
 
-    // Check romanization cache
+    // Check romanization cache (with TTL)
     const cacheKey = `roma||${srcLang}||${text}`;
     const cached = romanizationCache.get(cacheKey);
     if (cached) {
-      romanizationCache.delete(cacheKey);
-      romanizationCache.set(cacheKey, cached); // move to end (LRU)
-      sendResponse({ success: true, romanization: cached });
-      return;
+      // Support both old format (plain string) and new format ({value, ts})
+      const val = typeof cached === 'string' ? cached : cached.value;
+      const ts = typeof cached === 'string' ? 0 : (cached.ts || 0);
+      if (ts && Date.now() - ts > ROMANIZATION_CACHE_TTL) {
+        romanizationCache.delete(cacheKey);
+      } else {
+        romanizationCache.delete(cacheKey);
+        romanizationCache.set(cacheKey, cached); // move to end (LRU)
+        sendResponse({ success: true, romanization: val });
+        return;
+      }
     }
 
     // Strategy 1: Deterministic romanization (ja/zh/ko — instant, no GPU, no hallucination)
@@ -530,7 +616,7 @@ async function handleRomanize(text, sourceLang, sendResponse) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text, language: srcLang })
-        }, 5000);
+        }, 60000);
         if (detResp.ok) {
           const detData = await detResp.json();
           if (detData.romanization) {
@@ -544,12 +630,18 @@ async function handleRomanize(text, sourceLang, sendResponse) {
 
     // Strategy 2: LLM romanization (fallback for all languages, or if deterministic unavailable)
     if (!romanization) {
+      // Use custom prompt from settings if available, else built-in per-language prompt
+      const customRomaPrompt = settings?.romanizationPrompt;
+      const systemPrompt = customRomaPrompt
+        ? customRomaPrompt.replace(/\{src\}/g, LANG_NAMES[srcLang] || srcLang).replace(/\{sys\}/g, system.name)
+        : system.prompt;
+
       const response = await _fetchWithTimeout(`${translationUrl}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: [
-            { role: "system", content: system.prompt },
+            { role: "system", content: systemPrompt },
             { role: "user", content: text }
           ],
           max_tokens: 200,
@@ -561,17 +653,16 @@ async function handleRomanize(text, sourceLang, sendResponse) {
       if (!response.ok) throw new Error(`Romanization error: ${response.status}`);
       const result = await response.json();
       if (result.choices?.[0]?.message?.content) {
-        romanization = result.choices[0].message.content.trim();
-        romanization = romanization.replace(/^(Romaji|Pinyin|Romanization|Transliteration)\s*[:：]\s*/i, '').trim();
+        romanization = _cleanRomanization(result.choices[0].message.content);
       }
     }
 
-    // Cache the result
+    // Cache the result (with timestamp for TTL)
     if (romanization) {
       if (romanizationCache.size >= ROMANIZATION_CACHE_MAX) {
         romanizationCache.delete(romanizationCache.keys().next().value);
       }
-      romanizationCache.set(cacheKey, romanization);
+      romanizationCache.set(cacheKey, { value: romanization, ts: Date.now() });
     }
 
     sendResponse({ success: true, romanization });
@@ -586,8 +677,8 @@ async function handleRomanize(text, sourceLang, sendResponse) {
 async function handleRomanizeBatch(texts, sourceLang, sendResponse) {
   try {
     const { settings } = await chrome.storage.local.get(['settings']);
-    const whisperUrl = settings?.whisperUrl || 'http://localhost:5001';
-    const translationUrl = settings?.translationUrl || 'http://localhost:5000';
+    const whisperUrl = _whisperUrl(settings);
+    const translationUrl = _translationUrl(settings);
     const srcLang = sourceLang || settings?.sourceLanguage || 'ja';
 
     if (!texts || texts.length === 0) {
@@ -604,9 +695,17 @@ async function handleRomanizeBatch(texts, sourceLang, sendResponse) {
       const cacheKey = `roma||${srcLang}||${texts[i]}`;
       const cached = romanizationCache.get(cacheKey);
       if (cached) {
-        romanizationCache.delete(cacheKey);
-        romanizationCache.set(cacheKey, cached);
-        results[i] = cached;
+        const val = typeof cached === 'string' ? cached : cached.value;
+        const ts = typeof cached === 'string' ? 0 : (cached.ts || 0);
+        if (ts && Date.now() - ts > ROMANIZATION_CACHE_TTL) {
+          romanizationCache.delete(cacheKey);
+          uncachedTexts.push(texts[i]);
+          uncachedIndices.push(i);
+        } else {
+          romanizationCache.delete(cacheKey);
+          romanizationCache.set(cacheKey, cached);
+          results[i] = val;
+        }
       } else {
         uncachedTexts.push(texts[i]);
         uncachedIndices.push(i);
@@ -625,7 +724,7 @@ async function handleRomanizeBatch(texts, sourceLang, sendResponse) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ texts: uncachedTexts, language: srcLang })
-        }, 10000);
+        }, 60000);
         if (detResp.ok) {
           const detData = await detResp.json();
           if (detData.romanizations && detData.romanizations.length === uncachedTexts.length) {
@@ -637,7 +736,7 @@ async function handleRomanizeBatch(texts, sourceLang, sendResponse) {
                 if (romanizationCache.size >= ROMANIZATION_CACHE_MAX) {
                   romanizationCache.delete(romanizationCache.keys().next().value);
                 }
-                romanizationCache.set(cacheKey, roma);
+                romanizationCache.set(cacheKey, { value: roma, ts: Date.now() });
               }
             }
             sendResponse({ success: true, romanizations: results });
@@ -655,33 +754,78 @@ async function handleRomanizeBatch(texts, sourceLang, sendResponse) {
       sendResponse({ success: true, romanizations: results });
       return;
     }
-    for (let i = 0; i < uncachedTexts.length; i++) {
-      try {
-        const response = await _fetchWithTimeout(`${translationUrl}/v1/chat/completions`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            messages: [
-              { role: "system", content: system.prompt },
-              { role: "user", content: uncachedTexts[i] }
-            ],
-            max_tokens: 200, temperature: 0.1, stream: false
-          })
-        }, 120000);
-        if (response.ok) {
-          const result = await response.json();
-          let roma = result.choices?.[0]?.message?.content?.trim() || '';
-          roma = roma.replace(/^(Romaji|Pinyin|Romanization|Transliteration)\s*[:：]\s*/i, '').trim();
+    // Use custom prompt from settings if available
+    const customRomaPrompt = settings?.romanizationPrompt;
+    const romaSystemPrompt = customRomaPrompt
+      ? customRomaPrompt.replace(/\{src\}/g, LANG_NAMES[srcLang] || srcLang).replace(/\{sys\}/g, system.name)
+      : system.prompt;
+
+    // BATCH LLM romanization — single API call instead of N sequential calls.
+    // Uses the same [N] numbered format as batch translation.
+    const batchRomaText = uncachedTexts.map((t, i) => `[${i + 1}] ${t}`).join('\n');
+    const batchRomaPrompt = `${romaSystemPrompt}\nYou receive numbered lines and output ONLY the ${system.name} with matching [N] numbers. One result per line. No explanations.`;
+
+    try {
+      const response = await _fetchWithTimeout(`${translationUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [
+            { role: "system", content: batchRomaPrompt },
+            { role: "user", content: batchRomaText }
+          ],
+          max_tokens: Math.min(2048, Math.max(500, 200 * uncachedTexts.length)),
+          temperature: 0.1, stream: false
+        })
+      }, 120000);
+
+      if (response.ok) {
+        const result = await response.json();
+        const raw = (result.choices?.[0]?.message?.content || '').trim();
+        const parsedRoma = _parseBatchResponse(raw, uncachedTexts.length);
+
+        for (let i = 0; i < uncachedIndices.length; i++) {
+          let roma = _cleanRomanization(parsedRoma[i] || '');
           results[uncachedIndices[i]] = roma;
           if (roma) {
             const cacheKey = `roma||${srcLang}||${uncachedTexts[i]}`;
             if (romanizationCache.size >= ROMANIZATION_CACHE_MAX) {
               romanizationCache.delete(romanizationCache.keys().next().value);
             }
-            romanizationCache.set(cacheKey, roma);
+            romanizationCache.set(cacheKey, { value: roma, ts: Date.now() });
           }
         }
-      } catch (e) { /* skip failed individual romanization */ }
+      }
+    } catch (e) {
+      console.warn('[Background] Batch LLM romanization failed:', e.message);
+      // Fallback: individual calls only if batch completely failed
+      for (let i = 0; i < uncachedTexts.length; i++) {
+        try {
+          const resp = await _fetchWithTimeout(`${translationUrl}/v1/chat/completions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              messages: [
+                { role: "system", content: romaSystemPrompt },
+                { role: "user", content: uncachedTexts[i] }
+              ],
+              max_tokens: 200, temperature: 0.1, stream: false
+            })
+          }, 30000);
+          if (resp.ok) {
+            const r = await resp.json();
+            let roma = _cleanRomanization(r.choices?.[0]?.message?.content || '');
+            results[uncachedIndices[i]] = roma;
+            if (roma) {
+              const cacheKey = `roma||${srcLang}||${uncachedTexts[i]}`;
+              if (romanizationCache.size >= ROMANIZATION_CACHE_MAX) {
+                romanizationCache.delete(romanizationCache.keys().next().value);
+              }
+              romanizationCache.set(cacheKey, { value: roma, ts: Date.now() });
+            }
+          }
+        } catch (e2) { /* skip */ }
+      }
     }
 
     sendResponse({ success: true, romanizations: results });
@@ -710,7 +854,7 @@ function _buildBatchPrompt(srcLang, targetLang, customPrompt) {
 async function handleTranslateBatch(batchText, count, sendResponse) {
   try {
     const { settings } = await chrome.storage.local.get(['settings']);
-    const translationUrl = settings?.translationUrl || 'http://localhost:5000';
+    const translationUrl = _translationUrl(settings);
     const srcLang = settings?.sourceLanguage || 'ja';
     const tgtLang = settings?.targetLanguage || 'English';
 
@@ -725,7 +869,7 @@ async function handleTranslateBatch(batchText, count, sendResponse) {
       if (!m) continue;
       const idx = parseInt(m[1]) - 1;
       const text = m[2].trim();
-      const cacheKey = `${srcLang}||${tgtLang}||${text}`;
+      const cacheKey = `${srcLang}||${tgtLang}||${translationUrl}||${text}`;
       const cached = _getCachedTranslation(cacheKey);
       if (cached) {
         results[idx] = cached;
@@ -766,7 +910,7 @@ async function handleTranslateBatch(batchText, count, sendResponse) {
       const translation = (newTranslations[i] || '').trim();
       results[originalIdx] = translation;
       if (translation) {
-        _setCachedTranslation(`${srcLang}||${tgtLang}||${text}`, translation);
+        _setCachedTranslation(`${srcLang}||${tgtLang}||${translationUrl}||${text}`, translation);
       }
     }
 
@@ -811,7 +955,7 @@ function _parseBatchResponse(raw, expectedCount) {
 async function handleListModels(sendResponse) {
   try {
     const { settings } = await chrome.storage.local.get(['settings']);
-    const whisperUrl = settings?.whisperUrl || 'http://localhost:5001';
+    const whisperUrl = _whisperUrl(settings);
     const response = await _whisperFetch(`${whisperUrl}/translation/models`, {}, 8000);
     if (!response.ok) throw new Error(`Model list failed: ${response.status}`);
     const data = await response.json();
@@ -839,7 +983,7 @@ async function handleListFonts(sendResponse) {
 async function handleClearServerCache(sendResponse) {
   try {
     const { settings } = await chrome.storage.local.get(['settings']);
-    const whisperUrl = settings?.whisperUrl || 'http://localhost:5001';
+    const whisperUrl = _whisperUrl(settings);
     const response = await _whisperFetch(`${whisperUrl}/cache/clear`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }
     });
@@ -858,7 +1002,7 @@ async function handleClearServerCache(sendResponse) {
 
 async function handleUpdateBlacklist(blacklist, whisperUrl, sendResponse) {
   try {
-    const url = whisperUrl || 'http://localhost:5001';
+    const url = whisperUrl || DEFAULT_SETTINGS.whisperUrl;
     const response = await _whisperFetch(`${url}/blacklist/update`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -876,7 +1020,7 @@ async function handleUpdateBlacklist(blacklist, whisperUrl, sendResponse) {
 async function handleFetchPatterns(sendResponse) {
   try {
     const { settings } = await chrome.storage.local.get(['settings']);
-    const whisperUrl = settings?.whisperUrl || 'http://localhost:5001';
+    const whisperUrl = _whisperUrl(settings);
     const response = await _whisperFetch(`${whisperUrl}/hallucination_patterns`, {}, 5000);
     if (!response.ok) throw new Error(`Pattern fetch failed: ${response.status}`);
     const data = await response.json();
@@ -896,7 +1040,7 @@ chrome.commands.onCommand.addListener(async (command) => {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (tab?.id) {
-        chrome.tabs.sendMessage(tab.id, { action: 'TOGGLE_SUBTITLES' }, (response) => {
+        chrome.tabs.sendMessage(tab.id, { action: 'TOGGLE_SUBTITLES' }, (_response) => {
           if (chrome.runtime.lastError) {
             console.log('[Background] Shortcut: no content script on this tab');
           }

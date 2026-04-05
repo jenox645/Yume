@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Yume - AI Subtitles",
-  "version": "5.7.0",
+  "version": "0.0.8",
   "description": "You Understand More Easily - Real-time AI subtitles for any video, fully local",
   
   "browser_specific_settings": {
@@ -55,6 +55,7 @@
       ],
       "js": [
         "js/debug-system.js",
+        "js/wanakana_min.js",
         "js/subtitle-window.js",
         "js/audio-capture.js",
         "js/content.js"

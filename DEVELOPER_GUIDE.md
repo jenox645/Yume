@@ -1,6 +1,6 @@
 # Developer Guide
 
-> Yume v5.7.0 · Pocket Yume CLI
+> Yume v0.0.8 · Pocket Yume CLI
 
 ## Setup
 
@@ -75,6 +75,14 @@ The extension sends batch translation requests to the LLM with numbered segments
 
 The LLM responds with numbered translations. `_parseBatchResponse()` parses by `[N]` markers. If the LLM returns fewer than expected, missing slots stay empty (no positional fallback — misaligned translations are worse than missing ones).
 
+### Translation-only retry
+
+When translation fails mid-pipeline, the system retries translation up to 3 times with exponential backoff — without re-transcribing the audio. This avoids wasting the expensive Whisper pass. After 3 consecutive failures, the pipeline stores source-only segments (with empty `english` fields) so the subtitle display continues with original text rather than blocking the entire pipeline.
+
+### Startup parallelization
+
+The yt-dlp and ffmpeg availability checks at server startup now run in parallel (via `concurrent.futures.ThreadPoolExecutor`) instead of sequentially, reducing startup time by ~1-2s.
+
 ### Settings migration
 
 When settings keys are renamed (e.g., `showJapanese` → `showOriginal` in v4.6.0), the migration runs at `loadSettings()` in popup.js:
@@ -87,6 +95,63 @@ if ('showJapanese' in raw && !('showOriginal' in raw)) {
 }
 ```
 
+
+## Whisper Model Loading
+
+### How the model flows from config to inference
+
+```
+yume_config.json: "whisper_model": "large-v3"  (or a local path)
+    ↓
+pocket_yume.py: reads cfg["whisper_model"], passes --model to server
+    ↓
+faster_whisper_server.py: argparse --model → model_name → WhisperModel(model_name, ...)
+    ↓
+faster-whisper: if model_name is a path → load from disk
+                if model_name is a name → download from HuggingFace → ~/.cache/huggingface/hub/
+```
+
+### Model storage locations
+
+| What | Where |
+|------|-------|
+| Standard Whisper models (auto-downloaded) | `~/.cache/huggingface/hub/models--Systran--faster-whisper-{name}/` |
+| Older faster-whisper cache (legacy) | `~/.cache/faster_whisper/` |
+| Custom/fine-tuned models | Wherever you put them — set path in config |
+| Translation GGUF models | `models/translation/` inside the Yume project folder |
+
+### Custom model support
+
+`WhisperModel()` from faster-whisper accepts either a model name (e.g., `"large-v3"`) or a local directory path (e.g., `"/home/user/my-finetuned-whisper"`). The directory must contain CTranslate2 format files: `model.bin`, `config.json`, `tokenizer.json`, `vocabulary.txt`.
+
+The config key `whisper_model` is passed directly to `WhisperModel()`, so setting it to a path works:
+
+```json
+{
+  "whisper_model": "/path/to/my-ct2-model",
+  "whisper_model_name": "My Fine-tune"
+}
+```
+
+The optional `whisper_model_name` key provides a friendly display name for custom models. When set, it appears in the CLI menus, the popup's Active Model display, and the server's `/stats` response. If empty, the directory name is used instead.
+
+The popup model switcher dynamically adds custom models to the dropdown when the server reports a custom path via `/stats`. The CLI's Whisper Model menu (`_menu_whisper_model()`) includes a "Custom model (local path)" option that validates the CTranslate2 directory structure and prompts for a friendly name.
+
+### Converting models to CTranslate2
+
+Fine-tuned Whisper checkpoints (HuggingFace format or OpenAI format) must be converted before use:
+
+```bash
+# From OpenAI checkpoint
+ct2-openai-whisper-converter --model /path/to/checkpoint --output_dir /path/to/ct2-model
+
+# From HuggingFace model
+ct2-transformers-converter --model user/model-name --output_dir /path/to/ct2-model --quantization float16
+```
+
+### Adding a custom model to the popup switcher
+
+If you want to add a new model name to the hot-swap dropdown, update `valid_models` in `switch_model()` in `faster_whisper_server.py` and add a matching `<option>` in `popup.html` under the Whisper Model section.
 
 ## Font System
 
@@ -109,30 +174,156 @@ const BUNDLED_FONTS = [
 
 Place the file in `extension/fonts/` and reload the extension.
 
-## Common Pitfalls
+## Romanization Pipeline
 
-| Pitfall | Why | Prevention |
-|---------|-----|------------|
-| `subprocess.run()` on Windows | cp1252 encoding crashes on Japanese output | Always use `_run()` wrapper |
-| `except: pass` | Swallows SystemExit, KeyboardInterrupt, MemoryError | Use specific types + `_log.debug()` |
-| `chrome.storage.session` in popup | Data lost when popup closes | Use `chrome.storage.local` for persistent settings |
-| Translation `\|\| seg.text` fallback | Shows source text as translation (misleading) | Leave `english` empty if LLM fails |
-| LLM timeout 30s default | 12B models on consumer GPUs need 15-60s | Pass `120000` explicitly to `_fetchWithTimeout` |
-| `no_speech_threshold=0.45` | Drops sung vocals over instruments | Set to 0.6+ for music content |
-| Helper functions swallowing `env=` | CUDA/ROCm build silently falls back to CPU | Always pass `env=` through any wrapper that calls `_run()` or `subprocess.run()` |
-| Config key exists but is never used | Feature looks active but is a no-op (deno bug) | Run `pytest tests/test_integration.py` — dead config detection catches this |
-| `tempfile.mkdtemp()` without cleanup | Failed downloads leak ~50MB dirs in system temp | Always `shutil.rmtree(tmp_dir)` in error/finally paths |
-| Caching empty results | Stale empty cache served forever on re-runs | Never cache results with 0 segments — they may be transient failures |
-| `innerHTML` with user content | XSS if Whisper returns `<script>` in hallucinated text | Always use `_escapeHtml()` for any text from Whisper/LLM responses |
-| Translation cache with no TTL | Model switch serves old model's translations | Set a TTL (30 min) so cache expires after model changes |
-| Batch parser drops unnumbered LLM output | Translation looks empty when LLM responds without `[N]` markers | Use positional fallback when no markers found, check content not just array length |
-| Session saves untranslated placeholders | Page reload restores `english: ''` segments | Only save fully translated chunks to session storage |
-| `cublas64_12.dll` not found | CUDA Toolkit incomplete — model loads but inference crashes | Detect in prewarm, auto-fall back to CPU, show install instructions |
-| Unbounded caches | Memory grows forever on long-running servers | Always enforce `_CACHE_MAX` with eviction on insert |
-| Server config overlay overwrites CLI args | CLI resolves `auto` → `cuda`, but server reads config and gets `auto` back | Don't load `whisper_device`/`whisper_compute_type` from config in server — CLI already resolves them |
-| Missing stdlib import | Adding `logging.basicConfig()` without `import logging` crashes server on startup | Run `pytest tests/test_integration.py` — `TestImportCompleteness` catches this via AST |
-| Translation server shows red while busy | LLM takes 10-20s per request, health endpoint times out | Use socket connect fallback + require 3 consecutive failures before showing disconnected |
-| Non-UTF-8 bytes in model metadata | llama.cpp log callback hits `UnicodeDecodeError` on tokenizer metadata | Set `PYTHONUTF8=1` in the translation subprocess environment |
+Two strategies, chosen by language:
+
+| Strategy | Languages | Library | Speed | Speculative? |
+|----------|-----------|---------|-------|-------------|
+| Deterministic | ja (`pykakasi`), zh (`pypinyin`), ko (`romanization`) | Server-side | <100ms | Yes — always computed in parallel with translation |
+| LLM-based | ru, ar, and fallback for ja/zh/ko if libs missing | Translation LLM | 5-30s | No — only when romaji enabled |
+
+**Key implementation details:**
+- pykakasi pre-loads in a background thread before Whisper model load. Accessor `_get_kakasi()` uses `threading.Lock()`. Probe timeout: 60s.
+- Translation and romanization run via `Promise.all()` in `audio-capture.js` — romanization only needs source text, not translation output.
+- LLM romanization prompt customizable via `romanization_prompt` config key (`{src}` and `{sys}` placeholders). Flows: CLI config → server → `/health` → extension auto-discovers.
+
+## Developer Conventions
+
+These are enforced rules, not suggestions. The test suite and CI check most of them.
+
+### Subprocess: no shell, no os.system
+
+Never use `shell=True`, `os.system()`, or pipe-to-shell patterns. All process launches must use explicit argv lists.
+
+```python
+# WRONG — shell injection risk, breaks on paths with spaces
+os.system("cls")
+subprocess.run(["chcp", "65001"], shell=True)
+subprocess.Popen([str(path)], shell=True)
+_run(["bash", "-c", "curl -fsSL https://example.com/install.sh | sh"])
+
+# CORRECT
+subprocess.run(["cmd", "/c", "cls"])                          # Windows clear
+ctypes.windll.kernel32.SetConsoleOutputCP(65001)              # Windows codepage
+subprocess.Popen([str(path)])                                  # launch exe directly
+download_file(url, script, "label"); _run(["bash", str(script)])  # download first
+sys.stdout.write("\033[2J\033[H"); sys.stdout.flush()          # ANSI clear (Unix)
+```
+
+On Windows, use `ctypes.windll.kernel32` for console operations (codepage, VT100) instead of `cmd.exe` wrappers.
+
+### innerHTML: always escape dynamic content
+
+Any value from a server response, user input, or external source must go through `_escapeHtml()` before being inserted into `innerHTML`. Static HTML structure is fine — dynamic values are not.
+
+```javascript
+// WRONG — backend name could contain <script> tags
+html += `<b>${backend}</b>`;
+html += `${m.name}`;
+
+// CORRECT
+html += `<b>${_escapeHtml(backend)}</b>`;
+html += `${_escapeHtml(m.name)}`;
+```
+
+For subtitle content, always use `textContent` (already enforced in `subtitle-window.js`).
+
+### URL defaults: use helpers, not literals
+
+Default server URLs live in `DEFAULT_SETTINGS` (background.js) and `getDefaultSettings()` (popup.js). Never hardcode `'http://localhost:5001'` or `'http://localhost:5000'` inline.
+
+```javascript
+// WRONG — scattered fallbacks that drift if ports change
+const whisperUrl = settings?.whisperUrl || 'http://localhost:5001';
+
+// CORRECT — single source of truth
+const whisperUrl = _whisperUrl(settings);
+const translationUrl = _translationUrl(settings);
+```
+
+### Dependencies: pin exact versions
+
+All Python packages use `==` (exact version), never `>=` (minimum). This applies to `requirements.txt` and all inline `pip install` calls in `pocket_yume.py`.
+
+```
+# WRONG — untested future versions auto-install
+faster-whisper>=1.0.0
+
+# CORRECT — deliberately tested version
+faster-whisper==1.2.1
+```
+
+When upgrading a dependency: update the version in `requirements.txt`, update all inline `pip install` calls in `pocket_yume.py` (search for the package name — there may be 2-3 copies), test, then commit.
+
+### Version bumping
+
+Version must match in **all** of these locations (the test suite checks most of them):
+
+1. `pocket_yume.py` → `VERSION = "X.Y.Z"` + docstring
+2. `faster_whisper_server.py` → `"version": "X.Y.Z"` in /health + startup banner + docstring
+3. `extension/manifest.json` → `"version": "X.Y.Z"`
+4. `extension/manifest_firefox.json` → `"version": "X.Y.Z"`
+5. `extension/popup.html` → `vX.Y.Z`
+6. `extension/popup.js` → comment header
+7. `extension/js/background.js` → comment header + `version:` in onInstalled
+8. `extension/js/audio-capture.js` → comment header
+9. `extension/js/subtitle-window.js` → comment header
+10. `extension/js/content.js` → comment header
+11. `README.md` → badge `version-X.Y.Z-blue`
+12. `ARCHITECTURE.md` → `vX.Y.Z`
+13. `DEVELOPER_GUIDE.md` → `vX.Y.Z`
+14. `tests/test_integration.py` → docstring
+
+Use `sed -i 's/5\.8\.0/5.9.0/g'` across all files, then verify with `pytest tests/test_integration.py::TestVersionConsistencyExtended -v`.
+
+### Single-file CLI: don't split pocket_yume.py
+
+`pocket_yume.py` is one file by design (~4100 lines). Users must be able to run `python pocket_yume.py` after downloading a single file. Only `config.py` has been extracted (it's imported at the top). Don't create new modules.
+
+### Config keys: must be used or exempted
+
+Every key in `DEFAULT_CONFIG` (config.py) must be referenced in application code. The dead config detection test (`TestDeadConfigDetection`) catches orphaned keys. If you add a key that's intentionally display-only, add it to `EXEMPT_KEYS` in the test with a comment explaining why.
+
+### Server config: CLI resolves, server trusts
+
+The CLI resolves `"auto"` → `"cuda"` (or `"cpu"`) and passes the result to the server via `--device`. The server must **not** re-read `whisper_device` or `whisper_compute_type` from the config file — this caused the v5.7.0 CPU bug.
+
+### Error handling: specific exceptions, not bare except
+
+```python
+# WRONG
+except:
+    pass
+
+# CORRECT
+except (FileNotFoundError, PermissionError) as e:
+    _log.debug(f"Non-critical: {e}")
+```
+
+`except Exception` is acceptable for top-level fallbacks where you log the error. Never catch `BaseException` or bare `except:`.
+
+### Temp files: always clean up
+
+Every `tempfile.mkdtemp()` must have a matching `shutil.rmtree()` in the error path. Prefer `try/finally` or ensure the function's error return path includes cleanup. The startup function `_cleanup_stale_temps()` catches leaks, but don't rely on it.
+
+## Common Pitfalls (Yume-specific)
+
+| Pitfall | Prevention |
+|---------|------------|
+| Hardcoded `localhost:5001` | Use `_whisperUrl()` / `_translationUrl()` helpers |
+| `subprocess.run()` on Windows | Use `_run()` wrapper (forces UTF-8, avoids cp1252 crashes) |
+| Unescaped `innerHTML` | Always `_escapeHtml()` for Whisper/LLM output |
+| `chrome.storage.session` in popup | Use `chrome.storage.local` — session data lost on popup close |
+| LLM timeout 30s default | 12B models need 15-60s — pass `120000` to `_fetchWithTimeout` |
+| `no_speech_threshold=0.45` | Drops sung vocals — use 0.6+ for music |
+| Config key exists but unused | `pytest tests/test_integration.py` catches dead config keys |
+| `tempfile.mkdtemp()` without cleanup | Always `shutil.rmtree()` in error/finally paths |
+| Caching empty results | Never cache 0-segment results — may be transient failures |
+| Translation cache with no TTL | Set 30-min TTL so model switches don't serve stale data |
+| Server config overlay overwrites CLI args | Don't load `whisper_device` from config in server — CLI resolves it |
+| `cublas64_12.dll` not found | Prewarm detects and auto-falls back to CPU |
+| Unpinned dependencies (`>=`) | Always use `==` in requirements.txt |
 
 ## Adding a New Feature
 
@@ -143,10 +334,35 @@ Place the file in `extension/fonts/` and reload the extension.
 5. Test with `--verbose` to see debug output
 6. Run `pytest tests/ -v` to verify nothing broke
 
+## Linting (Ruff)
+
+Yume uses [Ruff](https://docs.astral.sh/ruff/) for Python linting. Configuration lives in `pyproject.toml` at the project root:
+
+```bash
+ruff check .                 # check all files
+ruff check --fix .           # auto-fix what it can
+ruff check pocket_yume.py    # check one file
+```
+
+### pyproject.toml rules
+
+- **Selected**: `E` (pycodestyle errors), `F` (pyflakes), `W` (warnings)
+- **Ignored globally**: `E501` (line too long — handled separately)
+- **Per-file ignores**: `E402` on `pocket_yume.py` and `tests/*` (imports after version/path checks are intentional)
+
+### Suppressed warnings (intentional)
+
+- **`# noqa: F401`** on import availability checks (e.g., `import pykakasi` inside try/except to set a `has_pykakasi` flag). These imports are used for their side effect, not their name.
+- **`E402`** on `pocket_yume.py` lines 38-40: `from config import ...` must come AFTER the Python 3.10 version check on line 13.
+
+### Before committing
+
+Run `ruff check .` and ensure zero violations. The CI will reject PRs with lint errors.
+
 ## Testing
 
 ```bash
-pytest tests/ -v                           # all tests (54 as of v5.7.0)
+pytest tests/ -v                           # all tests
 pytest tests/test_integration.py -v        # integration tests
 pytest tests/test_config.py -v             # config unit tests
 pytest tests/test_server_logic.py -v       # server logic tests
@@ -225,21 +441,14 @@ START_YUME.bat/sh/command
 
 ### Known installation failure points
 
-| Step | Failure | Symptom | Handling |
-|------|---------|---------|----------|
-| `install_python_deps()` | Missing C++ build tools on Windows | `Microsoft Visual C++ is required` | Detects missing MSVC, shows download URL |
-| `install_llamacpp_python()` | CUDA prebuilt wheel unavailable for Python version | Silent fallback to CPU | Shows elapsed timer, falls back through: CUDA prebuilt → CUDA source → CPU prebuilt → CPU source |
-| `install_llamacpp_python()` | ROCm not installed on AMD Linux | `cannot find -lhipblas` | Shows ROCm install commands per distro |
-| `install_llamacpp_python()` | No ninja/cmake on Linux/macOS | Build from source fails | `_install_build_tools()` auto-installs via package manager |
-| `install_ffmpeg()` | Download URL changed | 404 error | Shows "URL may have changed, try updating Yume" |
-| `install_ytdlp()` | GitHub rate-limited | Download fails | Caught by `download_file()` error handler |
-| `browse_hf()` | HuggingFace rate-limited | Slow or failed download | User sees progress bar, can retry |
-| Server launch | `cublas64_12.dll` missing | Model loads but transcription crashes | Prewarm detects and auto-falls back to CPU |
-| Server launch | Port already in use | Server won't bind | `ensure_port_free()` offers to kill or reassign |
-| Server launch | Python 3.13+ incompatible wheels | `pip install` fails for binary packages | Not yet handled — document minimum Python |
+| Step | Failure | Handling |
+|------|---------|----------|
+| `install_python_deps()` | Missing C++ build tools (Windows) | Detects missing MSVC, shows download URL |
+| `install_llamacpp_python()` | No CUDA/ROCm prebuilt wheel | Falls back: CUDA prebuilt → source → CPU prebuilt → source |
+| `install_ffmpeg()` / `install_ytdlp()` | Download URL changed or rate-limited | Error handler shows retry guidance |
+| Server launch | `cublas64_12.dll` missing | Prewarm detects, auto-falls back to CPU |
+| Server launch | Port in use | `ensure_port_free()` offers to kill or reassign |
 
 ### Python version compatibility
 
-`faster-whisper` and `llama-cpp-python` ship pre-built wheels for specific Python versions. If the user has a version without wheels (e.g., Python 3.14), pip falls back to building from source, which requires C++ build tools. The wizard handles this on Linux/macOS (`_install_build_tools()`) but on Windows, the user must install Visual Studio Build Tools manually.
-
-Tested Python versions: 3.10, 3.11, 3.12, 3.13. Python 3.14 works but requires build tools on all platforms.
+Tested: 3.10, 3.11, 3.12, 3.13, 3.14. Versions without pre-built wheels (3.14) require C++ build tools — the wizard auto-installs on Linux/macOS, but Windows users need Visual Studio Build Tools.

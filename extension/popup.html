@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>Yume</title>
@@ -10,7 +10,7 @@
     <div class="yume-header">
       <div class="deco-line top-line"></div>
       <h1 class="yume-title">Yume</h1>
-      <div class="yume-subtitle">v5.7.0</div>
+      <div class="yume-subtitle">v0.0.8</div>
       <div class="deco-line bottom-line"></div>
     </div>
 
@@ -148,7 +148,8 @@
             <span class="setting-label">Timing Offset</span>
             <div class="setting-value-group">
               <input type="range" id="timingOffset" aria-label="Subtitle timing offset" min="-30" max="30" value="0" step="1" class="yume-range">
-              <span id="timingOffsetVal" class="setting-unit">0.0s</span>
+              <input type="number" id="timingOffsetVal" class="yume-input" style="width:60px;text-align:center" min="-3" max="3" step="0.1" value="0.0">
+              <span class="setting-unit">s</span>
             </div>
           </div>
           <div class="setting-hint" style="margin-top:2px;font-size:11px">Shift subtitles earlier (−) or later (+). 1 tick = 0.1s</div>
@@ -365,6 +366,7 @@
               <option value="medium">medium (~5GB)</option>
               <option value="large-v2">large-v2 (~10GB)</option>
               <option value="large-v3" selected>large-v3 (~10GB)</option>
+              <option value="large-v3-turbo">turbo (~4GB)</option>
               <option value="distil-large-v2">distil-large-v2 (~4GB)</option>
               <option value="distil-large-v3">distil-large-v3 (~4GB)</option>
             </select>

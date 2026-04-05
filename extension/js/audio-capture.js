@@ -1,7 +1,18 @@
 // ============================================================================
-// AUDIO CAPTURE v3.9.0 - Download-once + parallel pipeline (Yume v5.7.0)
+// AUDIO CAPTURE v3.10.0 - Download-once + parallel pipeline (Yume v0.0.8)
 // Translation and romanization are SEPARATE API calls
 // ============================================================================
+
+const _DEFAULT_WHISPER_URL = 'http://localhost:5001';
+
+// Languages with instant deterministic romanization (no LLM needed).
+// ja: WanaKana (client-side), ko: hangul decomposition (client-side),
+// ru: cyrillic transliteration (client-side), zh: pypinyin (server-side).
+const DETERMINISTIC_ROMA_LANGS = new Set(['ja', 'zh', 'ko', 'ru']);
+
+// Cached result of deterministic romanization probe (null = not yet checked)
+let _deterministicRomaAvailable = null;
+let _deterministicRomaProbeTime = 0;  // timestamp of last probe (for re-probe on failure)
 
 class AudioCapture {
   constructor() {
@@ -11,6 +22,8 @@ class AudioCapture {
     this.videoUrl       = null;
     this.videoId        = null;
     this.sourceLanguage = 'ja';
+    this.showEnglish    = true;
+    this.showRomaji     = false;
 
     // Chunk geometry
     this.chunkDuration  = 30;
@@ -120,8 +133,8 @@ class AudioCapture {
     while (true) {
       try {
         const healthResp = await this._sendMessage({ type: 'CHECK_SERVER', isWhisper: true,
-          url: (await new Promise(r => chrome.storage.local.get(['settings'], r)))?.settings?.whisperUrl + '/health'
-            || 'http://localhost:5001/health'
+          url: ((await new Promise(r => chrome.storage.local.get(['settings'], r)))?.settings?.whisperUrl
+            || _DEFAULT_WHISPER_URL) + '/health'
         });
         if (healthResp?.healthy) break;  // Server ready
         if (healthResp?.loading) {
@@ -140,6 +153,11 @@ class AudioCapture {
         throw new Error('Whisper server not reachable — is Yume running?');
       }
     }
+
+    // Probe deterministic romanization AFTER server is confirmed ready.
+    // Must be here, not before health check — the server needs to be up
+    // for the probe to reach pykakasi/pypinyin on the server.
+    await this._probeDeterministicRoma();
 
     window.dispatchEvent(new CustomEvent('display-status', {
       detail: { message: 'Downloading audio...', type: 'loading' }
@@ -174,10 +192,29 @@ class AudioCapture {
       detail: { message: 'Transcribing...', type: 'loading' }
     }));
 
+    // Always fetch chunk 0 first — the video may have advanced during the
+    // prepare phase (audio download takes 5-30s), causing _chunkForTime()
+    // to return chunk 1+ and skip the beginning of the video entirely.
+    if (startChunk > 0 && !this.fetchedChunks.has(0)) {
+      DEBUG.info('AudioCapture', `Video advanced to chunk ${startChunk} during prepare — fetching chunk 0 first`);
+      await this._fetchChunk(0);
+    }
     await this._fetchChunk(startChunk);
-    // First chunk is done — signal Ready (pipeline is working).
-    // Subtitles will appear when playback reaches a position with vocals.
-    this._signalReady();
+    // Always signal ready so the pipeline + timeupdate handler can start.
+    // If the first chunk(s) had no vocals (instrumental intro, silence, etc.),
+    // show a different status so the user doesn't see "Ready ✓" with 0 subtitles.
+    // NOTE: fetchedChunks includes empty chunks (0 segments), so we must check
+    // whether any fetched chunk has actual subtitle content, not just chunk count.
+    const hasSubtitles = Array.from(this.fetchedChunks).some(i =>
+      this.subtitleChunks[i] && this.subtitleChunks[i].length > 0
+    );
+    if (hasSubtitles) {
+      this._signalReady();
+    } else {
+      window.dispatchEvent(new CustomEvent('display-status', {
+        detail: { message: 'Processing — no vocals detected yet', type: 'loading' }
+      }));
+    }
 
     this.timeUpdateHandler = () => this._onTimeUpdate();
     video.addEventListener('timeupdate', this.timeUpdateHandler);
@@ -248,16 +285,28 @@ class AudioCapture {
 
   // =========================================================================
   // EAGER PIPELINE (parallel: transcribe N+1 while translating N)
+  // CRITICAL: Only ONE translation runs at a time. The LLM is single-threaded.
+  // Firing multiple concurrent translations causes timeouts and lost results.
   // =========================================================================
 
   async _runPipeline() {
     if (this.pipelineRunning) return;
     this.pipelineRunning = true;
     const gen = this.generation;
+    let pendingTranslation = null;  // Promise for the current in-flight translation
 
     while (this.isCapturing && !this.fetchingStopped && gen === this.generation) {
       const next = this._nextChunkToFetch();
       if (next === -1) {
+        // All chunks are either fetched or in-flight. Wait for the last translation.
+        if (pendingTranslation) {
+          await pendingTranslation;
+          pendingTranslation = null;
+          // The translation might have FAILED, leaving the chunk in limbo
+          // (not in fetchedChunks, not in fetchingChunks). Loop back to check
+          // if there are now retryable chunks instead of breaking immediately.
+          if (this.fetchedChunks.size < this.totalChunks) continue;
+        }
         const nonEmpty = Array.from(this.fetchedChunks).filter(i => 
           this.subtitleChunks[i] && this.subtitleChunks[i].length > 0
         ).length;
@@ -280,16 +329,22 @@ class AudioCapture {
 
       if (this.fetchingChunks.has(next)) { await this._sleep(500); continue; }
 
+      // Wait for previous translation to finish before starting next transcription.
+      // This ensures at most 1 translation is in flight at any time.
+      // The overlap is: transcribe(N) happens while translate(N-1) finishes.
+      if (pendingTranslation) {
+        await pendingTranslation;
+        pendingTranslation = null;
+      }
+
       // Phase 1: Transcribe this chunk (Whisper server)
       const transcribeResult = await this._transcribeOnly(next);
       if (gen !== this.generation) break; // video changed, abort
       if (!transcribeResult) continue; // error or empty, already handled
 
-      // Phase 2: Fire translation in background (LLM server) — don't await!
-      // This frees the Whisper server to handle the next chunk immediately
-      this._translateAndFinalize(next, transcribeResult.segments, transcribeResult.whisperTime, transcribeResult.t0, gen, transcribeResult.wasCached);
-      // No await ^ — loop immediately to transcribe next chunk
-      // The translation promise runs concurrently with next transcription
+      // Phase 2: Fire translation in background — don't await!
+      // Next loop iteration will await it before starting the NEXT transcription.
+      pendingTranslation = this._translateAndFinalize(next, transcribeResult.segments, transcribeResult.whisperTime, transcribeResult.t0, gen, transcribeResult.wasCached);
     }
 
     this.pipelineRunning = false;
@@ -337,7 +392,14 @@ class AudioCapture {
 
     if (!this.fetchedChunks.has(currentChunk) && !this.fetchingChunks.has(currentChunk)) {
       this.priorityChunk = currentChunk;
-      if (!this.pipelineRunning && !this.fetchingStopped) this._runPipeline();
+      // If pipeline stopped due to empty streak but user seeked to a new region,
+      // clear the stop flag — the new region may have audio
+      if (this.fetchingStopped) {
+        this.fetchingStopped = false;
+        this.emptyChunkCount = 0;
+        DEBUG.info('AudioCapture', `User seeked to unfetched chunk ${currentChunk} — resuming pipeline`);
+      }
+      if (!this.pipelineRunning) this._runPipeline();
     }
 
     this._showSubtitleAt(t);
@@ -426,7 +488,11 @@ class AudioCapture {
         this._dispatchProgress();
 
         this.emptyChunkCount++;
-        if (this.emptyChunkCount >= this.maxEmptyChunks) {
+        // Only stop the pipeline if many chunks remain unfetched.
+        // When only a few chunks are left (end-of-song outros), keep going
+        // so backward-ripple stragglers aren't abandoned as "not processed".
+        const unfetchedRemaining = this.totalChunks - this.fetchedChunks.size;
+        if (this.emptyChunkCount >= this.maxEmptyChunks && unfetchedRemaining > 3) {
           this.fetchingStopped = true;
           this._addDiag(chunkIndex, 'stopped', 0, 0, 'Too many empty chunks — try Clear Cache if subtitles are missing');
         }
@@ -463,33 +529,62 @@ class AudioCapture {
 
     const { segments: cleanSegments, whisperTime, t0, wasCached } = result;
 
+    // Store source-only placeholders IMMEDIATELY so original text is visible
+    // even if translation fails (graceful degradation)
+    const placeholders = cleanSegments.map(seg => ({
+      start: seg.start, end: seg.end,
+      original: seg.text, english: '', romaji: '',
+      confidence: seg.confidence || 0
+    }));
+    this.subtitleChunks[chunkIndex] = placeholders;
+
     try {
       // 2. Translate (skip entirely if translation is disabled)
       const tTrans = performance.now();
       const { settings: transSettings } = await new Promise(r => chrome.storage.local.get(['settings'], r));
+      const srcLang = transSettings?.sourceLanguage || this.sourceLanguage || 'ja';
+      const isDeterministic = DETERMINISTIC_ROMA_LANGS.has(srcLang);
+
+      // Decide whether to romanize:
+      // - Deterministic languages (ja/zh/ko): ALWAYS (speculative — nearly free, <100ms)
+      // - LLM languages (ru/ar): only if user enabled showRomaji
+      const shouldRomanize = isDeterministic || transSettings?.showRomaji;
+
       let translated;
       if (transSettings?.showEnglish === false) {
-        translated = cleanSegments.map(seg => ({
-          start: seg.start, end: seg.end,
-          original: seg.text, english: '', romaji: '',
-          confidence: seg.confidence || 0
-        }));
+        translated = placeholders;
       } else {
-        translated = await this._translateBatch(cleanSegments);
+        // Romanization strategy depends on whether deterministic (instant) is available:
+        // - Deterministic (pykakasi/pypinyin): parallel with translation (free, <100ms)
+        // - LLM-only: AFTER translation (they share the same LLM, can't parallelize)
+        const canParallelRoma = shouldRomanize && _deterministicRomaAvailable === true;
+
+        if (canParallelRoma) {
+          // Parallel: translation + romanization fire simultaneously
+          const origTexts = cleanSegments.map(seg => seg.text);
+          const [batchResult, romaResult] = await Promise.all([
+            this._translateBatch(cleanSegments),
+            this._romanizeTexts(origTexts, srcLang)
+          ]);
+          translated = batchResult;
+          if (romaResult) {
+            for (let i = 0; i < translated.length && i < romaResult.length; i++) {
+              if (romaResult[i]) translated[i].romaji = romaResult[i];
+            }
+          }
+        } else {
+          // Sequential: translate first, then romanize (LLM-only or no romaji)
+          translated = await this._translateBatch(cleanSegments);
+          if (shouldRomanize) {
+            try {
+              await this._romanizeBatch(translated);
+            } catch (e) { /* romanization is optional */ }
+          }
+        }
       }
       const transTime = ((performance.now() - tTrans) / 1000).toFixed(1);
 
-      // 3. Romanize if enabled
-      let romaTime = '0';
-      try {
-        if (transSettings?.showRomaji) {
-          const tRoma = performance.now();
-          await this._romanizeBatch(translated);
-          romaTime = ((performance.now() - tRoma) / 1000).toFixed(1);
-        }
-      } catch (e) { /* romanization is optional */ }
-
-      // 4. Store in cache
+      // 4. Store fully translated segments (replaces source-only placeholders)
       this.subtitleChunks[chunkIndex] = translated;
       this.fetchedChunks.add(chunkIndex);
       this.fetchingChunks.delete(chunkIndex);
@@ -503,17 +598,21 @@ class AudioCapture {
       const cacheTag = wasCached ? ' [cached]' : '';
       const transTag = transOk < transTotal ? ` [${transOk}/${transTotal} translated]` : '';
       this._addDiag(chunkIndex, 'ok', translated.length, elapsed,
-        `w:${whisperTime}s t:${transTime}s r:${romaTime}s "${preview}"${cacheTag}${transTag}`);
+        `w:${whisperTime}s t+r:${transTime}s "${preview}"${cacheTag}${transTag}`);
       this._dispatchProgress();
       this._checkAndSignalReady(chunkIndex);
 
     } catch (error) {
       const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
       this._addDiag(chunkIndex, 'error', 0, elapsed, error.message);
+      // Graceful degradation: mark chunk as fetched with source-only placeholders
+      // so original text is still visible and the pipeline doesn't retry endlessly
+      this.fetchedChunks.add(chunkIndex);
       this.fetchingChunks.delete(chunkIndex);
+      this._dispatchProgress();
       if (chunkIndex === 0) {
         window.dispatchEvent(new CustomEvent('display-error', {
-          detail: { message: `Failed: ${error.message}` }
+          detail: { message: `Translation failed: ${error.message}. Showing original text only.` }
         }));
       }
     }
@@ -527,6 +626,7 @@ class AudioCapture {
 
   // Phase 2: Translate + romanize + store. Runs concurrently with next transcription.
   // gen parameter ensures stale promises from old videos are silently dropped.
+  // Translation and romanization run IN PARALLEL — romaji only needs original text.
   async _translateAndFinalize(chunkIndex, cleanSegments, whisperTime, t0, gen, wasCached = false) {
     try {
       // Check generation — if video changed, silently abort
@@ -543,25 +643,48 @@ class AudioCapture {
       // Skip translation entirely if disabled — saves full LLM inference per chunk
       const tTrans = performance.now();
       const { settings: pSettings } = await new Promise(r => chrome.storage.local.get(['settings'], r));
+      const srcLang = pSettings?.sourceLanguage || this.sourceLanguage || 'ja';
+      const isDeterministic = DETERMINISTIC_ROMA_LANGS.has(srcLang);
+      const shouldRomanize = isDeterministic || pSettings?.showRomaji;
+
       let translated;
       if (pSettings?.showEnglish === false) {
         translated = placeholders;  // Already in correct format
       } else {
-        translated = await this._translateBatch(cleanSegments);
+        const canParallelRoma = shouldRomanize && _deterministicRomaAvailable === true;
+
+        if (canParallelRoma) {
+          const origTexts = cleanSegments.map(seg => seg.text);
+          const [batchResult, romaResult] = await Promise.all([
+            this._translateBatch(cleanSegments),
+            this._romanizeTexts(origTexts, srcLang)
+          ]);
+          translated = batchResult;
+          if (romaResult) {
+            for (let i = 0; i < translated.length && i < romaResult.length; i++) {
+              if (romaResult[i]) translated[i].romaji = romaResult[i];
+            }
+          }
+        } else {
+          translated = await this._translateBatch(cleanSegments);
+          if (shouldRomanize) {
+            try {
+              await this._romanizeBatch(translated);
+            } catch (e) { /* romanization is optional */ }
+          }
+        }
       }
       const transTime = ((performance.now() - tTrans) / 1000).toFixed(1);
 
       // Re-check generation after async translation
       if (gen !== this.generation) { this.fetchingChunks.delete(chunkIndex); return; }
 
-      let romaTime = '0';
-      try {
-        if (pSettings?.showRomaji) {
-          const tRoma = performance.now();
+      // Also romanize placeholders-only path (translation disabled but romaji enabled)
+      if (pSettings?.showEnglish === false && shouldRomanize) {
+        try {
           await this._romanizeBatch(translated);
-          romaTime = ((performance.now() - tRoma) / 1000).toFixed(1);
-        }
-      } catch (e) { /* romanization is optional */ }
+        } catch (e) { /* optional */ }
+      }
 
       // Final generation check before storing
       if (gen !== this.generation) { this.fetchingChunks.delete(chunkIndex); return; }
@@ -580,21 +703,59 @@ class AudioCapture {
       const cacheTag = wasCached ? ' [cached]' : '';
       const transTag = transOk < transTotal ? ` [${transOk}/${transTotal} translated]` : '';
       this._addDiag(chunkIndex, 'ok', translated.length, elapsed,
-        `w:${whisperTime}s t:${transTime}s r:${romaTime}s "${preview}"${cacheTag}${transTag}`);
+        `w:${whisperTime}s t+r:${transTime}s "${preview}"${cacheTag}${transTag}`);
       this._dispatchProgress();
       this._checkAndSignalReady(chunkIndex);
 
     } catch (error) {
       if (gen !== this.generation) return; // stale, ignore
-      const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-      this._addDiag(chunkIndex, 'error', 0, elapsed, 'Translate: ' + error.message);
-      this.fetchingChunks.delete(chunkIndex);
+
+      // Translation-only retry: don't re-transcribe, just retry the translation.
+      // The chunk stays in fetchingChunks during retries so the pipeline doesn't
+      // waste a Whisper inference re-transcribing it.
+      if (!this._retryCount) this._retryCount = {};
+      this._retryCount[chunkIndex] = (this._retryCount[chunkIndex] || 0) + 1;
+
+      if (this._retryCount[chunkIndex] < 3) {
+        const attempt = this._retryCount[chunkIndex];
+        const delay = 2000 * attempt;
+        const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+        this._addDiag(chunkIndex, 'retry', 0, elapsed,
+          `Translate retry ${attempt}/3 in ${delay / 1000}s: ${error.message}`);
+        // Keep in fetchingChunks — retry translation only (no re-transcription)
+        setTimeout(() => {
+          this._translateAndFinalize(chunkIndex, cleanSegments, whisperTime, t0, gen, wasCached);
+        }, delay);
+      } else {
+        // All retries exhausted — store source-only segments so pipeline completes
+        const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+        const sourceOnly = cleanSegments.map(seg => ({
+          start: seg.start, end: seg.end,
+          original: seg.text, english: '', romaji: '',
+          confidence: seg.confidence || 0
+        }));
+        this.subtitleChunks[chunkIndex] = sourceOnly;
+        this.fetchedChunks.add(chunkIndex);
+        this.fetchingChunks.delete(chunkIndex);
+        delete this._retryCount[chunkIndex];
+        this._addDiag(chunkIndex, 'error', cleanSegments.length, elapsed,
+          `Translation failed after 3 retries: ${error.message} — keeping originals`);
+        this._dispatchProgress();
+        this._checkAndSignalReady(chunkIndex);
+      }
     }
   }
 
-  _checkAndSignalReady(chunkIndex) {
-    // Ready already signaled on first chunk completion.
-    // This method just dispatches progress updates.
+  _checkAndSignalReady(_chunkIndex) {
+    // Signal ready once any chunk with actual subtitles is stored.
+    // This covers the case where the first chunk was empty (instrumental intro).
+    // Must check for real subtitle content — fetchedChunks includes empty chunks.
+    if (!this._readySignaled) {
+      const hasSubtitles = Array.from(this.fetchedChunks).some(i =>
+        this.subtitleChunks[i] && this.subtitleChunks[i].length > 0
+      );
+      if (hasSubtitles) this._signalReady();
+    }
   }
 
   _signalReady() {
@@ -604,11 +765,27 @@ class AudioCapture {
   }
 
   _dispatchProgress() {
+    // Count fully processed chunks and romanized chunks
+    // Only count chunks in fetchedChunks (not placeholders)
+    let translatedCount = 0;
+    let romanizedCount = 0;
+    for (const idx of this.fetchedChunks) {
+      const segments = this.subtitleChunks[idx];
+      if (!segments || segments.length === 0) continue;
+      if (segments.some(seg => seg.english && seg.english.length > 0)) {
+        translatedCount++;
+      }
+      if (segments.some(seg => seg.romaji && seg.romaji.length > 0)) {
+        romanizedCount++;
+      }
+    }
     window.dispatchEvent(new CustomEvent('chunk-progress', {
       detail: {
         fetched: this.fetchedChunks.size,
         total: this.totalChunks,
-        complete: this.fetchedChunks.size >= this.totalChunks
+        complete: this.fetchedChunks.size >= this.totalChunks,
+        translated: translatedCount,
+        romanized: romanizedCount
       }
     }));
     // Auto-save to session after each chunk (debounced)
@@ -733,7 +910,7 @@ class AudioCapture {
 
   exportSRT() {
     const allSegments = [];
-    for (const [idx, segments] of Object.entries(this.subtitleChunks)) {
+    for (const [_idx, segments] of Object.entries(this.subtitleChunks)) {
       for (const seg of segments) {
         if (seg.original || seg.english) allSegments.push(seg);
       }
@@ -808,24 +985,31 @@ class AudioCapture {
       DEBUG.warn('AudioCapture', 'Batch translation failed, falling back', { error: err.message });
     }
 
-    // If batch returned too few OR has empty slots, fill gaps with sequential calls
+    // If batch returned too few OR has empty slots, fill gaps
     const hasGaps = translations.length < segments.length ||
                     translations.some((t, i) => i < segments.length && (!t || t.length === 0));
     if (hasGaps) {
       const filled = translations.filter(t => t && t.length > 0).length;
-      DEBUG.info('AudioCapture', `Batch got ${filled}/${segments.length} translations, filling gaps`);
-      for (let i = 0; i < segments.length; i++) {
-        if (translations[i] && translations[i].length > 0) continue;
-        try {
-          const response = await this._sendMessage({
-            type: 'TRANSLATE',
-            text: segments[i].text,
-            sourceLang: this.sourceLanguage || 'ja'
-          });
-          if (response?.success && response.translation) {
-            if (!translations[i]) translations[i] = response.translation.trim();
-          }
-        } catch (e) { /* keep original */ }
+      const gaps = segments.length - filled;
+      DEBUG.info('AudioCapture', `Batch got ${filled}/${segments.length} translations, ${gaps} gaps`);
+
+      // Only do individual calls if there are 1-3 gaps (partial batch success).
+      // If the batch completely failed (0 results) or has many gaps, the LLM is
+      // struggling — individual calls will likely fail too. Accept partial results.
+      if (gaps <= 3 && filled > 0) {
+        for (let i = 0; i < segments.length; i++) {
+          if (translations[i] && translations[i].length > 0) continue;
+          try {
+            const response = await this._sendMessage({
+              type: 'TRANSLATE',
+              text: segments[i].text,
+              sourceLang: this.sourceLanguage || 'ja'
+            });
+            if (response?.success && response.translation) {
+              if (!translations[i]) translations[i] = response.translation.trim();
+            }
+          } catch (e) { /* keep original */ }
+        }
       }
     }
 
@@ -839,17 +1023,277 @@ class AudioCapture {
     }));
   }
 
-  // Separate romanization call — uses batch endpoint for single round trip
+  // Probe whether the Whisper server has deterministic romanization libraries installed.
+  // Called once at startup. Result cached in module-level _deterministicRomaAvailable.
+  async _probeDeterministicRoma() {
+    // If probe succeeded, keep result forever. If it failed, re-probe after 30s
+    // (server may have finished loading since the initial probe).
+    if (_deterministicRomaAvailable === true) return;
+    if (_deterministicRomaAvailable === false && Date.now() - _deterministicRomaProbeTime < 30000) return;
+    const srcLang = this.sourceLanguage || 'ja';
+
+    // Korean, Russian: always client-side
+    if (srcLang === 'ko' || srcLang === 'ru') {
+      _deterministicRomaAvailable = true;
+      const engines = { ko: 'Hangul decomposition', ru: 'Cyrillic table' };
+      DEBUG.info('AudioCapture', `Romanization: ${engines[srcLang]} (client-side, instant)`);
+      return;
+    }
+
+    // Japanese: WanaKana handles kana, but kanji needs server (pykakasi).
+    // Test with a kanji-containing string to see if server can resolve it.
+    if (srcLang === 'ja') {
+      try {
+        const response = await this._sendMessage({
+          type: 'ROMANIZE_BATCH', texts: ['東京'], sourceLang: 'ja'
+        });
+        if (response?.success && response.romanizations?.[0] &&
+            !this._hasKanji(response.romanizations[0])) {
+          _deterministicRomaAvailable = true;
+          DEBUG.info('AudioCapture', 'Romanization: WanaKana + pykakasi (instant, full kanji support)');
+        } else {
+          // Server can't handle kanji — need LLM for kanji parts (sequential after translation)
+          _deterministicRomaAvailable = false; _deterministicRomaProbeTime = Date.now();
+          DEBUG.info('AudioCapture', 'Romanization: WanaKana (kana only) + LLM for kanji (after translation)');
+        }
+      } catch (e) {
+        _deterministicRomaAvailable = false; _deterministicRomaProbeTime = Date.now();
+        DEBUG.info('AudioCapture', 'Romanization: WanaKana (kana only) + LLM for kanji (after translation)');
+      }
+      return;
+    }
+
+    // Chinese: needs server pypinyin
+    if (srcLang === 'zh') {
+      try {
+        const response = await this._sendMessage({
+          type: 'ROMANIZE_BATCH', texts: ['测试'], sourceLang: 'zh'
+        });
+        _deterministicRomaAvailable = !!(response?.success &&
+          response.romanizations?.[0]?.length > 0);
+        DEBUG.info('AudioCapture', `Pinyin: ${_deterministicRomaAvailable ? 'available (pypinyin)' : 'LLM fallback'}`);
+      } catch (e) {
+        _deterministicRomaAvailable = false; _deterministicRomaProbeTime = Date.now();
+      }
+      return;
+    }
+
+    // Arabic or other: LLM only
+    _deterministicRomaAvailable = false; _deterministicRomaProbeTime = Date.now();
+  }
+
+  // Check if text contains CJK kanji characters (U+4E00-U+9FFF, U+3400-U+4DBF)
+  _hasKanji(text) {
+    return /[\u4e00-\u9fff\u3400-\u4dbf]/.test(text);
+  }
+
+  // Client-side Japanese romanization using WanaKana (bundled, instant, no server).
+  // Converts kana (hiragana/katakana) to romaji. Kanji left as-is.
+  // Returns array of { romaji, complete } objects.
+  _romanizeJapaneseLocal(texts) {
+    if (typeof wanakana === 'undefined' || !wanakana.toRomaji) {
+      DEBUG.warn('AudioCapture', 'WanaKana not loaded');
+      return texts.map(() => ({ romaji: '', complete: false }));
+    }
+    return texts.map(text => {
+      try {
+        const result = wanakana.toRomaji(text);
+        return { romaji: result, complete: !this._hasKanji(result) };
+      } catch (e) {
+        return { romaji: '', complete: false };
+      }
+    });
+  }
+
+  // Client-side Korean romanization using Unicode Hangul decomposition.
+  // Implements Revised Romanization (official South Korean standard).
+  // Instant (<1ms), no server call needed.
+  _romanizeKoreanLocal(texts) {
+    // Revised Romanization mapping tables
+    const INITIALS = ['g','kk','n','d','tt','r','m','b','pp','s','ss','','j','jj','ch','k','t','p','h'];
+    const MEDIALS = ['a','ae','ya','yae','eo','e','yeo','ye','o','wa','wae','oe','yo','u','wo','we','wi','yu','eu','ui','i'];
+    const FINALS = ['','k','k','k','n','n','n','t','l','l','l','l','l','l','l','l','m','p','p','t','t','ng','t','t','k','t','p','t'];
+
+    return texts.map(text => {
+      const result = [];
+      for (const ch of text) {
+        const code = ch.charCodeAt(0);
+        if (code >= 0xAC00 && code <= 0xD7A3) {
+          const offset = code - 0xAC00;
+          const initial = Math.floor(offset / (21 * 28));
+          const medial = Math.floor((offset % (21 * 28)) / 28);
+          const final = offset % 28;
+          result.push(INITIALS[initial] + MEDIALS[medial] + FINALS[final]);
+        } else {
+          result.push(ch);
+        }
+      }
+      return result.join('');
+    });
+  }
+
+  // Client-side Russian transliteration (BGN/PCGN standard).
+  // Simple 1:1 Cyrillic → Latin mapping. Instant, no server call.
+  _romanizeRussianLocal(texts) {
+    const MAP = {
+      'а':'a','б':'b','в':'v','г':'g','д':'d','е':'ye','ё':'yo','ж':'zh','з':'z','и':'i',
+      'й':'y','к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r','с':'s','т':'t',
+      'у':'u','ф':'f','х':'kh','ц':'ts','ч':'ch','ш':'sh','щ':'shch','ъ':'','ы':'y','ь':'',
+      'э':'e','ю':'yu','я':'ya',
+      'А':'A','Б':'B','В':'V','Г':'G','Д':'D','Е':'Ye','Ё':'Yo','Ж':'Zh','З':'Z','И':'I',
+      'Й':'Y','К':'K','Л':'L','М':'M','Н':'N','О':'O','П':'P','Р':'R','С':'S','Т':'T',
+      'У':'U','Ф':'F','Х':'Kh','Ц':'Ts','Ч':'Ch','Ш':'Sh','Щ':'Shch','Ъ':'','Ы':'Y','Ь':'',
+      'Э':'E','Ю':'Yu','Я':'Ya'
+    };
+    return texts.map(text => {
+      return [...text].map(ch => MAP[ch] !== undefined ? MAP[ch] : ch).join('');
+    });
+  }
+
+  // Romanize an array of texts — returns an array of romaji strings (or empty strings).
+  // For Japanese: uses WanaKana client-side (instant, <1ms).
+  // For Korean: uses Hangul decomposition client-side (instant).
+  // For Russian: uses Cyrillic transliteration client-side (instant).
+  // For zh: uses server deterministic endpoint (pypinyin).
+  // For ar or fallback: returns empty (caller should use _romanizeBatch after translation).
+  async _romanizeTexts(texts, sourceLang) {
+    if (!texts || texts.length === 0) return [];
+    const lang = sourceLang || this.sourceLanguage || 'ja';
+
+    // Japanese: WanaKana first (instant), then server/LLM for remaining kanji
+    if (lang === 'ja') {
+      const wkResults = this._romanizeJapaneseLocal(texts);
+      const results = wkResults.map(r => r.romaji);
+      const hasIncomplete = wkResults.some(r => !r.complete);
+
+      if (!hasIncomplete) return results; // Pure kana — done instantly
+
+      // Some texts have kanji — try server (pykakasi) for full romanization
+      const kanjiIndices = [];
+      const kanjiTexts = [];
+      for (let i = 0; i < wkResults.length; i++) {
+        if (!wkResults[i].complete) {
+          kanjiIndices.push(i);
+          kanjiTexts.push(texts[i]);
+        }
+      }
+      try {
+        const response = await this._sendMessage({
+          type: 'ROMANIZE_BATCH', texts: kanjiTexts, sourceLang: 'ja'
+        });
+        if (response?.success && response.romanizations) {
+          for (let j = 0; j < kanjiIndices.length; j++) {
+            const serverRoma = (response.romanizations[j] || '').trim();
+            if (serverRoma && !this._hasKanji(serverRoma)) {
+              results[kanjiIndices[j]] = serverRoma;
+            }
+          }
+        }
+      } catch (e) {
+        // Server unavailable (no pykakasi) — WanaKana partials remain
+        // _romanizeBatch after translation will do LLM refinement for these
+      }
+      return results;
+    }
+
+    // Korean: Hangul decomposition client-side — instant (<1ms)
+    if (lang === 'ko') return this._romanizeKoreanLocal(texts);
+
+    // Russian: Cyrillic transliteration client-side — instant (<1ms)
+    if (lang === 'ru') return this._romanizeRussianLocal(texts);
+
+    // Chinese: server deterministic endpoint (pypinyin)
+    if (lang === 'zh') {
+      const results = new Array(texts.length).fill('');
+      try {
+        const response = await this._sendMessage({
+          type: 'ROMANIZE_BATCH', texts, sourceLang: lang
+        });
+        if (response?.success && response.romanizations) {
+          for (let i = 0; i < texts.length && i < response.romanizations.length; i++) {
+            results[i] = (response.romanizations[i] || '').trim();
+          }
+        }
+      } catch (err) {
+        DEBUG.warn('AudioCapture', 'Chinese romanization failed', { error: err.message });
+      }
+      return results;
+    }
+
+    // Arabic or other: return empty — caller uses _romanizeBatch (LLM) after translation
+    return new Array(texts.length).fill('');
+  }
+
+  // Separate romanization call — mutates segments[i].romaji in place.
+  // ja: WanaKana + server/LLM fallback for kanji. ko/ru: client-side. zh: server. ar: LLM.
   async _romanizeBatch(segments) {
     if (segments.length === 0) return;
+    const lang = this.sourceLanguage || 'ja';
     const texts = segments.map(seg => seg.original || '');
 
+    // Japanese: WanaKana first, then batch server/LLM for kanji
+    if (lang === 'ja') {
+      const wkResults = this._romanizeJapaneseLocal(texts);
+      const needsServer = [];
+      const needsServerIdx = [];
+      for (let i = 0; i < segments.length; i++) {
+        if (wkResults[i].complete) {
+          segments[i].romaji = wkResults[i].romaji;
+        } else {
+          needsServer.push(texts[i]);
+          needsServerIdx.push(i);
+        }
+      }
+      if (needsServer.length === 0) return;
+
+      // Single ROMANIZE_BATCH call handles both deterministic (pykakasi) and
+      // LLM fallback. background.js tries server first, falls back to batch LLM.
+      // This replaces the old N sequential individual ROMANIZE calls.
+      try {
+        const response = await this._sendMessage({
+          type: 'ROMANIZE_BATCH', texts: needsServer, sourceLang: 'ja'
+        });
+        if (response?.success && response.romanizations) {
+          for (let j = 0; j < needsServerIdx.length; j++) {
+            const roma = (response.romanizations[j] || '').trim();
+            if (roma && !this._hasKanji(roma)) {
+              segments[needsServerIdx[j]].romaji = roma;
+            } else {
+              // Keep WanaKana partial as last resort
+              segments[needsServerIdx[j]].romaji = wkResults[needsServerIdx[j]].romaji;
+            }
+          }
+          return;
+        }
+      } catch (e) {
+        // Server + LLM both failed — use WanaKana partials
+        DEBUG.warn('AudioCapture', 'Romanization batch failed', { error: e.message });
+      }
+
+      // Absolute fallback: WanaKana partials for everything
+      for (let k = 0; k < needsServerIdx.length; k++) {
+        segments[needsServerIdx[k]].romaji = wkResults[needsServerIdx[k]].romaji;
+      }
+      return;
+    }
+
+    // Korean / Russian: client-side instant
+    if (lang === 'ko' || lang === 'ru') {
+      const fn = lang === 'ko' ? this._romanizeKoreanLocal : this._romanizeRussianLocal;
+      const results = fn.call(this, texts);
+      for (let i = 0; i < segments.length; i++) {
+        if (results[i]) segments[i].romaji = results[i];
+      }
+      return;
+    }
+
+    // Other languages (zh/ar/etc): single ROMANIZE_BATCH call
+    // background.js handles deterministic vs LLM fallback
     try {
-      // Single batch call — 1 round trip instead of N
       const response = await this._sendMessage({
         type: 'ROMANIZE_BATCH',
         texts,
-        sourceLang: this.sourceLanguage || 'ja'
+        sourceLang: lang
       });
       if (response?.success && response.romanizations) {
         for (let i = 0; i < segments.length; i++) {
@@ -862,13 +1306,13 @@ class AudioCapture {
       DEBUG.warn('AudioCapture', 'Batch romanization failed, falling back to sequential');
     }
 
-    // Fallback: sequential (for older server versions or if batch fails)
+    // Fallback: sequential LLM (for ru/ar, or if server batch fails)
     for (const seg of segments) {
       try {
         const response = await this._sendMessage({
           type: 'ROMANIZE',
           text: seg.original,
-          sourceLang: this.sourceLanguage || 'ja'
+          sourceLang: lang
         });
         if (response?.success && response.romanization) {
           seg.romaji = response.romanization.trim();
@@ -880,11 +1324,13 @@ class AudioCapture {
   }
 
   // Re-romanize already cached chunks (when user toggles romaji ON mid-video)
-  // Uses batch endpoint for efficiency — one call per chunk instead of one per segment
+  // For Japanese: uses WanaKana client-side (instant for all chunks).
+  // For others: uses batch server endpoint per chunk.
   async reRomanizeCachedChunks() {
-    DEBUG.info('AudioCapture', 'Re-romanizing cached chunks (batch)');
+    DEBUG.info('AudioCapture', 'Re-romanizing cached chunks');
+    const lang = this.sourceLanguage || 'ja';
+
     for (const [idx, segments] of Object.entries(this.subtitleChunks)) {
-      // Collect segments that need romanization
       const needsRoma = [];
       const needsIndices = [];
       for (let i = 0; i < segments.length; i++) {
@@ -895,11 +1341,56 @@ class AudioCapture {
       }
       if (needsRoma.length === 0) continue;
 
+      // Japanese: WanaKana for kana, then server/LLM for kanji
+      if (lang === 'ja') {
+        const wkResults = this._romanizeJapaneseLocal(needsRoma);
+        const stillNeeds = [];
+        const stillNeedsIdx = [];
+        for (let j = 0; j < needsIndices.length; j++) {
+          if (wkResults[j].complete) {
+            segments[needsIndices[j]].romaji = wkResults[j].romaji;
+          } else {
+            stillNeeds.push(needsRoma[j]);
+            stillNeedsIdx.push(needsIndices[j]);
+            // Set WanaKana partial as temporary (better than nothing while LLM works)
+            segments[needsIndices[j]].romaji = wkResults[j].romaji;
+          }
+        }
+        // Try server then LLM for kanji segments
+        if (stillNeeds.length > 0) {
+          try {
+            const response = await this._sendMessage({
+              type: 'ROMANIZE_BATCH', texts: stillNeeds, sourceLang: 'ja'
+            });
+            if (response?.success && response.romanizations) {
+              for (let k = 0; k < stillNeedsIdx.length; k++) {
+                const roma = (response.romanizations[k] || '').trim();
+                if (roma && !this._hasKanji(roma)) {
+                  segments[stillNeedsIdx[k]].romaji = roma;
+                }
+              }
+            }
+          } catch (e) { /* server unavailable */ }
+        }
+        continue;
+      }
+
+      // Korean / Russian: client-side instant
+      if (lang === 'ko' || lang === 'ru') {
+        const fn = lang === 'ko' ? this._romanizeKoreanLocal : this._romanizeRussianLocal;
+        const results = fn.call(this, needsRoma);
+        for (let j = 0; j < needsIndices.length; j++) {
+          if (results[j]) segments[needsIndices[j]].romaji = results[j];
+        }
+        continue;
+      }
+
+      // Other languages: server batch
       try {
         const response = await this._sendMessage({
           type: 'ROMANIZE_BATCH',
           texts: needsRoma,
-          sourceLang: this.sourceLanguage || 'ja'
+          sourceLang: lang
         });
         if (response?.success && response.romanizations) {
           for (let j = 0; j < needsIndices.length; j++) {
@@ -911,7 +1402,9 @@ class AudioCapture {
         DEBUG.warn('AudioCapture', `Re-romanize chunk ${idx} failed: ${e.message}`);
       }
     }
-    // Force refresh current display
+    // Force refresh current display — must clear lastShownSegment so the guard
+    // in _showSubtitleAt doesn't skip the re-dispatch (same object ref, but romaji changed)
+    this.lastShownSegment = null;
     if (this.video) this._showSubtitleAt(this.video.currentTime);
     DEBUG.success('AudioCapture', 'Re-romanization complete');
   }

@@ -1,6 +1,6 @@
 # Architecture
 
-> Yume v5.7.0 · Pocket Yume CLI · ~12,800 lines across 15 source files
+> Yume v0.0.8 · Pocket Yume CLI · ~14,200 lines across 15 source files
 
 ## Overview
 
@@ -44,7 +44,7 @@ Yume is a browser extension + local server system. The extension captures video 
 4. Whisper server downloads audio chunk (yt-dlp), transcribes (faster-whisper)
 5. Segments returned to extension, hallucination-filtered client-side
 6. Extension sends segments to translation LLM (batch, 120s timeout)
-7. Romanization: wanakana (JA, local), pypinyin (ZH, server), or LLM (KO/RU/AR)
+7. Romanization: wanakana (JA, local), pypinyin (ZH, server), or LLM (KO/RU/AR) — pykakasi dictionary is pre-loaded in a background thread at startup
 8. `subtitle-window.js` renders overlay with RTL support for Arabic
 
 **Key optimization:** Pipeline transcribes chunk N+1 while translating chunk N. 30s audio windows with 5s overlap prevent missed words at boundaries.
@@ -57,23 +57,26 @@ Yume is a browser extension + local server system. The extension captures video 
 | Discovery | `/health` returns token only to `chrome-extension://` or `moz-extension://` origins. Web pages get none. |
 | Host | Rejects requests where `Host` header is not `127.0.0.1` or `localhost`. |
 | URL | All URLs validated before passing to subprocess. No argument injection. |
+| Subprocess | No `shell=True`, no `os.system()`, no `curl \| sh`. All process launches use explicit argv lists. |
+| XSS | All dynamic values in popup innerHTML are escaped via `_escapeHtml()`. Subtitle overlay uses `textContent`. |
+| Dependencies | All Python packages pinned to exact versions (`==`) in `requirements.txt` and inline installs. |
 
 ## File Responsibilities
 
 | File | Lines | Role |
 |------|-------|------|
-| `pocket_yume.py` | 3,982 | CLI: installer, launcher, port management, benchmarks |
-| `config.py` | 131 | Config: load, save, validate, export, import. All port constants defined here. |
-| `faster_whisper_server.py` | 2,178 | Flask server: Whisper STT, hallucination filter, audio download, cache |
-| `audio-capture.js` | 1,144 | Pipeline engine: chunking, parallel transcribe+translate, subtitle timing |
-| `popup.js` | 1,143 | Extension popup: settings, diagnostics, stats, model switching |
-| `background.js` | 934 | Service worker: server proxy, translation cache (LRU-500 + TTL), token management |
+| `pocket_yume.py` | 4,718 | CLI: installer, launcher, port management, benchmarks |
+| `config.py` | 162 | Config: load, save, validate, export, import. All port constants defined here. |
+| `faster_whisper_server.py` | 2,275 | Flask server: Whisper STT, hallucination filter, audio download, cache |
+| `audio-capture.js` | 1,215 | Pipeline engine: chunking, parallel transcribe+translate+romanize, subtitle timing |
+| `popup.js` | 1,216 | Extension popup: settings, diagnostics, stats, model switching |
+| `background.js` | 959 | Service worker: server proxy, translation cache (LRU-500 + TTL), token management |
 | `content.js` | 388 | Content script: lifecycle, URL change detection, subtitle event dispatch |
-| `subtitle-window.js` | 360 | Overlay: DOM creation, drag/resize, dynamic font injection, RTL, alignment |
+| `subtitle-window.js` | 361 | Overlay: DOM creation, drag/resize, dynamic font injection, RTL, alignment |
 
 ## Key Design Decisions
 
-**Single-file CLI** — `pocket_yume.py` is large (~3,980 lines) by design. It's a self-contained installer that users run with `python pocket_yume.py`. Config management was extracted to `config.py` as the first modular step.
+**Single-file CLI** — `pocket_yume.py` is large (~4,718 lines) by design. It's a self-contained installer that users run with `python pocket_yume.py`. Config management was extracted to `config.py` as the first modular step.
 
 **No build tools** — The extension is plain JS loaded directly by the manifest. No React, no webpack, no TypeScript. Zero build step. Users edit files and reload.
 
@@ -82,3 +85,5 @@ Yume is a browser extension + local server system. The extension captures video 
 **Generation counter** — `this.generation` increments on stop, language change, or video switch. All in-flight async operations check `gen === this.generation` before writing results. Stale promises abort silently.
 
 **Hallucination filter** — Whisper hallucinates on silence and music (e.g., "ご視聴ありがとうございました" on instrumental intros). Server-side pattern list (JA/ZH/KO/RU/AR) + client-side repeat/concatenation detection + user blacklist.
+
+**Background pykakasi initialization** — The pykakasi dictionary (used for Japanese romanization) is pre-loaded in a background thread at server startup, before the Whisper model begins loading. This avoids a ~2-3s latency spike on the first romanization request. The singleton accessor `_get_kakasi()` is guarded by `threading.Lock()` for thread safety.

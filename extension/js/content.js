@@ -1,5 +1,5 @@
 // ============================================================================
-// CONTENT SCRIPT v5.7.0 - Main orchestrator
+// CONTENT SCRIPT v0.0.8 - Main orchestrator
 // ============================================================================
 
 (async function() {
@@ -259,7 +259,7 @@
     // Chunk progress
     window.addEventListener('chunk-progress', (e) => {
       if (state.subtitleWindow) {
-        state.subtitleWindow.updateChunkProgress(e.detail.fetched, e.detail.total, e.detail.complete);
+        state.subtitleWindow.updateChunkProgress(e.detail);
       }
     });
 
