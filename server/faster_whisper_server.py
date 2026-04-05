@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Yume -- Faster-Whisper Server v5.7.0
+Yume -- Faster-Whisper Server v0.0.8
 Word-level timestamps + pause re-splitting + security hardening
 Parallel startup: Flask starts before model loads. Prewarm inference on load.
 All output is ASCII-safe for Windows cp932/cp1252 locales.
@@ -21,10 +21,10 @@ import atexit
 import platform
 import secrets
 import signal
-import re
 import logging
 from pathlib import Path
 from urllib.parse import urlparse
+import unicodedata
 
 # === CRITICAL: Force UTF-8 stdout to avoid cp932 UnicodeEncodeError on Windows ===
 if sys.platform == "win32":
@@ -96,7 +96,7 @@ def _security_checks():
 # ============================================================================
 def _validate_url(url):
     """Validate a URL before passing to subprocess.
-    Rejects: dash-leading strings, non-http(s) schemes, empty URLs.
+    Rejects: dash-leading strings, non-http(s) schemes, shell metacharacters, empty URLs.
     Returns (is_valid, error_message).
     """
     if not url or not isinstance(url, str):
@@ -104,6 +104,9 @@ def _validate_url(url):
     url = url.strip()
     if url.startswith("-"):
         return False, "URL cannot start with '-' (argument injection)"
+    # Reject shell metacharacters to prevent command injection
+    if any(c in url for c in [";", "|", "`", "$", "(", ")", "\n", "\r"]):
+        return False, "URL contains shell metacharacters"
     try:
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
@@ -148,8 +151,10 @@ def _shutdown_handler(signum, frame):
     _cleanup_all_audio()
     # Remove token file
     if TOKEN_FILE and os.path.exists(TOKEN_FILE):
-        try: os.unlink(TOKEN_FILE)
-        except Exception: pass
+        try:
+            os.unlink(TOKEN_FILE)
+        except Exception:
+            pass
     sys.exit(0)
 
 # Signal handlers registered in main()
@@ -169,10 +174,13 @@ def _cleanup_request_temps(exception):
 
 # Global state
 model = None
-batched_model = None    # BatchedInferencePipeline wrapper (optional, for multi-chunk)
 model_name = "large-v3"
+model_display_name = ""  # Friendly name for custom models (from config whisper_model_name)
 device = "cuda"
 compute_type = "float16"
+
+# prevent garbage collection of the Windows console handler callback (set in main())
+_win_console_handler_ref = None
 use_word_timestamps = True
 pause_threshold = 0.25  # seconds of silence to split segments (0.25 = better for songs)
 
@@ -182,6 +190,11 @@ SUBTITLE_CACHE_MAX = 2000
 AUDIO_CACHE_MAX = 50
 STREAM_URL_CACHE_MAX = 100  # ~2000 chunks * ~10KB avg = ~20MB max
 prefetch_lock = threading.Lock()
+
+# Thread safety: waitress serves concurrent requests on multiple threads.
+# Individual dict operations are GIL-atomic, but compound operations (check + insert,
+# evict + add) are not. This lock serializes all cache mutations.
+cache_lock = threading.Lock()
 
 # CRITICAL: Whisper model is NOT thread-safe. Concurrent transcribe() calls
 # return corrupted/empty results. Serialize all transcription through this lock.
@@ -197,7 +210,8 @@ def _cleanup_audio_entry(entry):
     """Delete the temp directory for a cached audio file."""
     try:
         parent = os.path.dirname(entry.get('path', ''))
-        if parent and os.path.isdir(parent) and 'yume' in parent.lower():
+        basename = os.path.basename(parent)
+        if parent and os.path.isdir(parent) and (basename.startswith('yume_') or basename.startswith('tmp')):
             shutil.rmtree(parent, ignore_errors=True)
     except Exception:
         pass
@@ -224,6 +238,8 @@ cookies_browser = "chrome"
 translation_host = "127.0.0.1"
 translation_port = 5000
 translation_backend = "llamacpp"
+translation_prompt = ""      # Custom translation prompt from CLI config (passed to extension via /health)
+romanization_prompt = ""     # Custom romanization prompt from CLI config (passed to extension via /health)
 
 # ============================================================================
 # SESSION STATISTICS (accumulated, reset on server restart)
@@ -283,7 +299,7 @@ def health():
     is_ready = model is not None
     base = {
         "status": "ready" if is_ready else "loading",
-        "version": "5.7.0",
+        "version": "0.0.8",
         "prepare_supported": True,
         "ytdlp_available": _check_ytdlp(),
     }
@@ -302,6 +318,8 @@ def health():
             "translation_port": translation_port,
             "translation_backend": translation_backend,
             "translation_url": f"http://{translation_host}:{translation_port}",
+            "translation_prompt": translation_prompt,
+            "romanization_prompt": romanization_prompt,
         })
 
     # Return 503 while model is loading — extension checks response.ok
@@ -336,6 +354,7 @@ def stats():
 
     # Whisper model info
     s["model"] = model_name
+    s["model_display_name"] = model_display_name or ""
     s["device"] = device
     s["compute_type"] = compute_type
 
@@ -358,7 +377,18 @@ def switch_model():
         'turbo', 'large-v3-turbo',
         'distil-large-v2', 'distil-large-v3',
     ]
-    if new_model not in valid_models:
+
+    # Accept standard model names OR local directory paths (for custom/fine-tuned models)
+    is_local_path = os.path.sep in new_model or '/' in new_model
+    if is_local_path:
+        if not os.path.isdir(new_model):
+            return jsonify({"error": f"Directory not found: {new_model}"}), 400
+        # Verify it looks like a CTranslate2 model
+        required = ["model.bin", "config.json"]
+        missing = [f for f in required if not os.path.exists(os.path.join(new_model, f))]
+        if missing:
+            return jsonify({"error": f"Not a valid CTranslate2 model — missing: {', '.join(missing)}"}), 400
+    elif new_model not in valid_models:
         return jsonify({"error": f"Unknown model: {new_model}", "valid": valid_models}), 400
 
     # Normalize turbo alias
@@ -375,12 +405,6 @@ def switch_model():
         with transcribe_lock:
             model_name = new_model
             model = WhisperModel(model_name, device=device, compute_type=compute_type)
-            # Rebuild batched pipeline wrapper
-            try:
-                from faster_whisper import BatchedInferencePipeline
-                batched_model = BatchedInferencePipeline(model=model)
-            except (ImportError, Exception):
-                batched_model = None
 
         # Clear subtitle cache (old model's results are stale)
         with prefetch_lock:
@@ -451,7 +475,6 @@ def list_translation_models():
     """Query the translation backend for available models."""
     url = f"http://{translation_host}:{translation_port}"
     models = []
-    current = ""
 
     try:
         if translation_backend == "ollama":
@@ -528,15 +551,16 @@ def prepare():
             return jsonify({"error": f"Invalid URL: {err}"}), 400
 
         # Check cache
-        cached = full_audio_cache.get(video_id)
-        if cached and time.time() - cached['timestamp'] < FULL_AUDIO_TTL and os.path.exists(cached['path']):
-            print(f"[Yume] Full audio cache hit for {video_id} ({cached['duration']:.0f}s)")
-            return jsonify({"status": "ready", "duration": cached['duration'], "cached": True})
+        with cache_lock:
+            cached = full_audio_cache.get(video_id)
+            if cached and time.time() - cached['timestamp'] < FULL_AUDIO_TTL and os.path.exists(cached['path']):
+                print(f"[Yume] Full audio cache hit for {video_id} ({cached['duration']:.0f}s)")
+                return jsonify({"status": "ready", "duration": cached['duration'], "cached": True})
 
-        # Clean up expired entry if it exists
-        if cached:
-            _cleanup_audio_entry(cached)
-            full_audio_cache.pop(video_id, None)
+            # Clean up expired entry if it exists
+            if cached:
+                _cleanup_audio_entry(cached)
+                full_audio_cache.pop(video_id, None)
 
         print(f"[Yume] Downloading full audio for {video_id}...")
         audio_path, error_msg = _download_full_audio(url)
@@ -547,15 +571,18 @@ def prepare():
         duration = _get_audio_duration(audio_path)
         size_kb = os.path.getsize(audio_path) / 1024
 
-        # Evict oldest if cache full
-        if len(full_audio_cache) >= AUDIO_CACHE_MAX:
-            oldest = next(iter(full_audio_cache))
-            full_audio_cache.pop(oldest, None)
-        full_audio_cache[video_id] = {
-            "path": audio_path,
-            "duration": duration,
-            "timestamp": time.time()
-        }
+        with cache_lock:
+            # Evict oldest if cache full — clean up its temp files
+            if len(full_audio_cache) >= AUDIO_CACHE_MAX:
+                oldest = next(iter(full_audio_cache))
+                evicted = full_audio_cache.pop(oldest, None)
+                if evicted:
+                    _cleanup_audio_entry(evicted)
+            full_audio_cache[video_id] = {
+                "path": audio_path,
+                "duration": duration,
+                "timestamp": time.time()
+            }
 
         print(f"[Yume] Full audio ready: {duration:.1f}s, {size_kb:.0f}KB")
         return jsonify({"status": "ready", "duration": duration, "cached": False})
@@ -713,8 +740,8 @@ def _download_full_audio(url):
                     continue
 
                 # Extract error for reporting
-                error_lines = [l.strip() for l in (result.stderr or '').split('\n')
-                               if l.strip() and 'ERROR' in l.upper()]
+                error_lines = [ln.strip() for ln in (result.stderr or '').split('\n')
+                               if ln.strip() and 'ERROR' in ln.upper()]
                 raw_err = error_lines[-1][:300] if error_lines else f"exit code {result.returncode}"
                 last_error = _friendlify_ytdlp_error(raw_err)
                 print(f"[Yume] yt-dlp ({tag}) failed: {last_error[:150]}")
@@ -734,7 +761,7 @@ def _download_full_audio(url):
     # ---- Strategy 2: yt-dlp get-url → ffmpeg (works when yt-dlp download fails but URL extract works) ----
     if _is_youtube_url(url):
         try:
-            print(f"[Yume] Trying yt-dlp get-url + ffmpeg fallback...")
+            print("[Yume] Trying yt-dlp get-url + ffmpeg fallback...")
             stream_url = _get_stream_url(url)
             if stream_url:
                 ffmpeg_output = os.path.join(tmp_dir, "full_audio_stream.wav")
@@ -750,19 +777,19 @@ def _download_full_audio(url):
                     capture_output=True, text=True, timeout=300
                 )
                 if result.returncode == 0 and os.path.exists(ffmpeg_output) and os.path.getsize(ffmpeg_output) > 10000:
-                    print(f"[Yume] yt-dlp get-url + ffmpeg succeeded!")
+                    print("[Yume] yt-dlp get-url + ffmpeg succeeded!")
                     return ffmpeg_output, None
                 else:
                     print(f"[Yume] ffmpeg on stream URL failed: {(result.stderr or '')[-100:]}")
             else:
-                print(f"[Yume] Could not get stream URL either")
+                print("[Yume] Could not get stream URL either")
         except Exception as e:
             print(f"[Yume] Strategy 2 error: {e}")
 
     # ---- Strategy 3: ffmpeg direct (for m3u8 / direct media URLs only) ----
     if url.endswith('.m3u8') or '.m3u8' in url or not _is_youtube_url(url):
         try:
-            print(f"[Yume] Trying ffmpeg direct on URL...")
+            print("[Yume] Trying ffmpeg direct on URL...")
             ffmpeg_output = os.path.join(tmp_dir, "full_audio_ffmpeg.wav")
             result = subprocess.run(
                 [
@@ -777,7 +804,7 @@ def _download_full_audio(url):
             )
 
             if result.returncode == 0 and os.path.exists(ffmpeg_output) and os.path.getsize(ffmpeg_output) > 10000:
-                print(f"[Yume] ffmpeg direct succeeded")
+                print("[Yume] ffmpeg direct succeeded")
                 return ffmpeg_output, None
 
             stderr = (result.stderr or '').strip()
@@ -840,14 +867,15 @@ def prepare_direct():
             return jsonify({"error": f"Invalid URL: {err}"}), 400
 
         # Check cache
-        cached = full_audio_cache.get(video_id)
-        if cached and time.time() - cached['timestamp'] < FULL_AUDIO_TTL and os.path.exists(cached['path']):
-            return jsonify({"status": "ready", "duration": cached['duration'], "cached": True})
+        with cache_lock:
+            cached = full_audio_cache.get(video_id)
+            if cached and time.time() - cached['timestamp'] < FULL_AUDIO_TTL and os.path.exists(cached['path']):
+                return jsonify({"status": "ready", "duration": cached['duration'], "cached": True})
 
-        # Clean up expired entry if it exists
-        if cached:
-            _cleanup_audio_entry(cached)
-            full_audio_cache.pop(video_id, None)
+            # Clean up expired entry if it exists
+            if cached:
+                _cleanup_audio_entry(cached)
+                full_audio_cache.pop(video_id, None)
 
         print(f"[Yume] Direct download: {stream_url[:120]}...")
 
@@ -868,7 +896,7 @@ def prepare_direct():
 
         if result.returncode != 0 or not os.path.exists(output_path) or os.path.getsize(output_path) < 10000:
             # Fallback: try yt-dlp on the stream URL directly
-            print(f"[Yume] ffmpeg failed, trying yt-dlp on stream URL...")
+            print("[Yume] ffmpeg failed, trying yt-dlp on stream URL...")
             output_template = os.path.join(tmp_dir, "full_audio.%(ext)s")
             result = subprocess.run(
                 [*_ytdlp_cmd(), "-x", "--audio-format", "wav",
@@ -884,11 +912,12 @@ def prepare_direct():
         duration = _get_audio_duration(output_path)
         size_kb = os.path.getsize(output_path) / 1024
 
-        full_audio_cache[video_id] = {
-            "path": output_path,
-            "duration": duration,
-            "timestamp": time.time()
-        }
+        with cache_lock:
+            full_audio_cache[video_id] = {
+                "path": output_path,
+                "duration": duration,
+                "timestamp": time.time()
+            }
 
         print(f"[Yume] Direct audio ready: {duration:.1f}s, {size_kb:.0f}KB")
         return jsonify({"status": "ready", "duration": duration, "cached": False})
@@ -1000,12 +1029,14 @@ def transcribe_url():
 
         # Try prepared full audio first (fast local slice), fall back to stream URL
         audio_path = None
-        prepared = full_audio_cache.get(video_id)
-        if prepared and os.path.exists(prepared['path']):
-            audio_path = _slice_audio(prepared['path'], whisper_start, whisper_duration)
+        with cache_lock:
+            prepared = full_audio_cache.get(video_id)
+            prepared_path = prepared['path'] if prepared and os.path.exists(prepared['path']) else None
+        if prepared_path:
+            audio_path = _slice_audio(prepared_path, whisper_start, whisper_duration)
 
         if audio_path is None:
-            print(f"[Yume] No prepared audio, falling back to stream download")
+            print("[Yume] No prepared audio, falling back to stream download")
             audio_path = _download_audio_segment(url, whisper_start, whisper_duration)
 
         if audio_path is None:
@@ -1016,6 +1047,10 @@ def transcribe_url():
         finally:
             try:
                 os.unlink(audio_path)
+                # Also remove the parent temp dir (created by _download_audio_segment)
+                parent = os.path.dirname(audio_path)
+                if parent and os.path.isdir(parent) and os.path.basename(parent).startswith(('yume_', 'tmp')):
+                    shutil.rmtree(parent, ignore_errors=True)
             except Exception:
                 pass
 
@@ -1099,16 +1134,16 @@ def transcribe():
 
 @app.route('/cache/clear', methods=['POST'])
 def clear_cache():
-    global stream_url_cache
     with prefetch_lock:
         count = len(subtitle_cache)
         subtitle_cache.clear()
-    stream_url_cache.clear()
-    # Also clean up audio temp files
-    for vid, entry in list(full_audio_cache.items()):
-        _cleanup_audio_entry(entry)
-    audio_count = len(full_audio_cache)
-    full_audio_cache.clear()
+    with cache_lock:
+        stream_url_cache.clear()
+        # Also clean up audio temp files
+        for vid, entry in list(full_audio_cache.items()):
+            _cleanup_audio_entry(entry)
+        audio_count = len(full_audio_cache)
+        full_audio_cache.clear()
     return jsonify({"cleared": count, "audio_cleared": audio_count})
 
 @app.route('/cache/status', methods=['GET'])
@@ -1168,7 +1203,7 @@ def _resolve_browser_cookies():
             native_ini = os.path.join(native_path, "profiles.ini")
             if os.path.exists(flat_ini) and os.path.exists(native_ini):
                 if os.path.getmtime(flat_ini) > os.path.getmtime(native_ini):
-                    print(f"[Yume] Flatpak Firefox is more recent, using its cookies")
+                    print("[Yume] Flatpak Firefox is more recent, using its cookies")
                     return f"firefox:{flatpak_path}"
             elif os.path.exists(flat_ini):
                 return f"firefox:{flatpak_path}"
@@ -1179,6 +1214,11 @@ def _resolve_browser_cookies():
 def _get_stream_url(url):
     """Get the direct audio stream URL, using cache to avoid repeated yt-dlp calls."""
     global stream_url_cache
+
+    valid, err = _validate_url(url)
+    if not valid:
+        print(f"[Yume] Rejected invalid URL: {err} — {url[:80]}")
+        return None
 
     # Check cache first
     cached = stream_url_cache.get(url)
@@ -1197,19 +1237,24 @@ def _get_stream_url(url):
 
     last_stderr = ""
     for fmt_args in format_attempts:
-        result = subprocess.run(
-            [*_ytdlp_cmd(), "--get-url", *fmt_args, "--no-playlist", "--no-exec",
-             *auth_args, "--", url],
-            capture_output=True, text=True, timeout=30
-        )
+        try:
+            result = subprocess.run(
+                [*_ytdlp_cmd(), "--get-url", *fmt_args, "--no-playlist", "--no-exec",
+                 *auth_args, "--", url],
+                capture_output=True, text=True, timeout=30
+            )
+        except subprocess.TimeoutExpired:
+            print("[Yume] yt-dlp get-url timed out (30s)")
+            return None
         if result.returncode == 0 and result.stdout.strip().startswith("http"):
             stream_url = result.stdout.strip().split('\n')[0]
-            print(f"[Yume] Stream URL obtained and cached")
+            print("[Yume] Stream URL obtained and cached")
             # Evict oldest if cache full
-            if len(stream_url_cache) >= STREAM_URL_CACHE_MAX:
-                oldest_key = min(stream_url_cache, key=lambda k: stream_url_cache[k].get("timestamp", 0))
-                stream_url_cache.pop(oldest_key, None)
-            stream_url_cache[url] = {"stream_url": stream_url, "timestamp": time.time()}
+            with cache_lock:
+                if len(stream_url_cache) >= STREAM_URL_CACHE_MAX:
+                    oldest_key = min(stream_url_cache, key=lambda k: stream_url_cache[k].get("timestamp", 0))
+                    stream_url_cache.pop(oldest_key, None)
+                stream_url_cache[url] = {"stream_url": stream_url, "timestamp": time.time()}
             return stream_url
         last_stderr = (result.stderr or '')
         stderr_lower = last_stderr.lower()
@@ -1224,6 +1269,11 @@ def _get_stream_url(url):
 def _download_audio_segment(url, start_time, duration):
     """Download a specific time segment of audio using yt-dlp + ffmpeg.
     Stream URL is cached so yt-dlp is only called once per video."""
+    valid, err = _validate_url(url)
+    if not valid:
+        print(f"[Yume] Rejected invalid URL: {err} — {url[:80]}")
+        return None
+
     tmp_dir = tempfile.mkdtemp()
     output_path = os.path.join(tmp_dir, "segment.wav")
 
@@ -1231,6 +1281,13 @@ def _download_audio_segment(url, start_time, duration):
         stream_url = _get_stream_url(url)
 
         if stream_url is None:
+            return _download_audio_segment_fallback(url, start_time, duration, output_path)
+
+        # Validate stream URL from yt-dlp before passing to ffmpeg
+        stream_valid, _stream_err = _validate_url(stream_url)
+        if not stream_valid:
+            print("[Yume] Invalid stream URL from yt-dlp, using fallback")
+            stream_url_cache.pop(url, None)
             return _download_audio_segment_fallback(url, start_time, duration, output_path)
 
         print(f"[Yume] Extracting {duration}s from {start_time}s via ffmpeg...")
@@ -1264,13 +1321,17 @@ def _download_audio_segment(url, start_time, duration):
 
     except subprocess.TimeoutExpired:
         print("[Yume] Download timed out")
-        try: shutil.rmtree(tmp_dir, ignore_errors=True)
-        except Exception: pass
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
         return None
     except Exception as e:
         print(f"[Yume] Download error: {e}")
-        try: shutil.rmtree(tmp_dir, ignore_errors=True)
-        except Exception: pass
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
         return None
 
 
@@ -1318,21 +1379,30 @@ def _download_audio_segment_fallback(url, start_time, duration, output_path):
 # ============================================================================
 
 # Lazy-loaded romanizers (only import when first needed)
-_kakasi = None   # type: ignore[assignment]  # pykakasi.kakasi instance, False if unavailable, None if unchecked
+_kakasi = None       # pykakasi.kakasi instance or None
+_kakasi_checked = False  # Whether we've attempted to load pykakasi
+_kakasi_lock = threading.Lock()
 _pinyin_available = False
 
 def _get_kakasi():
-    """Lazy-load pykakasi (Japanese kanji→romaji converter)."""
-    global _kakasi
-    if _kakasi is None:
-        try:
-            import pykakasi
-            _kakasi = pykakasi.kakasi()
-            print("[Yume] pykakasi loaded — deterministic Japanese romanization enabled")
-        except ImportError:
-            _kakasi = False  # Mark as unavailable
-            print("[Yume] pykakasi not installed — Japanese romanization falls back to LLM")
-    return _kakasi if _kakasi is not False else None
+    """Lazy-load pykakasi (Japanese kanji→romaji converter). Thread-safe."""
+    global _kakasi, _kakasi_checked
+    with _kakasi_lock:
+        if not _kakasi_checked:
+            _kakasi_checked = True
+            try:
+                import pykakasi
+                print(f"[Yume] pykakasi found at {pykakasi.__file__}")
+                _kakasi = pykakasi.kakasi()
+                print("[Yume] pykakasi loaded — deterministic Japanese romanization enabled")
+            except ImportError:
+                _kakasi = None
+                print("[Yume] pykakasi not installed — Japanese romanization falls back to LLM")
+            except Exception as e:
+                _kakasi = None
+                print(f"[Yume] pykakasi failed: {type(e).__name__}: {e}")
+                print("[Yume] Japanese romanization falls back to LLM")
+    return _kakasi
 
 
 def _romanize_japanese(text):
@@ -1341,7 +1411,7 @@ def _romanize_japanese(text):
     if not kakasi:
         return None
     try:
-        result = kakasi.convert(text)  # type: ignore[union-attr]
+        result = kakasi.convert(text)
         parts = []
         for item in result:
             r = item.get('hepburn', '') or item.get('passport', '') or item.get('orig', '')
@@ -1511,7 +1581,7 @@ CREDITS_PATTERNS = [
     "mix", "mastering",
 ]
 
-SINGLE_WORD_BLOCKLIST = ['music', 'la', 'na', 'da', 'oh', 'ah', 'mm', 'hmm']
+SINGLE_WORD_BLOCKLIST = ['music', 'mm', 'hmm']  # No vocal sounds (la/na/da/oh/ah are real lyrics)
 
 @app.route('/hallucination_patterns', methods=['GET'])
 def get_hallucination_patterns():
@@ -1524,13 +1594,15 @@ def get_hallucination_patterns():
         "single_word_blocklist": SINGLE_WORD_BLOCKLIST,
         "repeat_threshold": 6,     # words >= this with <=2 unique = spam
         "concat_min_len": 4,       # min clean length for concatenated repetition check
-        "concat_coverage": 0.8,    # coverage threshold for concat repetition
+        "concat_coverage": 0.95,   # coverage threshold for concat repetition (high to avoid dropping real choruses)
     })
 
 def _is_hallucination(text):
     t = text.strip()
     if not t:
         return True
+    # Normalize Unicode (NFC) to catch alternate representations of JA/ZH/AR text
+    t = unicodedata.normalize('NFC', t)
     t_lower = t.lower()
     for pat in HALLUCINATION_PATTERNS:
         if pat.lower() in t_lower:
@@ -1557,7 +1629,7 @@ def _is_hallucination(text):
             sub = clean[:sub_len]
             if sub * (len(clean) // len(sub)) == clean[:len(sub) * (len(clean) // len(sub))]:
                 repeats = len(clean) // len(sub)
-                if repeats >= 2 and len(sub) * repeats >= len(clean) * 0.8:
+                if repeats >= 2 and len(sub) * repeats >= len(clean) * 0.95:
                     print(f"[Yume] Hallucination: repeated '{sub}' x{repeats} in '{t}'")
                     return True
 
@@ -1606,8 +1678,8 @@ def _transcribe_file(audio_path, language, start_offset=0.0):
         condition_on_previous_text=False,
         temperature=0.0,
         compression_ratio_threshold=2.4,  # v2.0.7 value
-        log_prob_threshold=-1.5,          # widened from -1.0: sung Japanese has lower confidence
-        no_speech_threshold=0.6,          # raised from 0.45: music vocals have high no-speech prob
+        log_prob_threshold=-2.0,          # widened from -1.5: catch more speech at low confidence
+        no_speech_threshold=0.3,          # lowered from 0.45: catch speech after silence/intros
     )
 
     # CRITICAL: Serialize model access. CTranslate2 is NOT thread-safe.
@@ -1633,10 +1705,10 @@ def _transcribe_file(audio_path, language, start_offset=0.0):
             print(f"[Yume] Dropped credits: {text!r}")
             dropped += 1
             continue
-        if hasattr(seg, "avg_logprob") and seg.avg_logprob < -1.5:  # widened: music content
-            print(f"[Yume] Dropped low-conf ({seg.avg_logprob:.2f}): {text!r}")
-            dropped += 1
-            continue
+        # NOTE: No secondary logprob filter here. Whisper's internal log_prob_threshold=-2.0
+        # handles truly low-confidence segments. A stricter server-side filter drops
+        # valid vocals mixed with background music (the primary use case for Yume).
+        # Hallucination patterns + user blacklist are the correct quality filter.
 
         segments.append({
             "start": round(seg.start + start_offset, 2),
@@ -1720,7 +1792,7 @@ def _setup_bgutil_server():
     try:
         import urllib.request
         url = "https://github.com/Brainicism/bgutil-ytdlp-pot-provider/archive/refs/tags/1.3.1.zip"
-        print(f"  bgutil server:    downloading from GitHub...")
+        print("  bgutil server:    downloading from GitHub...")
         urllib.request.urlretrieve(url, str(zip_path))
     except Exception as e:
         print(f"  bgutil server:    download failed: {e}")
@@ -1740,7 +1812,7 @@ def _setup_bgutil_server():
             if target.exists():
                 shutil.rmtree(str(target))
             extracted.rename(target)
-        print(f"  bgutil server:    extracted")
+        print("  bgutil server:    extracted")
     except Exception as e:
         print(f"  bgutil server:    extract failed: {e}")
         zip_path.unlink(missing_ok=True)
@@ -1751,7 +1823,7 @@ def _setup_bgutil_server():
         print(f"  bgutil server:    main.ts not found at {main_ts}")
         return False
 
-    print(f"  bgutil server:    installing dependencies (deno install)...")
+    print("  bgutil server:    installing dependencies (deno install)...")
     try:
         r = subprocess.run(
             ["deno", "install", "--allow-scripts=npm:canvas", "--frozen"],
@@ -1759,7 +1831,7 @@ def _setup_bgutil_server():
             capture_output=True, text=True, timeout=180
         )
         if r.returncode == 0:
-            print(f"  bgutil server:    dependencies installed")
+            print("  bgutil server:    dependencies installed")
         else:
             # Try without --frozen flag (may not exist in all deno versions)
             r2 = subprocess.run(
@@ -1768,7 +1840,7 @@ def _setup_bgutil_server():
                 capture_output=True, text=True, timeout=180
             )
             if r2.returncode == 0:
-                print(f"  bgutil server:    dependencies installed (without --frozen)")
+                print("  bgutil server:    dependencies installed (without --frozen)")
             else:
                 print(f"  bgutil server:    deno install failed: {(r2.stderr or '')[-200:]}")
                 return False
@@ -1795,13 +1867,12 @@ def _start_bgutil_server():
     main_ts = server_dir / "src" / "main.ts"
 
     if not main_ts.exists():
-        print(f"  bgutil server:    main.ts not found — cannot start")
+        print("  bgutil server:    main.ts not found — cannot start")
         return False
 
     # Determine working directory — deno needs to run from node_modules
     # to resolve npm dependencies
     cwd = str(node_modules) if node_modules.exists() else str(server_dir)
-    main_path = str(main_ts) if not node_modules.exists() else str(server_dir / "src" / "main.ts")
 
     # Compute relative path from cwd to main.ts
     try:
@@ -1874,10 +1945,36 @@ def main():
     signal.signal(signal.SIGINT, _shutdown_handler)
     atexit.register(_cleanup_all_audio)
 
-    global model, model_name, device, compute_type
+    # Windows: register console control handler to intercept CLOSE/LOGOFF events.
+    # Without this, Intel MKL (bundled with numpy/CTranslate2) catches the
+    # CTRL_CLOSE_EVENT first and calls abort(), producing:
+    #   "forrtl: error (200): program aborting due to window-CLOSE event"
+    # Our handler fires before MKL's and exits cleanly.
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            CTRL_CLOSE_EVENT = 2
+            CTRL_LOGOFF_EVENT = 5
+            CTRL_SHUTDOWN_EVENT = 6
+            @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_ulong)
+            def _win_console_handler(event):
+                if event in (CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT):
+                    _shutdown_handler(event, None)
+                    return True  # handled — don't pass to MKL
+                return False
+            kernel32.SetConsoleCtrlHandler(_win_console_handler, True)
+            # prevent garbage collection of the callback (must survive until process exit)
+            global _win_console_handler_ref
+            _win_console_handler_ref = _win_console_handler
+        except Exception:
+            pass  # non-critical — worst case is the old MKL abort behavior
+
+    global model, model_name, model_display_name, device, compute_type
     global use_word_timestamps, pause_threshold
     global youtube_auth_method, cookies_browser
     global translation_host, translation_port, translation_backend
+    global translation_prompt, romanization_prompt
     global TOKEN_FILE
 
     parser = argparse.ArgumentParser(description="Yume Whisper Server")
@@ -1888,6 +1985,8 @@ def main():
     parser.add_argument('--no-word-timestamps', action='store_true', help='Disable word-level timestamps')
     parser.add_argument('--pause-threshold', type=float, default=0.25, help='Seconds of silence to split segments')
     parser.add_argument('--config', type=str, default=None, help='Path to yume_config.json')
+    parser.add_argument('--prewarm', action='store_true',
+                        help='Run CUDA kernel warmup at startup (slower startup, faster first chunk)')
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable debug logging')
     args = parser.parse_args()
 
@@ -1911,6 +2010,7 @@ def main():
         with open(args.config, encoding="utf-8") as f:
             cfg = json.load(f)
         model_name = cfg.get("whisper_model", model_name)
+        model_display_name = cfg.get("whisper_model_name", "")
         # NOTE: whisper_device and whisper_compute_type are NOT loaded from config here.
         # The CLI resolves "auto" → "cuda"/"cpu" before launching the server,
         # and passes the resolved value via --device and --compute-type.
@@ -1923,6 +2023,8 @@ def main():
         translation_host = cfg.get("translation_host", translation_host)
         translation_port = cfg.get("translation_port", translation_port)
         translation_backend = cfg.get("translation_backend", translation_backend)
+        translation_prompt = cfg.get("translation_prompt", "")
+        romanization_prompt = cfg.get("romanization_prompt", "")
 
     # Handle 'auto' device — use CTranslate2's detection (not torch!)
     # torch.cuda.is_available() can be False even when CTranslate2 has CUDA support
@@ -1949,58 +2051,89 @@ def main():
         compute_type = "float16" if device == "cuda" else "int8"
 
     print("=" * 70)
-    print("  YUME -- Whisper Server v5.7.0")
+    print("  YUME -- Whisper Server v0.0.8")
     print("=" * 70)
     print(f"  Model:            {model_name}")
     print(f"  Device:           {device}")
     print(f"  Compute Type:     {compute_type}")
     print(f"  Port:             {port}")
-    print(f"  Architecture:     download-once + local slice")
-    print(f"  Whisper Params:   v2.0.7 (proven for music)")
-    print(f"  VAD Filter:       OFF (required for music)")
+    print("  Architecture:     download-once + local slice")
+    print("  Whisper Params:   v2.0.7 (proven for music)")
+    print("  VAD Filter:       OFF (required for music)")
     yt_info = youtube_auth_method
     if youtube_auth_method == "cookies":
         yt_info += f" ({cookies_browser})"
     print(f"  YouTube Auth:     {yt_info}")
 
-    # Deterministic romanization availability
+    # Deterministic romanization: lightweight check only (no dictionary loading at startup).
+    # Full initialization happens lazily on first /romanize request.
+    # Using import-only (not kakasi() constructor) because the dictionary load
+    # can take 30-120s on Windows with real-time antivirus scanning.
     roma_parts = []
+    print(f"  Python exe:       {sys.executable}")
     try:
-        import pykakasi; roma_parts.append("ja(pykakasi)")
-    except ImportError: pass
+        import pykakasi  # noqa: F401
+        roma_parts.append("ja(pykakasi)")
+    except Exception as e:
+        # Show where Python is looking for packages
+        import site
+        paths = site.getsitepackages() if hasattr(site, 'getsitepackages') else ['(no site-packages)']
+        print(f"  [roma] pykakasi import failed: {type(e).__name__}: {e}")
+        print(f"  [roma] site-packages: {paths[0] if paths else '?'}")
     try:
-        from pypinyin import pinyin; roma_parts.append("zh(pypinyin)")
-    except ImportError: pass
+        from pypinyin import pinyin  # noqa: F401
+        roma_parts.append("zh(pypinyin)")
+    except ImportError:
+        pass
     try:
-        from romanization import romanize as _kr; roma_parts.append("ko(romanization)")
-    except ImportError: pass
+        from romanization import romanize  # noqa: F401
+        roma_parts.append("ko(romanization)")
+    except ImportError:
+        pass  # optional, don't spam
     if roma_parts:
         print(f"  Romanization:     {', '.join(roma_parts)} (instant)")
     else:
-        print(f"  Romanization:     LLM-only (pip install pykakasi pypinyin romanization for instant)")
+        print("  Romanization:     LLM-only (pip install pykakasi pypinyin for instant)")
 
     print("=" * 70)
 
-    if not _check_ytdlp():
-        print("")
-        print("  WARNING: yt-dlp not found in PATH!")
-        print("  Pre-fetch mode will not work without it.")
-        print("")
-    else:
-        v = subprocess.run([*_ytdlp_cmd(), "--version"], capture_output=True, text=True)
-        print(f"  yt-dlp:           {v.stdout.strip()}")
-
-    # Check ffmpeg — required for audio slicing and format conversion
-    if shutil.which("ffmpeg"):
-        v = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, timeout=5)
-        ffver = v.stdout.split('\n')[0].split(' ')[2] if v.returncode == 0 else "?"
-        print(f"  ffmpeg:           {ffver}")
-    else:
-        print("")
-        print("  WARNING: ffmpeg not found in PATH!")
-        print("  Audio slicing will fail. Subtitles will not work.")
-        print("  Run the Pocket Yume setup wizard to install ffmpeg.")
-        print("")
+    # --- Tool version checks (deferred to background — don't block model load) ---
+    def _check_tool_versions():
+        """Check yt-dlp and ffmpeg versions in background. Prints after model loads."""
+        results = []
+        try:
+            if not _check_ytdlp():
+                results.append(("yt-dlp", None, ["  WARNING: yt-dlp not found in PATH!"]))
+            else:
+                v = subprocess.run(
+                    [*_ytdlp_cmd(), "--version"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                results.append(("yt-dlp", v.stdout.strip() or "?", None))
+        except Exception as exc:
+            results.append(("yt-dlp", None, [f"  WARNING: yt-dlp check failed: {exc}"]))
+        try:
+            if not shutil.which("ffmpeg"):
+                results.append(("ffmpeg", None, [
+                    "  WARNING: ffmpeg not found in PATH!",
+                    "  Audio slicing will fail. Run the setup wizard to install ffmpeg.",
+                ]))
+            else:
+                v = subprocess.run(
+                    ["ffmpeg", "-version"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                ffver = v.stdout.split('\n')[0].split(' ')[2] if v.returncode == 0 else "?"
+                results.append(("ffmpeg", ffver, None))
+        except Exception as exc:
+            results.append(("ffmpeg", None, [f"  WARNING: ffmpeg check failed: {exc}"]))
+        for tool, version, warnings in results:
+            if version is not None:
+                print(f"  {tool + ':':18s}{version}")
+            elif warnings:
+                for line in warnings:
+                    print(line)
+    threading.Thread(target=_check_tool_versions, daemon=True).start()
 
     # Auth method viability check
     #
@@ -2107,9 +2240,10 @@ def main():
         os.chmod(TOKEN_FILE, 0o600)  # owner-only read/write
         print(f"  API token:        written to {TOKEN_FILE}")
     except Exception as e:
-        print(f"  API token:        {API_TOKEN[:12]}... (file write failed: {e})")
+        print(f"  API token:        file write FAILED ({e})")
+        print("                    Extension may not auto-discover the server.")
 
-    print(f"  Security:         Host validation + API token + URL validation")
+    print("  Security:         Host validation + API token + URL validation")
 
     # ── Parallel startup: start HTTP server FIRST, then load model ──
     # The /health endpoint returns {"status": "loading"} while model is None,
@@ -2135,54 +2269,56 @@ def main():
     print("  Loading Whisper model...")
     print("")
 
+    # Pre-load pykakasi dictionary in background thread BEFORE model load.
+    # The dictionary load can take 30-120s on Windows (Defender scans each file).
+    # By starting it now, it runs in parallel with the ~15s Whisper model load,
+    # so it's usually ready before the extension's first romanization probe.
+    def _init_kakasi_background():
+        try:
+            _get_kakasi()
+        except Exception as e:
+            print(f"[Yume] Background kakasi init failed: {e}")
+    threading.Thread(target=_init_kakasi_background, daemon=True).start()
+
     try:
         model = WhisperModel(model_name, device=device, compute_type=compute_type)
 
-        # Try to create BatchedInferencePipeline wrapper for potential multi-chunk batching
-        try:
-            from faster_whisper import BatchedInferencePipeline
-            batched_model = BatchedInferencePipeline(model=model)
-            print(f"  Batched pipeline: available (faster-whisper BatchedInferencePipeline)")
-        except (ImportError, Exception) as bp_err:
-            batched_model = None
-            print(f"  Batched pipeline: unavailable ({bp_err})")
-
         # Prewarm: run a tiny dummy inference to trigger CUDA kernel compilation
-        # and KV cache allocation. This moves the first-inference penalty from
-        # the user's first real request to startup time.
-        import numpy as np
-        _dummy = np.zeros(16000, dtype=np.float32)  # 1 second of silence
-        try:
-            list(model.transcribe(_dummy, language="en"))
-            print("  Prewarm:          done (CUDA kernels compiled)")
-        except Exception as pw_err:
-            pw_msg = str(pw_err)
-            # Detect missing CUDA runtime libraries (cuBLAS, cuDNN, etc.)
-            # CTranslate2 reports CUDA support but the actual DLLs aren't installed
-            cuda_lib_missing = any(lib in pw_msg.lower() for lib in [
-                "cublas", "cudnn", "cudart", "cufft", "cusolver",
-                "is not found or cannot be loaded",
-            ])
-            if cuda_lib_missing and device == "cuda":
-                print(f"  Prewarm:          CUDA library missing: {pw_msg[:80]}")
-                print("")
-                print("  WARNING: CUDA libraries are incomplete.")
-                print("  The model loaded but inference requires cuBLAS/cuDNN.")
-                print("  Falling back to CPU mode automatically.")
-                print("")
-                # Reload model on CPU
-                try:
-                    del model
-                    device = "cpu"
-                    compute_type = "int8"
-                    model = WhisperModel(model_name, device="cpu", compute_type="int8")
-                    # Retry prewarm on CPU
-                    list(model.transcribe(_dummy, language="en"))
-                    print(f"  Prewarm:          done (CPU fallback)")
-                except Exception as cpu_err:
-                    print(f"  Prewarm:          CPU fallback also failed: {cpu_err}")
-            else:
-                print(f"  Prewarm:          skipped ({pw_err})")
+        # and KV cache allocation. Adds ~10-15s to startup but makes first real
+        # chunk faster. Also detects missing CUDA libraries before user's first request.
+        # Skip with --no-prewarm for faster startup (first chunk takes the hit instead).
+        if not args.prewarm:
+            print("  Prewarm:          skipped (use --prewarm to enable)")
+        else:
+            import numpy as np
+            _dummy = np.zeros(16000, dtype=np.float32)  # 1 second of silence
+            try:
+                list(model.transcribe(_dummy, language="en"))
+                print("  Prewarm:          done (CUDA kernels compiled)")
+            except Exception as pw_err:
+                pw_msg = str(pw_err)
+                cuda_lib_missing = any(lib in pw_msg.lower() for lib in [
+                    "cublas", "cudnn", "cudart", "cufft", "cusolver",
+                    "is not found or cannot be loaded",
+                ])
+                if cuda_lib_missing and device == "cuda":
+                    print(f"  Prewarm:          CUDA library missing: {pw_msg[:80]}")
+                    print("")
+                    print("  WARNING: CUDA libraries are incomplete.")
+                    print("  The model loaded but inference requires cuBLAS/cuDNN.")
+                    print("  Falling back to CPU mode automatically.")
+                    print("")
+                    try:
+                        del model
+                        device = "cpu"
+                        compute_type = "int8"
+                        model = WhisperModel(model_name, device="cpu", compute_type="int8")
+                        list(model.transcribe(_dummy, language="en"))
+                        print("  Prewarm:          done (CPU fallback)")
+                    except Exception as cpu_err:
+                        print(f"  Prewarm:          CPU fallback also failed: {cpu_err}")
+                else:
+                    print(f"  Prewarm:          skipped ({pw_err})")
 
         print("=" * 70)
         print("  MODEL LOADED -- Server ready")
@@ -2194,9 +2330,66 @@ def main():
         server_thread.join()
 
     except Exception as e:
-        print(f"\n  FAILED TO LOAD MODEL: {e}")
-        print("\n  If you see CUDA errors, try:")
-        print("    --device cpu --compute-type int8")
+        err_msg = str(e).lower()
+        print("")
+        print("=" * 70)
+        print(f"  FAILED TO LOAD MODEL: {e}")
+        print("=" * 70)
+
+        # ── Actionable error messages with easy solutions ──
+        if "out of memory" in err_msg or "oom" in err_msg or "cuda" in err_msg and "memory" in err_msg:
+            print("")
+            print("  CAUSE: Your GPU doesn't have enough VRAM for this model.")
+            print("")
+            print("  SOLUTIONS (pick one):")
+            print("    1. Use a smaller model:")
+            print("       python pocket_yume.py settings  → change Whisper model to 'small' or 'base'")
+            print("    2. Use CPU instead (slower but works):")
+            print("       python pocket_yume.py settings  → set device to 'cpu'")
+            print("    3. Or restart with: --device cpu --compute-type int8")
+        elif "cublas" in err_msg or "cudnn" in err_msg or "cudart" in err_msg:
+            print("")
+            print("  CAUSE: CUDA libraries are missing or incomplete.")
+            print("")
+            print("  SOLUTIONS (pick one):")
+            print("    1. Install CUDA Toolkit: https://developer.nvidia.com/cuda-toolkit")
+            print("    2. Or switch to CPU mode (no CUDA needed):")
+            print("       python pocket_yume.py settings  → set device to 'cpu'")
+            print("    3. Or restart with: --device cpu --compute-type int8")
+        elif "no module" in err_msg or "modulenotfound" in err_msg:
+            missing = str(e).split("'")[1] if "'" in str(e) else "unknown"
+            print("")
+            print(f"  CAUSE: Missing Python package: {missing}")
+            print("")
+            print("  SOLUTION: Run the setup wizard to install dependencies:")
+            print("    python pocket_yume.py setup")
+            print(f"    Or manually: pip install {missing}")
+        elif "no such file" in err_msg or "filenotfound" in err_msg:
+            print("")
+            print("  CAUSE: Model files not found on disk.")
+            print("")
+            print("  SOLUTIONS:")
+            print("    1. The model will auto-download on first run (needs internet)")
+            print("    2. Check your internet connection and try again")
+            print("    3. Or choose a different model: python pocket_yume.py settings")
+        elif "permission" in err_msg or "access" in err_msg:
+            print("")
+            print("  CAUSE: Permission denied — can't access model files or GPU.")
+            print("")
+            print("  SOLUTIONS:")
+            print("    1. Try running as Administrator (Windows) or with sudo (Linux/macOS)")
+            print("    2. Check that the model directory is not read-only")
+        else:
+            print("")
+            print("  GENERAL SOLUTIONS:")
+            print("    1. Switch to CPU:  --device cpu --compute-type int8")
+            print("    2. Use smaller model:  --model small  or  --model tiny")
+            print("    3. Re-run setup:  python pocket_yume.py setup")
+            print("    4. Check logs:  logs/whisper_server.log")
+
+        print("")
+        print("  Need help? Run: python pocket_yume.py health")
+        print("")
         sys.exit(1)
 
 

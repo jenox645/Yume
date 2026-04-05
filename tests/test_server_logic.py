@@ -28,6 +28,11 @@ class TestURLValidation:
         url = url.strip()
         if url.startswith("-"):
             return False, "URL cannot start with '-'"
+        # Reject shell metacharacters to prevent command injection
+        # Note: '&' is intentionally allowed — it's a standard URL query separator
+        # and all subprocess calls use shell=False (list args), so '&' is safe.
+        if any(c in url for c in [";", "|", "`", "$", "(", ")", "\n", "\r"]):
+            return False, "URL contains shell metacharacters"
         try:
             parsed = urlparse(url)
             if parsed.scheme not in ("http", "https"):
@@ -75,6 +80,37 @@ class TestURLValidation:
 
     def test_rejects_javascript_scheme(self):
         ok, err = self._validate_url("javascript:alert(1)")
+        assert not ok
+
+    def test_allows_ampersand_in_query(self):
+        """'&' is a normal URL query separator — must not be blocked."""
+        ok, _ = self._validate_url("https://www.youtube.com/watch?v=abc&t=120")
+        assert ok
+
+    def test_allows_multiple_query_params(self):
+        """YouTube URLs with playlists use multiple '&' params."""
+        ok, _ = self._validate_url("https://www.youtube.com/watch?v=abc&list=PLxyz&index=3")
+        assert ok
+
+    def test_rejects_semicolon(self):
+        ok, err = self._validate_url("https://example.com/;rm -rf /")
+        assert not ok
+        assert "metacharacters" in err
+
+    def test_rejects_pipe(self):
+        ok, err = self._validate_url("https://example.com/|cat /etc/passwd")
+        assert not ok
+
+    def test_rejects_backtick(self):
+        ok, err = self._validate_url("https://example.com/`whoami`")
+        assert not ok
+
+    def test_rejects_dollar(self):
+        ok, err = self._validate_url("https://example.com/${HOME}")
+        assert not ok
+
+    def test_rejects_newline(self):
+        ok, err = self._validate_url("https://example.com/\nmalicious")
         assert not ok
 
 
@@ -166,7 +202,7 @@ class TestVersionConsistency:
     """Verify version strings are consistent across project files."""
 
     def test_pocket_yume_version_format(self):
-        content = Path(__file__).parent.parent.joinpath("pocket_yume.py").read_text()
+        content = Path(__file__).parent.parent.joinpath("pocket_yume.py").read_text(encoding="utf-8")
         import re
         match = re.search(r'VERSION\s*=\s*"(\d+\.\d+\.\d+)"', content)
         assert match, "VERSION not found in pocket_yume.py"
@@ -177,7 +213,7 @@ class TestVersionConsistency:
 
     def test_manifest_version_matches(self):
         import json
-        content = Path(__file__).parent.parent.joinpath("pocket_yume.py").read_text()
+        content = Path(__file__).parent.parent.joinpath("pocket_yume.py").read_text(encoding="utf-8")
         import re
         match = re.search(r'VERSION\s*=\s*"(\d+\.\d+\.\d+)"', content)
         assert match, "VERSION not found in pocket_yume.py"

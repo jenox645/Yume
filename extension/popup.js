@@ -1,4 +1,4 @@
-// Yume - Popup Script v5.7.0
+// Yume - Popup Script v0.0.8
 console.log('[Yume Popup] Script loaded');
 
 // ============================================================================
@@ -271,8 +271,15 @@ async function checkSubtitleStatus() {
 async function checkServers() {
   const whisperEl = document.getElementById('whisperStatus');
   const translationEl = document.getElementById('translationStatus');
-  whisperEl.className = 'status-indicator checking';
-  translationEl.className = 'status-indicator checking';
+  // Only show "checking" on first poll — subsequent polls keep current state to avoid flicker
+  if (!whisperEl._initialized) {
+    whisperEl.className = 'status-indicator checking';
+    whisperEl._initialized = true;
+  }
+  if (!translationEl._initialized) {
+    translationEl.className = 'status-indicator checking';
+    translationEl._initialized = true;
+  }
 
   const sendBg = (url, isWhisper = false) => new Promise((resolve) => {
     chrome.runtime.sendMessage({ type: 'CHECK_SERVER', url, isWhisper }, (r) => {
@@ -323,7 +330,14 @@ async function checkServers() {
     }
     const portEl = document.getElementById('translationInfo');
     if (portEl) portEl.textContent = `localhost:${tPort}`;
-  } catch (e) { translationEl.className = 'status-indicator disconnected'; }
+  } catch (e) {
+    // Network error (timeout, connection refused) — use same 3-strike logic
+    // The translation LLM may be busy with a 10-20s inference, causing timeouts
+    translationEl._failCount = (translationEl._failCount || 0) + 1;
+    if (translationEl._failCount >= 3) {
+      translationEl.className = 'status-indicator disconnected';
+    }
+  }
 }
 
 // Auto-refresh server status while popup is open (fixes stale red indicators)
@@ -363,6 +377,10 @@ function getDefaultSettings() {
     timingOffset: 0,
   };
 }
+
+// Central URL resolution — avoids hardcoded localhost:port scattered across functions
+const _POPUP_DEFAULTS = getDefaultSettings();
+function _whisperUrl(settings) { return settings?.whisperUrl || _POPUP_DEFAULTS.whisperUrl; }
 
 async function loadSettings() {
   return new Promise((resolve) => {
@@ -415,7 +433,7 @@ async function loadSettings() {
       // Timing offset
       const offsetTicks = s.timingOffset || 0;
       document.getElementById('timingOffset').value = offsetTicks;
-      document.getElementById('timingOffsetVal').textContent = (offsetTicks / 10).toFixed(1) + 's';
+      document.getElementById('timingOffsetVal').value = (offsetTicks / 10).toFixed(1);
 
       // Glass effect
       const glassEnabled = s.glassEnabled === true;
@@ -576,10 +594,7 @@ function savePorts() {
 
 function autoFreePorts() {
   // Pick ports that are unlikely to conflict
-  const candidates = [5001, 5002, 5003, 5004, 5005, 5006, 5007, 5008, 5009, 5010];
-  const tCandidates = [5000, 5050, 5051, 5052, 5053, 5054, 5055];
-
-  // Simple: just pick next pair that isn't 5000 (macOS Airplay) or commonly used
+  // Avoids 5000 (macOS AirPlay) and other commonly used ports
   let wPort = 5001;
   let tPort = 5050;
 
@@ -652,16 +667,16 @@ async function loadModels() {
     const models = response.models || [];
     const ggufs = response.local_ggufs || [];
     const note = response.note || '';
-    let html = `<span class="model-label">Backend: <b>${backend}</b></span>`;
+    let html = `<span class="model-label">Backend: <b>${_escapeHtml(backend)}</b></span>`;
     if (models.length > 0) {
       html += '<div style="margin-top:6px;font-size:11px;color:var(--text-secondary)">Loaded:</div>';
-      models.forEach(m => { html += `<div style="font-size:12px;color:var(--text-primary);padding:2px 0">\u2022 ${m.name}</div>`; });
+      models.forEach(m => { html += `<div style="font-size:12px;color:var(--text-primary);padding:2px 0">\u2022 ${_escapeHtml(m.name)}</div>`; });
     }
     if (ggufs.length > 0) {
       html += '<div style="margin-top:6px;font-size:11px;color:var(--text-secondary)">Local GGUFs:</div>';
-      ggufs.forEach(g => { html += `<div style="font-size:12px;color:var(--text-primary);padding:2px 0">\u2022 ${g.name} <span style="color:var(--text-dim)">(${g.size_mb} MB)</span></div>`; });
+      ggufs.forEach(g => { html += `<div style="font-size:12px;color:var(--text-primary);padding:2px 0">\u2022 ${_escapeHtml(g.name)} <span style="color:var(--text-dim)">(${_escapeHtml(String(g.size_mb))} MB)</span></div>`; });
     }
-    if (note) html += `<div style="margin-top:6px;font-size:10px;color:var(--border-gold);font-style:italic">${note}</div>`;
+    if (note) html += `<div style="margin-top:6px;font-size:10px;color:var(--border-gold);font-style:italic">${_escapeHtml(note)}</div>`;
     infoEl.innerHTML = html;
   } catch (e) {
     infoEl.innerHTML = '<span class="model-label" style="color:var(--text-dim)">Could not load models</span>';
@@ -752,13 +767,21 @@ function setupEventListeners() {
   });
   opacitySlider?.addEventListener('change', () => showToast('Settings saved', 'success'));
 
-  // Timing offset slider
+  // Timing offset slider ↔ number input (bidirectional sync)
   const offsetSlider = document.getElementById('timingOffset');
+  const offsetInput = document.getElementById('timingOffsetVal');
   offsetSlider?.addEventListener('input', () => {
-    document.getElementById('timingOffsetVal').textContent = (offsetSlider.value / 10).toFixed(1) + 's';
+    if (offsetInput) offsetInput.value = (offsetSlider.value / 10).toFixed(1);
     saveSettings(false);
   });
   offsetSlider?.addEventListener('change', () => showToast('Settings saved', 'success'));
+  offsetInput?.addEventListener('input', () => {
+    const secs = parseFloat(offsetInput.value) || 0;
+    const ticks = Math.round(Math.max(-30, Math.min(30, secs * 10)));
+    if (offsetSlider) offsetSlider.value = ticks;
+    saveSettings(false);
+  });
+  offsetInput?.addEventListener('change', () => showToast('Settings saved', 'success'));
 
   // Color pickers
   ['windowBgColor', 'originalColor', 'romajiColor', 'translationColor'].forEach(id => {
@@ -940,7 +963,7 @@ async function updateBlacklistOnServer() {
     const list = hallucinationBlacklist || [];
     if (list.length === 0) { statusEl.textContent = 'Blacklist is empty'; statusEl.className = 'status-message error'; setTimeout(() => { statusEl.textContent = ''; }, 3000); return; }
 
-    const whisperUrl = settings?.whisperUrl || 'http://localhost:5001';
+    const whisperUrl = _whisperUrl(settings);
     const response = await new Promise((resolve, reject) => {
       chrome.runtime.sendMessage({ type: 'UPDATE_BLACKLIST', blacklist: list, whisperUrl }, (r) => {
         if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
@@ -972,7 +995,7 @@ async function fetchStats() {
   if (!el) return;
   try {
     const { settings } = await new Promise(r => chrome.storage.local.get(['settings'], r));
-    const whisperUrl = settings?.whisperUrl || 'http://localhost:5001';
+    const whisperUrl = _whisperUrl(settings);
 
     // Ensure we have a valid API token (discover from /health if needed)
     let token = await _getApiToken();
@@ -1031,12 +1054,51 @@ async function fetchStats() {
 
     // Also update model switcher display
     const modelEl = document.getElementById('currentWhisperModel');
-    if (modelEl) modelEl.textContent = s.model;
     const selectEl = document.getElementById('whisperModelSelect');
-    if (selectEl) selectEl.value = s.model;
+    const isCustomPath = s.model && (s.model.includes('/') || s.model.includes('\\'));
+    const friendlyName = s.model_display_name || '';
+    if (modelEl) {
+      if (friendlyName) {
+        modelEl.textContent = friendlyName;
+      } else if (isCustomPath) {
+        modelEl.textContent = s.model.split(/[/\\]/).pop();
+      } else {
+        modelEl.textContent = s.model;
+      }
+    }
+    if (selectEl) {
+      // If custom model path, inject as <option> if not already present
+      if (isCustomPath && !selectEl.querySelector(`option[value="${CSS.escape(s.model)}"]`)) {
+        const label = friendlyName || s.model.split(/[/\\]/).pop() || s.model;
+        const opt = document.createElement('option');
+        opt.value = s.model;
+        opt.textContent = `${label} (custom)`;
+        selectEl.insertBefore(opt, selectEl.firstChild);
+      }
+      selectEl.value = s.model;
+    }
+    // Persist model name to storage for offline fallback (Priority 1C)
+    chrome.storage.local.get(['settings'], (r) => {
+      const st = r.settings || {};
+      if (st.whisperModel !== s.model) {
+        chrome.storage.local.set({ settings: { ...st, whisperModel: s.model } });
+      }
+    });
 
   } catch (e) {
     el.textContent = 'Stats unavailable: ' + e.message;
+    // Fall back to config value for Active Model display when server is offline
+    try {
+      const { settings } = await new Promise(r => chrome.storage.local.get(['settings'], r));
+      const cfgModel = settings?.whisperModel || settings?.whisper_model;
+      if (cfgModel) {
+        const modelEl = document.getElementById('currentWhisperModel');
+        // Show directory name for custom paths, full name for standard models
+        const display = (cfgModel.includes('/') || cfgModel.includes('\\'))
+          ? cfgModel.split(/[/\\]/).pop() : cfgModel;
+        if (modelEl) modelEl.textContent = `${display} (offline)`;
+      }
+    } catch (_) { /* no config available */ }
   }
 }
 
@@ -1066,7 +1128,7 @@ async function switchWhisperModel() {
 
   try {
     const { settings } = await new Promise(r => chrome.storage.local.get(['settings'], r));
-    const whisperUrl = settings?.whisperUrl || 'http://localhost:5001';
+    const whisperUrl = _whisperUrl(settings);
     const token = await _getApiToken();
     const headers = { 'Content-Type': 'application/json' };
     if (token) headers['X-API-Token'] = token;

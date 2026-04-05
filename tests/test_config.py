@@ -33,7 +33,7 @@ def test_default_config_no_dead_fields():
 
 def test_default_config_values_match_server():
     """Config defaults must match server hardcoded defaults."""
-    assert DEFAULT_CONFIG["pause_threshold"] == 0.25
+    assert abs(DEFAULT_CONFIG["pause_threshold"] - 0.25) < 1e-9
     assert DEFAULT_CONFIG["word_timestamps"] is False
     assert DEFAULT_CONFIG["whisper_port"] == 5001
     assert DEFAULT_CONFIG["translation_port"] == 5000

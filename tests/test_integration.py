@@ -1,8 +1,8 @@
-"""Integration tests for Yume v0.0.7.
+"""Integration tests for Yume v0.0.8.
 
 These tests verify that config options actually affect behavior.
 They exist because of the deno incident: youtube_auth_method="deno"
-was a no-op from v1.0 to v5.4.2  Ezero code used it. A 25-category
+was a no-op from v1.0 to v5.4.2 — zero code used it. A 25-category
 deep review missed it. These tests ensure that never happens again.
 
 Run: pytest tests/test_integration.py -v
@@ -23,7 +23,7 @@ from config import DEFAULT_CONFIG
 # 1. DEAD CONFIG DETECTION
 #    Every key in DEFAULT_CONFIG must be *used* somewhere (not just displayed).
 #    "Used" means it influences a subprocess call, server parameter, or API
-#    response  Enot just printed in a menu or stored in a file.
+#    response — not just printed in a menu or stored in a file.
 # ---------------------------------------------------------------------------
 
 def _load_all_source_code():
@@ -40,14 +40,14 @@ def _load_all_source_code():
 class TestDeadConfigDetection:
     """Flag config keys that exist but are never read in any source file."""
 
-    # Keys that are KNOWN to be display-only or structural  Eexempt from the
+    # Keys that are KNOWN to be display-only or structural — exempt from the
     # "must influence behavior" rule. Document WHY each is exempt.
     EXEMPT_KEYS = {
         "first_run_complete",   # Controls flow (wizard vs main menu), not a subprocess arg
         "translation_model",    # Display-only: the actual model is loaded via gguf_model_path
     }
 
-    # Keys that are KNOWN dead  Ethey exist in config but nothing uses them.
+    # Keys that are KNOWN dead — they exist in config but nothing uses them.
     # If a key appears here, it's a known debt item, not a forgotten no-op.
     # The test will FAIL if a new dead key appears that isn't listed here.
     KNOWN_DEAD = {
@@ -61,7 +61,7 @@ class TestDeadConfigDetection:
         If a key is only referenced in config.py and test files, it's dead.
         Keys in KNOWN_DEAD are tolerated (but documented). Keys in EXEMPT_KEYS
         are intentionally display/flow-only. Any OTHER key that's not found
-        in the actual application code is a new dead key  Elikely a bug.
+        in the actual application code is a new dead key — likely a bug.
         """
         sources = _load_all_source_code()
         dead_keys = []
@@ -118,13 +118,13 @@ class TestDeadConfigDetection:
                         uses_in_app.append(f"  {path}:{i+1}: {stripped[:100]}")
 
             # If the key IS now used in real code, it should be removed from KNOWN_DEAD
-            # We allow loading the value (e.g. into a global)  Ethat's not "using" it
+            # We allow loading the value (e.g. into a global) — that's not "using" it
             # in a way that changes behavior if word_timestamps is forced False.
-            # This is a soft check  Ehuman review needed for edge cases.
+            # This is a soft check — human review needed for edge cases.
 
 
 # ---------------------------------------------------------------------------
-# 2. YOUTUBE AUTH CONFIG ↁECOMMAND TRACING
+# 2. YOUTUBE AUTH CONFIG → COMMAND TRACING
 #    Verify that youtube_auth_method actually changes the yt-dlp command.
 # ---------------------------------------------------------------------------
 
@@ -188,33 +188,41 @@ class TestHealthCheckConsistency:
         """llama.cpp health must use /v1/models (not /health which returns 404)."""
         cli_src = (ROOT / "pocket_yume.py").read_text(encoding="utf-8")
 
-        # Find BACKEND_INFO llamacpp hp value
-        match = re.search(r'"llamacpp".*?"hp":\s*"([^"]+)"', cli_src, re.DOTALL)
+        # Find BACKEND_INFO llamacpp hp value (may be a literal or constant reference)
+        match = re.search(r'"llamacpp".*?"hp":\s*("([^"]+)"|HEALTH_PATH_OPENAI)', cli_src, re.DOTALL)
         assert match, "BACKEND_INFO llamacpp not found"
-        assert match.group(1) == "/v1/models", (
-            f"llamacpp health path is '{match.group(1)}' but must be '/v1/models'"
-        )
+        if match.group(2):
+            assert match.group(2) == "/v1/models", (
+                f"llamacpp health path is '{match.group(2)}' but must be '/v1/models'"
+            )
+        else:
+            # Using constant — verify the constant value
+            const_match = re.search(r'HEALTH_PATH_OPENAI\s*=\s*"([^"]+)"', cli_src)
+            assert const_match and const_match.group(1) == "/v1/models"
 
     def test_ollama_health_path(self):
         """Ollama health must use /api/tags."""
         cli_src = (ROOT / "pocket_yume.py").read_text(encoding="utf-8")
 
-        # Find the ollama block specifically in BACKEND_INFO
-        # Use a tighter pattern: find "ollama": { ... "hp": "..." }
+        # Find the ollama block — hp may be a literal or constant reference
         ollama_block = re.search(
-            r'"ollama"\s*:\s*\{[^}]*"hp"\s*:\s*"([^"]+)"',
+            r'"ollama"\s*:\s*\{[^}]*"hp"\s*:\s*("([^"]+)"|HEALTH_PATH_OLLAMA)',
             cli_src
         )
         assert ollama_block, "BACKEND_INFO ollama not found"
-        assert ollama_block.group(1) == "/api/tags", (
-            f"ollama health path is '{ollama_block.group(1)}' but must be '/api/tags'"
-        )
+        if ollama_block.group(2):
+            assert ollama_block.group(2) == "/api/tags", (
+                f"ollama health path is '{ollama_block.group(2)}' but must be '/api/tags'"
+            )
+        else:
+            const_match = re.search(r'HEALTH_PATH_OLLAMA\s*=\s*"([^"]+)"', cli_src)
+            assert const_match and const_match.group(1) == "/api/tags"
 
     def test_popup_tries_v1_models(self):
         """popup.js must try /v1/models for translation health check."""
         popup_src = (ROOT / "extension" / "popup.js").read_text(encoding="utf-8")
         assert "/v1/models" in popup_src, (
-            "popup.js doesn't try /v1/models for translation health  E"
+            "popup.js doesn't try /v1/models for translation health — "
             "it won't detect llama.cpp or LM Studio servers"
         )
 
@@ -275,7 +283,7 @@ class TestSubprocessHygiene:
     """Verify no hardcoded 'yt-dlp' binary calls bypass _ytdlp_cmd()."""
 
     def test_no_hardcoded_ytdlp_in_server(self):
-        """Server must not call 'yt-dlp' directly  Emust use _ytdlp_cmd()."""
+        """Server must not call 'yt-dlp' directly — must use _ytdlp_cmd()."""
         src = (ROOT / "server" / "faster_whisper_server.py").read_text(encoding="utf-8")
         lines = src.splitlines()
         violations = []
@@ -431,7 +439,7 @@ class TestNamingConsistency:
             if not path.exists():
                 continue
             content = path.read_text(encoding="utf-8")
-            # PocketYume (camelCase) should not appear  Eit's either "Yume" or "Pocket Yume"
+            # PocketYume (camelCase) should not appear — it's either "Yume" or "Pocket Yume"
             occurrences = [
                 (i+1, line.strip())
                 for i, line in enumerate(content.splitlines())

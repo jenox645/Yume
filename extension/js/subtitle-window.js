@@ -1,5 +1,5 @@
 // ============================================================================
-// SUBTITLE WINDOW v5.7.0 - Chunk counter, ready toast, per-line fonts
+// SUBTITLE WINDOW v0.0.8 - Chunk counter, ready toast, per-line fonts
 // ============================================================================
 
 class SubtitleWindow {
@@ -46,6 +46,7 @@ class SubtitleWindow {
         <div class="subtitle-title"></div>
         <div class="subtitle-controls">
           <div class="chunk-badge" style="display:none" title="Pipeline progress"></div>
+          <div class="roma-badge" style="display:none" title="Romanization progress"></div>
           <button class="control-btn minimize-btn" title="Minimize">\u2212</button>
           <button class="control-btn close-btn" title="Close">\u00d7</button>
         </div>
@@ -184,7 +185,9 @@ class SubtitleWindow {
           if (this.settings.showChunkCounter === false) {
             badge.style.display = 'none';
           } else if (this._lastProgress && !this._lastProgress.complete) {
-            badge.textContent = `${this._lastProgress.fetched}/${this._lastProgress.total}`;
+            const showTrans = this.settings.showEnglish !== false;
+            const cnt = showTrans ? (this._lastProgress.translated || 0) : this._lastProgress.fetched;
+            badge.textContent = `${cnt}/${this._lastProgress.total}`;
             badge.className = 'chunk-badge active';
             badge.style.display = '';
           } else if (badge.classList.contains('active') || badge.classList.contains('complete')) {
@@ -199,29 +202,68 @@ class SubtitleWindow {
   // CHUNK PROGRESS BADGE
   // ========================================================================
 
-  updateChunkProgress(fetched, total, complete) {
+  updateChunkProgress(detail) {
     if (!this.element) return;
+    const { fetched, total, complete, translated, romanized } = detail;
     const badge = this.element.querySelector('.chunk-badge');
+    const romaBadge = this.element.querySelector('.roma-badge');
     if (!badge) return;
 
-    // Always store latest progress (even when hidden) so toggle-ON can restore it
-    this._lastProgress = { fetched, total, complete };
+    this._lastProgress = detail;
+    const hidden = this.settings.showChunkCounter === false;
 
-    if (complete) {
+    // Use translated count as main progress when translation is enabled,
+    // otherwise use fetched (whisper-only). This ensures the counter only
+    // goes up when ALL enabled processing is done for a chunk.
+    const showTranslation = this.settings.showEnglish !== false;
+    const mainCount = showTranslation ? (translated || 0) : fetched;
+    // Show as complete when all chunks are fetched — empty chunks (instrumental
+    // sections with no vocals) are legitimately done, not missing.
+    const allDone = complete;
+
+    if (allDone) {
       badge.textContent = '\u2713';
       badge.className = 'chunk-badge complete';
-      if (this.settings.showChunkCounter === false) { badge.style.display = 'none'; return; }
-      badge.style.display = '';
-      setTimeout(() => {
-        if (badge.classList.contains('complete')) {
-          badge.classList.add('fade-out');
-          setTimeout(() => { badge.style.display = 'none'; }, 600);
-        }
-      }, 3000);
+      if (hidden) { badge.style.display = 'none'; }
+      else {
+        badge.style.display = '';
+        setTimeout(() => {
+          if (badge.classList.contains('complete')) {
+            badge.classList.add('fade-out');
+            setTimeout(() => { badge.style.display = 'none'; }, 600);
+          }
+        }, 3000);
+      }
     } else {
       badge.textContent = `${fetched}/${total}`;
       badge.className = 'chunk-badge active';
-      badge.style.display = (this.settings.showChunkCounter === false) ? 'none' : '';
+      badge.style.display = hidden ? 'none' : '';
+    }
+
+    // ── Roma badge (warm amber): romanization progress ──
+    if (romaBadge) {
+      const showRoma = this.settings.showRomaji === true && !hidden;
+      const romaCount = romanized || 0;
+
+      if (showRoma && fetched > 0) {
+        if (romaCount >= total && complete) {
+          romaBadge.textContent = '\u2713';
+          romaBadge.className = 'roma-badge complete';
+          romaBadge.style.display = '';
+          setTimeout(() => {
+            if (romaBadge.classList.contains('complete')) {
+              romaBadge.classList.add('fade-out');
+              setTimeout(() => { romaBadge.style.display = 'none'; }, 600);
+            }
+          }, 3000);
+        } else {
+          romaBadge.textContent = `${romaCount}R`;
+          romaBadge.className = 'roma-badge active';
+          romaBadge.style.display = '';
+        }
+      } else {
+        romaBadge.style.display = 'none';
+      }
     }
   }
 
@@ -324,7 +366,7 @@ class SubtitleWindow {
   // ========================================================================
 
   startDrag(e) {
-    if (e.target.closest('button') || e.target.closest('.chunk-badge')) return;
+    if (e.target.closest('button') || e.target.closest('.chunk-badge') || e.target.closest('.roma-badge')) return;
     const sel = window.getSelection();
     if (sel && sel.toString().length > 0) return;
     this.isDragging = true;
