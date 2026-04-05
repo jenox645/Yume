@@ -31,7 +31,7 @@ if sys.version_info < (3, 10):
     print("  On Windows, make sure to check 'Add Python to PATH' during installation.\n")
     sys.exit(1)
 
-_log = logging.getLogger('pocket_yume')
+_log = logging.getLogger("pocket_yume")
 _update_result = None  # Background update check result: [latest, url, checked] or None
 
 # Import extracted config module
@@ -40,6 +40,7 @@ from config import validate_port, validate_host, config_export, config_import
 from config import DEFAULT_WHISPER_PORT, DEFAULT_TRANSLATION_PORT, DEFAULT_OLLAMA_PORT
 
 _api_token = None
+
 
 def _run(cmd, timeout=30, **kw):
     """subprocess.run wrapper: forces UTF-8 encoding to prevent Windows cp1252 crash."""
@@ -53,7 +54,9 @@ def _run(cmd, timeout=30, **kw):
     try:
         return subprocess.run(cmd, **kw)
     except FileNotFoundError:
-        return subprocess.CompletedProcess(cmd, returncode=127, stdout="", stderr=f"Not found: {cmd[0] if cmd else '?'}")
+        return subprocess.CompletedProcess(
+            cmd, returncode=127, stdout="", stderr=f"Not found: {cmd[0] if cmd else '?'}"
+        )
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(cmd, returncode=124, stdout="", stderr="Timed out")
 
@@ -68,8 +71,8 @@ VERSION = "0.0.8"
 
 # Named constants
 KiB = 1024
-MiB = 1024 ** 2
-GiB = 1024 ** 3
+MiB = 1024**2
+GiB = 1024**3
 DOWNLOAD_CHUNK_SIZE = 64 * KiB
 SERVER_STARTUP_TIMEOUT = 180
 WHISPER_LOAD_TIMEOUT = 240
@@ -83,24 +86,25 @@ IANA_EPHEMERAL_START = 49152
 WHISPER_SAMPLE_RATE = 16000
 
 BASE_DIR = Path(__file__).parent.resolve()
-TOOLS_DIR   = BASE_DIR / "tools"
-SERVER_DIR  = BASE_DIR / "server"
-MODELS_DIR  = BASE_DIR / "models"
-GGUF_DIR    = BASE_DIR / "models" / "translation"
-LOGS_DIR    = BASE_DIR / "logs"
-EXT_DIR     = BASE_DIR / "extension"
+TOOLS_DIR = BASE_DIR / "tools"
+SERVER_DIR = BASE_DIR / "server"
+MODELS_DIR = BASE_DIR / "models"
+GGUF_DIR = BASE_DIR / "models" / "translation"
+LOGS_DIR = BASE_DIR / "logs"
+EXT_DIR = BASE_DIR / "extension"
 # Backward compat: if config is in root (old layout), use that
 
 PLAT = platform.system()  # "Windows", "Linux", "Darwin"
-IS_WIN = (PLAT == "Windows")
-IS_MAC = (PLAT == "Darwin")
-IS_LIN = (PLAT == "Linux")
+IS_WIN = PLAT == "Windows"
+IS_MAC = PLAT == "Darwin"
+IS_LIN = PLAT == "Linux"
 EXE = ".exe" if IS_WIN else ""
 ARCH = platform.machine().lower()  # x86_64, amd64, arm64, aarch64
 
 # ────
 # DOWNLOAD URLS PER PLATFORM
 # ────
+
 
 def _get_download_urls():
     urls = {}
@@ -116,7 +120,9 @@ def _get_download_urls():
 
     # FFmpeg
     if IS_WIN:
-        urls["ffmpeg"] = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+        urls["ffmpeg"] = (
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+        )
     elif IS_MAC:
         if "arm" in ARCH or "aarch" in ARCH:
             urls["ffmpeg"] = "https://www.osxexperts.net/ffmpeg7arm.zip"
@@ -124,7 +130,9 @@ def _get_download_urls():
             urls["ffmpeg"] = "https://evermeet.cx/ffmpeg/getrelease/zip"
     else:
         # Linux
-        urls["ffmpeg"] = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
+        urls["ffmpeg"] = (
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
+        )
 
     # Deno
     if IS_WIN:
@@ -164,40 +172,50 @@ BACKEND_INFO = {
     "llamacpp": {
         "name": "llama.cpp (built-in)",
         "desc": "DEFAULT. Drop a .gguf in models/translation/, Yume loads it directly.",
-        "dh": "127.0.0.1", "dp": DEFAULT_TRANSLATION_PORT,
-        "hp": HEALTH_PATH_OPENAI, "ap": CHAT_PATH,
+        "dh": "127.0.0.1",
+        "dp": DEFAULT_TRANSLATION_PORT,
+        "hp": HEALTH_PATH_OPENAI,
+        "ap": CHAT_PATH,
         "inst": (
             "pip install llama-cpp-python\n"
-            "  GPU (CUDA):  CMAKE_ARGS=\"-DGGML_CUDA=on\" pip install llama-cpp-python\n"
+            '  GPU (CUDA):  CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python\n'
             "  Win prebuilt: pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124"
         ),
     },
     "ollama": {
         "name": "Ollama",
         "desc": "One-click install, auto GPU, runs as service.",
-        "dh": "127.0.0.1", "dp": DEFAULT_OLLAMA_PORT,
-        "hp": HEALTH_PATH_OLLAMA, "ap": CHAT_PATH,
+        "dh": "127.0.0.1",
+        "dp": DEFAULT_OLLAMA_PORT,
+        "hp": HEALTH_PATH_OLLAMA,
+        "ap": CHAT_PATH,
         "inst": "https://ollama.com -- or auto-install via Pocket Yume",
     },
     "lmstudio": {
         "name": "LM Studio",
         "desc": "GUI app with model browser.",
-        "dh": "127.0.0.1", "dp": 1234,
-        "hp": HEALTH_PATH_OPENAI, "ap": CHAT_PATH,
+        "dh": "127.0.0.1",
+        "dp": 1234,
+        "hp": HEALTH_PATH_OPENAI,
+        "ap": CHAT_PATH,
         "inst": "Download from: https://lmstudio.ai",
     },
     "textgenwebui": {
         "name": "text-generation-webui",
         "desc": "Feature-rich web UI by oobabooga.",
-        "dh": "127.0.0.1", "dp": DEFAULT_TRANSLATION_PORT,
-        "hp": HEALTH_PATH_OPENAI, "ap": CHAT_PATH,
+        "dh": "127.0.0.1",
+        "dp": DEFAULT_TRANSLATION_PORT,
+        "hp": HEALTH_PATH_OPENAI,
+        "ap": CHAT_PATH,
         "inst": "https://github.com/oobabooga/text-generation-webui",
     },
     "custom": {
         "name": "Custom (OpenAI-compatible)",
         "desc": "Any server with /v1/chat/completions endpoint.",
-        "dh": "127.0.0.1", "dp": DEFAULT_TRANSLATION_PORT,
-        "hp": HEALTH_PATH_OPENAI, "ap": CHAT_PATH,
+        "dh": "127.0.0.1",
+        "dp": DEFAULT_TRANSLATION_PORT,
+        "hp": HEALTH_PATH_OPENAI,
+        "ap": CHAT_PATH,
         "inst": "Provide your own endpoint.",
     },
 }
@@ -209,18 +227,19 @@ BACKEND_INFO = {
 # UI HELPERS  (ALL ASCII-SAFE)
 # ────
 
+
 class C:
-    RESET  = "\033[0m"
+    RESET = "\033[0m"
     BOLD = "\033[1m"
     DIM = "\033[2m"
-    RED    = "\033[91m"
-    GREEN  = "\033[92m"
+    RED = "\033[91m"
+    GREEN = "\033[92m"
     YELLOW = "\033[93m"
-    BLUE   = "\033[94m"
-    MAGENTA= "\033[95m"
-    CYAN   = "\033[96m"
-    WHITE  = "\033[97m"
-    GOLD   = "\033[38;5;220m"
+    BLUE = "\033[94m"
+    MAGENTA = "\033[95m"
+    CYAN = "\033[96m"
+    WHITE = "\033[97m"
+    GOLD = "\033[38;5;220m"
     PURPLE = "\033[38;5;141m"
 
     @classmethod
@@ -231,15 +250,17 @@ class C:
         cls.BLUE = cls.MAGENTA = cls.CYAN = ""
         cls.WHITE = cls.GOLD = cls.PURPLE = ""
 
+
 # ────
 # BOX DRAWING & PANELS (inspired by Rich library patterns)
 # ────
 
 BOX_CHARS = {
     "rounded": {"tl": "╭", "tr": "╮", "bl": "╰", "br": "╯", "h": "─", "v": "│"},
-    "heavy":   {"tl": "┏", "tr": "┓", "bl": "┗", "br": "┛", "h": "━", "v": "┃"},
-    "simple":  {"tl": "+", "tr": "+", "bl": "+", "br": "+", "h": "-", "v": "|"},
+    "heavy": {"tl": "┏", "tr": "┓", "bl": "┗", "br": "┛", "h": "━", "v": "┃"},
+    "simple": {"tl": "+", "tr": "+", "bl": "+", "br": "+", "h": "-", "v": "|"},
 }
+
 
 def _safe_box():
     """Pick box chars that work on the current terminal."""
@@ -247,6 +268,7 @@ def _safe_box():
         try:
             # Enable VT100 escape sequences on Windows consoles via kernel32 API
             import ctypes
+
             kernel32 = ctypes.windll.kernel32
             handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
             mode = ctypes.c_ulong()
@@ -256,6 +278,7 @@ def _safe_box():
         except Exception:
             return BOX_CHARS["simple"]
     return BOX_CHARS["rounded"]
+
 
 def panel(text, title="", style="", width=None, pad=1):
     """Draw a rounded panel/box around text. Like Rich's Panel."""
@@ -274,7 +297,7 @@ def panel(text, title="", style="", width=None, pad=1):
     if title:
         t = f" {title} "
         # Strip ANSI for width calculation (colored titles made border too short)
-        t_visible = len(re.sub(r'\x1b\[[0-9;]*m', '', t))
+        t_visible = len(re.sub(r"\x1b\[[0-9;]*m", "", t))
         top = f"{b['tl']}{t}{b['h'] * max(0, w - 2 - t_visible)}{b['tr']}"
     else:
         top = f"{b['tl']}{b['h'] * (w - 2)}{b['tr']}"
@@ -284,10 +307,11 @@ def panel(text, title="", style="", width=None, pad=1):
     print(f"  {color}{top}{C.RESET}")
     for line in lines:
         # Strip ANSI for length calc
-        clean = re.sub(r'\x1b\[[0-9;]*m', '', line)
+        clean = re.sub(r"\x1b\[[0-9;]*m", "", line)
         padding = inner - len(clean)
         print(f"  {color}{b['v']}{C.RESET}{' ' * pad}{line}{' ' * max(0, padding)}{' ' * pad}{color}{b['v']}{C.RESET}")
     print(f"  {color}{bot}{C.RESET}")
+
 
 def table(headers, rows, col_styles=None, title=""):
     """Render a formatted table. Inspired by Rich Tables."""
@@ -297,7 +321,7 @@ def table(headers, rows, col_styles=None, title=""):
     for row in rows:
         for i, cell in enumerate(row):
             if i < len(widths):
-                clean = re.sub(r'\x1b\[[0-9;]*m', '', str(cell))
+                clean = re.sub(r"\x1b\[[0-9;]*m", "", str(cell))
                 widths[i] = max(widths[i], len(clean))
 
     # Cap total width
@@ -310,8 +334,8 @@ def table(headers, rows, col_styles=None, title=""):
     def _row(cells, styles=None):
         parts = []
         for i, cell in enumerate(cells):
-            s = (styles[i] if styles and i < len(styles) else C.RESET)
-            clean = re.sub(r'\x1b\[[0-9;]*m', '', str(cell))
+            s = styles[i] if styles and i < len(styles) else C.RESET
+            clean = re.sub(r"\x1b\[[0-9;]*m", "", str(cell))
             pad = widths[i] - len(clean) if i < len(widths) else 0
             parts.append(f"{s}{cell}{C.RESET}{' ' * max(0, pad)}")
         return "   ".join(parts)
@@ -326,13 +350,15 @@ def table(headers, rows, col_styles=None, title=""):
         print(f"  {_row(row, col_styles)}")
     print(sep)
 
+
 # Spinner frames for animated status
 SPINNERS = {
-    "dots":   ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
-    "line":   ["-", "\\", "|", "/"],
+    "dots": ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+    "line": ["-", "\\", "|", "/"],
     "arrows": ["←", "↖", "↑", "↗", "→", "↘", "↓", "↙"],
     "simple": ["-", "\\", "|", "/"],
 }
+
 
 def _pick_spinner():
     """Pick spinner that works on terminal."""
@@ -343,6 +369,7 @@ def _pick_spinner():
         except (UnicodeEncodeError, LookupError):
             return SPINNERS["simple"]
     return SPINNERS["dots"]
+
 
 def spin_wait(check_fn, message, timeout=180, interval=0.5):
     """Spinner until check_fn() returns True."""
@@ -376,6 +403,7 @@ def enable_ansi():
         ansi_ok = False
         try:
             import ctypes
+
             k32 = ctypes.windll.kernel32
             h = k32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
             # Get current console mode first
@@ -386,9 +414,7 @@ def enable_ansi():
                 if k32.SetConsoleMode(h, new_mode):
                     ansi_ok = True
         except Exception as e:
-            _log.debug('[enable_ansi] ansi-init failed: %s', e)
-
-
+            _log.debug("[enable_ansi] ansi-init failed: %s", e)
 
         if not ansi_ok:
             # ANSI not supported -- strip all color codes for plain text output
@@ -398,10 +424,12 @@ def enable_ansi():
         # can be printed without cp932 crash
         try:
             import ctypes
+
             ctypes.windll.kernel32.SetConsoleOutputCP(65001)
             ctypes.windll.kernel32.SetConsoleCP(65001)
         except Exception:
             subprocess.run(["cmd", "/c", "chcp", "65001"], capture_output=True)
+
 
 def clear():
     if IS_WIN:
@@ -410,14 +438,18 @@ def clear():
         sys.stdout.write("\033[2J\033[H")
         sys.stdout.flush()
 
+
 def tw():
     return shutil.get_terminal_size((80, 24)).columns
+
 
 def center(t):
     return t.center(tw())
 
+
 def gold_hr():
-    print(f"{C.GOLD}{'='*tw()}{C.RESET}")
+    print(f"{C.GOLD}{'=' * tw()}{C.RESET}")
+
 
 def header(sub=None):
     clear()
@@ -442,23 +474,38 @@ def header(sub=None):
         print(center(f"{C.BOLD}{sub}{C.RESET}"))
     print()
 
+
 def section(t):
     w = max(1, tw() - len(t) - 8)
-    print(f"\n  {C.GOLD}--- {C.BOLD}{t} {C.GOLD}{'-'*w}{C.RESET}\n")
-
-def info(m):     print(f"  {C.CYAN}i{C.RESET}  {m}")
-def success(m):  print(f"  {C.GREEN}+{C.RESET}  {m}")
-def warn(m):     print(f"  {C.YELLOW}!{C.RESET}  {C.YELLOW}{m}{C.RESET}")
-def error(m):    print(f"  {C.RED}x{C.RESET}  {C.RED}{m}{C.RESET}")
+    print(f"\n  {C.GOLD}--- {C.BOLD}{t} {C.GOLD}{'-' * w}{C.RESET}\n")
 
 
-def bullet(m, indent=2): print(f"{' '*indent}{C.DIM}-{C.RESET} {m}")
+def info(m):
+    print(f"  {C.CYAN}i{C.RESET}  {m}")
+
+
+def success(m):
+    print(f"  {C.GREEN}+{C.RESET}  {m}")
+
+
+def warn(m):
+    print(f"  {C.YELLOW}!{C.RESET}  {C.YELLOW}{m}{C.RESET}")
+
+
+def error(m):
+    print(f"  {C.RED}x{C.RESET}  {C.RED}{m}{C.RESET}")
+
+
+def bullet(m, indent=2):
+    print(f"{' ' * indent}{C.DIM}-{C.RESET} {m}")
+
 
 def pause(m="Press Enter to continue..."):
     try:
         input(f"\n  {C.DIM}{m}{C.RESET}")
     except (EOFError, KeyboardInterrupt):
         pass
+
 
 def ask_yn(prompt, default=True):
     h = "[Y/n]" if default else "[y/N]"
@@ -475,6 +522,7 @@ def ask_yn(prompt, default=True):
         if r in ("n", "no"):
             return False
 
+
 def ask_input(prompt, default=""):
     h = f" [{default}]" if default else ""
     try:
@@ -484,18 +532,19 @@ def ask_input(prompt, default=""):
         print()
         return default
 
+
 def ask_choice(prompt, options, default=0, allow_back=True):
     print(f"\n  {C.GOLD}?{C.RESET}  {prompt}\n")
     for i, (label, desc) in enumerate(options):
         mk = f"{C.GREEN}>{C.RESET}" if i == default else " "
-        print(f"  {mk} {C.BOLD}{i+1}.{C.RESET} {label}")
+        print(f"  {mk} {C.BOLD}{i + 1}.{C.RESET} {label}")
         if desc:
             print(f"      {C.DIM}{desc}{C.RESET}")
     bh = ", b=back" if allow_back else ""
     print()
     while True:
         try:
-            r = input(f"  {C.DIM}[1-{len(options)}{bh}, default={default+1}]: {C.RESET}").strip().lower()
+            r = input(f"  {C.DIM}[1-{len(options)}{bh}, default={default + 1}]: {C.RESET}").strip().lower()
         except (EOFError, KeyboardInterrupt):
             print()
             return -1 if allow_back else default
@@ -510,9 +559,11 @@ def ask_choice(prompt, options, default=0, allow_back=True):
         except ValueError:
             pass
 
+
 # ────
 # FILE / NETWORK HELPERS
 # ────
+
 
 def download_file(url, dest, label="Downloading"):
     """Download a file with progress bar, speed, and ETA display."""
@@ -520,7 +571,7 @@ def download_file(url, dest, label="Downloading"):
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         req = urllib.request.Request(url, headers={"User-Agent": f"Yume/{VERSION}"})
-        with urllib.request.urlopen(req, timeout=180) as resp:
+        with urllib.request.urlopen(req, timeout=180) as resp:  # nosec B310
             total = int(resp.headers.get("content-length", 0))
             dl = 0
             t0 = time.time()
@@ -545,7 +596,11 @@ def download_file(url, dest, label="Downloading"):
                     if total > 0:
                         pct = min(100, dl * 100 // total)
                         remaining = (total - dl) / speed if speed > 0 else 0
-                        eta_str = f"{int(remaining//60)}m{int(remaining%60):02d}s" if remaining > 60 else f"{int(remaining)}s"
+                        eta_str = (
+                            f"{int(remaining // 60)}m{int(remaining % 60):02d}s"
+                            if remaining > 60
+                            else f"{int(remaining)}s"
+                        )
                         mb = dl / MiB
                         tmb = total / MiB
                         bar_w = 20
@@ -563,7 +618,7 @@ def download_file(url, dest, label="Downloading"):
                         sys.stdout.write(f"\r  {C.CYAN}↓{C.RESET}  {mb:.1f} MB  {speed_mb:.1f} MB/s  ")
                         sys.stdout.flush()
         elapsed = time.time() - t0
-        print(f"\r  {C.GREEN}✓{C.RESET}  {label} — {total/MiB:.1f} MB in {elapsed:.0f}s" + " " * 30)
+        print(f"\r  {C.GREEN}✓{C.RESET}  {label} — {total / MiB:.1f} MB in {elapsed:.0f}s" + " " * 30)
         return True
     except urllib.error.HTTPError as e:
         print(f"\r  {C.RED}✗{C.RESET}  {label} — HTTP {e.code}: {e.reason}" + " " * 20)
@@ -588,10 +643,9 @@ def _cleanup_partial(path):
         p = Path(path)
         if p.exists():
             p.unlink()
-            _log.debug('[download] Cleaned up partial download: %s', p.name)
+            _log.debug("[download] Cleaned up partial download: %s", p.name)
     except Exception:
         pass
-
 
 
 def detect_gpu():
@@ -607,9 +661,7 @@ def detect_gpu():
             r["vram_mb"] = int(p[1].strip()) if len(p) > 1 else 0
             return r
     except Exception as e:
-        _log.debug('[detect_gpu] nvidia-vram-parse failed: %s', e)
-
-
+        _log.debug("[detect_gpu] nvidia-vram-parse failed: %s", e)
 
     # Check AMD/Radeon via rocm-smi (Linux ROCm)
     try:
@@ -632,12 +684,11 @@ def detect_gpu():
                         if nums:
                             r["vram_mb"] = nums[0] // MiB if nums[0] > 1_000_000 else nums[0]
             except Exception as e:
-                _log.debug('[detect_gpu] nvidia-wmi-parse failed: %s', e)
-
+                _log.debug("[detect_gpu] nvidia-wmi-parse failed: %s", e)
 
             return r
     except Exception as e:
-        _log.debug('[detect_gpu] nvidia-smi failed: %s', e)
+        _log.debug("[detect_gpu] nvidia-smi failed: %s", e)
 
     # Check AMD via rocminfo (fallback)
     try:
@@ -653,7 +704,7 @@ def detect_gpu():
                 r["name"] = "AMD GPU (ROCm)"
             return r
     except Exception as e:
-        _log.debug('[detect_gpu] rocminfo failed: %s', e)
+        _log.debug("[detect_gpu] rocminfo failed: %s", e)
 
     # Windows AMD detection via WMI
     if IS_WIN:
@@ -667,15 +718,18 @@ def detect_gpu():
                     r["vendor"] = "amd"
                     r["name"] = parts[2].strip() if len(parts) > 2 else "AMD GPU"
                     try:
-                        r["vram_mb"] = int(parts[1].strip()) // MiB if len(parts) > 1 and parts[1].strip().isdigit() else 0
+                        r["vram_mb"] = (
+                            int(parts[1].strip()) // MiB if len(parts) > 1 and parts[1].strip().isdigit() else 0
+                        )
                     except Exception as e:
-                        _log.debug('[detect_gpu] wmic-amd-vram-parse failed: %s', e)
+                        _log.debug("[detect_gpu] wmic-amd-vram-parse failed: %s", e)
 
                     return r
         except Exception as e:
-            _log.debug('[detect_gpu] wmic-amd failed: %s', e)
+            _log.debug("[detect_gpu] wmic-amd failed: %s", e)
 
     return r
+
 
 def _detect_cpu_name():
     """Get the CPU brand string (e.g. 'Intel Core i7-12700K' or 'AMD Ryzen 9 5900X')."""
@@ -706,9 +760,14 @@ def detect_ram_gb():
     try:
         if IS_WIN:
             import ctypes
+
             class MS(ctypes.Structure):
-                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
-                            ("ullTotalPhys", ctypes.c_ulonglong)] + [("_"+str(i), ctypes.c_ulonglong) for i in range(6)]
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                ] + [("_" + str(i), ctypes.c_ulonglong) for i in range(6)]
+
             s = MS()
             s.dwLength = ctypes.sizeof(s)
             ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(s))
@@ -719,16 +778,17 @@ def detect_ram_gb():
                     if line.startswith("MemTotal:"):
                         return int(line.split()[1]) / MiB
     except Exception as e:
-        _log.debug('[detect_ram_gb] int-parse failed: %s', e)
-
+        _log.debug("[detect_ram_gb] int-parse failed: %s", e)
 
     return 0
+
 
 def disk_free_gb(p=None):
     try:
         return shutil.disk_usage(p or BASE_DIR).free / GiB
     except Exception:
         return 0
+
 
 def find_tool(name):
     # Check local tools/ first
@@ -742,6 +802,7 @@ def find_tool(name):
             return str(b2)
     return shutil.which(name)
 
+
 def _try_import(module_name):
     """Check if a Python module can be imported. Returns True/False."""
     try:
@@ -750,12 +811,13 @@ def _try_import(module_name):
     except ImportError:
         return False
 
+
 def check_server(host, port, path="/health"):
     """Check if a server is responding. Handles JSON and non-JSON responses."""
     try:
         url = f"http://{host}:{port}{path}"
         req = urllib.request.Request(url, headers={"User-Agent": "Yume"})
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with urllib.request.urlopen(req, timeout=3) as resp:  # nosec B310
             body = resp.read()
             try:
                 return {"up": True, "data": json.loads(body)}
@@ -792,23 +854,25 @@ def check_translation_server(host, port, backend_info=None):
 
     return {"up": False, "data": {}}
 
+
 def check_ollama_models(host="127.0.0.1", port=DEFAULT_OLLAMA_PORT):
     try:
         req = urllib.request.Request(f"http://{host}:{port}/api/tags", headers={"User-Agent": "Yume"})
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with urllib.request.urlopen(req, timeout=3) as resp:  # nosec B310
             return [m["name"] for m in json.loads(resp.read()).get("models", [])]
     except Exception:
         return []
+
 
 def find_gguf_models():
     GGUF_DIR.mkdir(parents=True, exist_ok=True)
     return list(GGUF_DIR.glob("*.gguf"))
 
 
-
 # ────
 # PORT MANAGEMENT
 # ────
+
 
 def is_port_free(port, host="127.0.0.1"):
     """Check if a port is available for binding."""
@@ -823,6 +887,7 @@ def is_port_free(port, host="127.0.0.1"):
     except (OSError, _socket.error):
         return False
 
+
 def find_free_port(start=DEFAULT_TRANSLATION_PORT, exclude=None):
     """Find a free port starting from 'start', skipping any in exclude set."""
     exclude = exclude or set()
@@ -833,6 +898,7 @@ def find_free_port(start=DEFAULT_TRANSLATION_PORT, exclude=None):
         if p not in exclude and is_port_free(p):
             return p
     return None
+
 
 def get_port_process(port):
     """Find who owns a port. Returns (pid, name) or (None, None)."""
@@ -865,20 +931,20 @@ def get_port_process(port):
                     name = (r2.stdout or "").strip() if r2.returncode == 0 else "unknown"
                     return pid, name
             # Fallback: ss (lsof may not be installed on all systems)
-            r2 = _run(['ss', '-tlnp'], timeout=10)
+            r2 = _run(["ss", "-tlnp"], timeout=10)
             if r2.returncode == 0 and r2.stdout:
                 for sline in r2.stdout.splitlines():
-                    if f':{port}' in sline:
-                        m = re.search(r'pid=(\d+)', sline)
+                    if f":{port}" in sline:
+                        m = re.search(r"pid=(\d+)", sline)
                         if m:
                             pid = int(m.group(1))
-                            n = _run(['ps', '-p', str(pid), '-o', 'comm='], timeout=5)
-                            return pid, (n.stdout or '').strip() if n.returncode == 0 else 'unknown'
+                            n = _run(["ps", "-p", str(pid), "-o", "comm="], timeout=5)
+                            return pid, (n.stdout or "").strip() if n.returncode == 0 else "unknown"
     except Exception as e:
-        _log.debug('[get_port_process] port-lookup failed: %s', e)
-
+        _log.debug("[get_port_process] port-lookup failed: %s", e)
 
     return None, None
+
 
 def kill_port_process(port):
     """Kill whatever process is using port. Returns True if killed."""
@@ -898,8 +964,7 @@ def kill_port_process(port):
                         success(f"Freed port {port}")
                         return True
             except Exception as e:
-                _log.debug('[kill_port_process] fuser-kill failed: %s', e)
-
+                _log.debug("[kill_port_process] fuser-kill failed: %s", e)
 
         return False
     try:
@@ -920,6 +985,7 @@ def kill_port_process(port):
         warn(f"Could not kill PID {pid}: {e}")
         return False
 
+
 def ensure_port_free(port, cfg, key_prefix, exclude=None):
     """Free up a port interactively. Returns port or None."""
     if is_port_free(port):
@@ -932,12 +998,16 @@ def ensure_port_free(port, cfg, key_prefix, exclude=None):
         info(f"{C.DIM}Disable it in System Settings > General > AirDrop & Handoff > AirPlay Receiver,{C.RESET}")
         info(f"{C.DIM}or let Yume use a different port (recommended).{C.RESET}")
         print()
-    ch = ask_choice("How to resolve?", [
-        ("Kill the process", f"Terminate {name or 'PID '+str(pid)}"),
-        ("Use a different port", "Auto-find a free port"),
-        ("Enter port manually", None),
-        ("Cancel", None),
-    ], default=0)
+    ch = ask_choice(
+        "How to resolve?",
+        [
+            ("Kill the process", f"Terminate {name or 'PID ' + str(pid)}"),
+            ("Use a different port", "Auto-find a free port"),
+            ("Enter port manually", None),
+            ("Cancel", None),
+        ],
+        default=0,
+    )
     if ch == 0:
         if kill_port_process(port) and is_port_free(port):
             success(f"Port {port} is now free")
@@ -969,6 +1039,7 @@ def ensure_port_free(port, cfg, key_prefix, exclude=None):
             return None
     return None
 
+
 def show_ports_status(cfg):
     """Display port status overview."""
     section("Port Status")
@@ -983,9 +1054,11 @@ def show_ports_status(cfg):
             who = f"{name} (PID {pid})" if pid else "unknown process"
             warn(f"{label:12s} {host}:{port}  -- {C.RED}in use{C.RESET} by {who}")
 
+
 # ────
 # API TOKEN DISCOVERY
 # ────
+
 
 def discover_api_token(host, port):
     """Discover API token from .yume_token file or server /health endpoint."""
@@ -999,26 +1072,26 @@ def discover_api_token(host, port):
             if _api_token:
                 return _api_token
         except Exception as e:
-            _log.debug('[discover_api_token] health-check failed: %s', e)
-
+            _log.debug("[discover_api_token] health-check failed: %s", e)
 
     try:
         req = urllib.request.Request(f"http://{host}:{port}/health", headers={"User-Agent": "Yume"})
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with urllib.request.urlopen(req, timeout=3) as resp:  # nosec B310
             data = json.loads(resp.read())
             token = data.get("api_token") or data.get("token")
             if token:
                 _api_token = token
                 return _api_token
     except Exception as e:
-        _log.debug('[discover_api_token] token-file-read failed: %s', e)
-
+        _log.debug("[discover_api_token] token-file-read failed: %s", e)
 
     return None
+
 
 # ────
 # CLI SERVER INTERACTION  (used by CLI subcommands + interactive menus)
 # ────
+
 
 def _server_get(host, port, path, timeout=5):
     """GET request with API token auth."""
@@ -1028,7 +1101,7 @@ def _server_get(host, port, path, timeout=5):
         if token:
             headers["X-API-Token"] = token
         req = urllib.request.Request(f"http://{host}:{port}{path}", headers=headers)
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
             return json.loads(resp.read())
     except Exception:
         return None
@@ -1042,11 +1115,8 @@ def _server_post(host, port, path, data=None, timeout=30):
         token = discover_api_token(host, port)
         if token:
             headers["X-API-Token"] = token
-        req = urllib.request.Request(
-            f"http://{host}:{port}{path}", data=body,
-            headers=headers, method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        req = urllib.request.Request(f"http://{host}:{port}{path}", data=body, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
             return json.loads(resp.read())
     except Exception as e:
         return {"error": str(e)}
@@ -1074,7 +1144,9 @@ def cli_server_stats(cfg):
         info("GPU: N/A (CPU mode or nvidia-smi unavailable)")
     print()
     section("Whisper Engine")
-    info(f"Model: {C.BOLD}{data.get('model', '?')}{C.RESET}  ({data.get('device', '?')}/{data.get('compute_type', '?')})")
+    info(
+        f"Model: {C.BOLD}{data.get('model', '?')}{C.RESET}  ({data.get('device', '?')}/{data.get('compute_type', '?')})"
+    )
     info(f"Uptime: {data.get('uptime_human', '?')}")
     section("Session")
     info(f"Chunks transcribed:      {data.get('chunks_transcribed', 0)}")
@@ -1083,7 +1155,9 @@ def cli_server_stats(cfg):
     info(f"Audio processed:         {data.get('total_audio_seconds', 0):.0f}s")
     info(f"Cache hits:              {data.get('cache_hits', 0)}")
     info(f"Avg time/chunk:          {data.get('avg_whisper_time', 0)}s")
-    info(f"Last chunk:              {data.get('last_chunk_whisper_time', 0)}s ({data.get('last_chunk_segments', 0)} segs)")
+    info(
+        f"Last chunk:              {data.get('last_chunk_whisper_time', 0)}s ({data.get('last_chunk_segments', 0)} segs)"
+    )
     info(f"Subtitle cache:          {data.get('subtitle_cache_size', 0)} chunks")
     info(f"Blacklist size:          {data.get('blacklist_size', 0)} items")
 
@@ -1183,10 +1257,17 @@ def cli_model(cfg, args):
             cfg["whisper_model"] = result.get("model", new_model)
             save_config(cfg)
     elif subcmd == "list":
-        models = [("tiny","~1GB","Fastest"),("base","~1GB","Fast"),("small","~2GB","Good"),
-                  ("medium","~5GB","High"),("large-v2","~10GB","Very high"),("large-v3","~10GB","Best"),
-                  ("large-v3-turbo","~4GB","Near-v3, 2x faster"),
-                  ("distil-large-v2","~4GB","Fast+acc"),("distil-large-v3","~4GB","Fast+acc (new)")]
+        models = [
+            ("tiny", "~1GB", "Fastest"),
+            ("base", "~1GB", "Fast"),
+            ("small", "~2GB", "Good"),
+            ("medium", "~5GB", "High"),
+            ("large-v2", "~10GB", "Very high"),
+            ("large-v3", "~10GB", "Best"),
+            ("large-v3-turbo", "~4GB", "Near-v3, 2x faster"),
+            ("distil-large-v2", "~4GB", "Fast+acc"),
+            ("distil-large-v3", "~4GB", "Fast+acc (new)"),
+        ]
         cur = cfg.get("whisper_model", "large-v3")
         info("Available Whisper models:")
         for name, vram, desc in models:
@@ -1221,12 +1302,16 @@ def _menu_blacklist(cfg):
                 bullet(item)
             if len(bl) > 15:
                 info(f"  ... and {len(bl) - 15} more")
-        ch = ask_choice("Options:", [
-            ("Add entry", "Block a phrase from subtitles"),
-            ("Remove entry", "Unblock a phrase"),
-            ("Clear all", "Remove all entries"),
-            ("Back", None)
-        ], default=3)
+        ch = ask_choice(
+            "Options:",
+            [
+                ("Add entry", "Block a phrase from subtitles"),
+                ("Remove entry", "Unblock a phrase"),
+                ("Clear all", "Remove all entries"),
+                ("Back", None),
+            ],
+            default=3,
+        )
         if ch == -1 or ch == 3:
             return
         elif ch == 0:
@@ -1250,7 +1335,7 @@ def _menu_blacklist(cfg):
                 pause()
                 continue
             opts = [(item, None) for item in bl[:20]] + [("Back", None)]
-            rc = ask_choice("Remove which?", opts, default=len(opts)-1)
+            rc = ask_choice("Remove which?", opts, default=len(opts) - 1)
             if 0 <= rc < len(bl):
                 removed = bl[rc]
                 current = bl[:]
@@ -1286,18 +1371,37 @@ def _menu_whisper_model(cfg):
     else:
         display = friendly_name or (Path(cur).name if is_custom else cur)
         warn(f"Server not running. Config: {display}")
-    models = ["tiny", "base", "small", "medium", "large-v2", "large-v3", "large-v3-turbo", "distil-large-v2", "distil-large-v3"]
-    vram = {"tiny":"~1GB","base":"~1GB","small":"~2GB","medium":"~5GB",
-            "large-v2":"~10GB","large-v3":"~10GB","large-v3-turbo":"~4GB","distil-large-v2":"~4GB","distil-large-v3":"~4GB"}
+    models = [
+        "tiny",
+        "base",
+        "small",
+        "medium",
+        "large-v2",
+        "large-v3",
+        "large-v3-turbo",
+        "distil-large-v2",
+        "distil-large-v3",
+    ]
+    vram = {
+        "tiny": "~1GB",
+        "base": "~1GB",
+        "small": "~2GB",
+        "medium": "~5GB",
+        "large-v2": "~10GB",
+        "large-v3": "~10GB",
+        "large-v3-turbo": "~4GB",
+        "distil-large-v2": "~4GB",
+        "distil-large-v3": "~4GB",
+    }
     opts = []
     for m in models:
         cached = _is_whisper_model_cached(m)
         tag = f" {C.GREEN}[downloaded]{C.RESET}" if cached else f" {C.DIM}[not downloaded]{C.RESET}"
         if m == cur:
-            label = f"{m} ({vram.get(m,'?')}){tag}"
+            label = f"{m} ({vram.get(m, '?')}){tag}"
             opts.append((label, "active"))
         else:
-            opts.append((f"{m} ({vram.get(m,'?')}){tag}", None))
+            opts.append((f"{m} ({vram.get(m, '?')}){tag}", None))
     custom_tag = f" {C.GREEN}[active]{C.RESET}" if is_custom else ""
     opts.append((f"Custom model (local path){custom_tag}", "active" if is_custom else None))
     opts.append(("Back", None))
@@ -1330,7 +1434,9 @@ def _menu_whisper_model(cfg):
             error(f"Not a valid CTranslate2 model — missing: {', '.join(missing)}")
             info(f"{C.DIM}Convert your model first:{C.RESET}")
             info(f"{C.DIM}  ct2-openai-whisper-converter --model <checkpoint> --output_dir <output>{C.RESET}")
-            info(f"{C.DIM}  ct2-transformers-converter --model <hf-model> --output_dir <output> --quantization float16{C.RESET}")
+            info(
+                f"{C.DIM}  ct2-transformers-converter --model <hf-model> --output_dir <output> --quantization float16{C.RESET}"
+            )
             pause()
             return
         new_model = custom_path
@@ -1373,6 +1479,7 @@ def _menu_whisper_model(cfg):
 # TOOL INSTALLERS (cross-platform)
 # ────
 
+
 def install_ytdlp():
     TOOLS_DIR.mkdir(parents=True, exist_ok=True)
     dest = TOOLS_DIR / f"yt-dlp{EXE}"
@@ -1383,6 +1490,7 @@ def install_ytdlp():
     if ok and not IS_WIN:
         os.chmod(dest, UNIX_EXEC_MODE)
     return ok
+
 
 def install_ffmpeg():
     TOOLS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1453,13 +1561,14 @@ def install_ffmpeg():
             with zipfile.ZipFile(zp) as zf:
                 zf.extractall(TOOLS_DIR)
             zp.unlink(missing_ok=True)
-            for b in (TOOLS_DIR / "ffmpeg", ):
+            for b in (TOOLS_DIR / "ffmpeg",):
                 if b.exists():
                     os.chmod(b, UNIX_EXEC_MODE)
             return True
         except Exception as e:
             error(f"Failed: {e}")
             return False
+
 
 def install_deno():
     TOOLS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1484,10 +1593,10 @@ def install_deno():
     info(f"{C.DIM}This plugin uses Deno to solve YouTube's bot-detection challenges.{C.RESET}")
     info(f"{C.DIM}Once installed, yt-dlp uses it automatically — no extra steps needed.{C.RESET}")
     try:
-        r = _run([
-            sys.executable, "-m", "pip", "install", "-q",
-            "--no-warn-script-location", "bgutil-ytdlp-pot-provider"
-        ], timeout=120)
+        r = _run(
+            [sys.executable, "-m", "pip", "install", "-q", "--no-warn-script-location", "bgutil-ytdlp-pot-provider"],
+            timeout=120,
+        )
         if r.returncode == 0:
             success("PO token plugin installed")
         else:
@@ -1527,11 +1636,13 @@ def install_deno():
                     deno = find_tool("deno") or "deno"
                     info("Installing bgutil server dependencies (deno install)...")
                     try:
-                        r = _run([deno, "install", "--allow-scripts=npm:canvas", "--frozen"],
-                                 cwd=str(server_dir), timeout=180)
+                        r = _run(
+                            [deno, "install", "--allow-scripts=npm:canvas", "--frozen"],
+                            cwd=str(server_dir),
+                            timeout=180,
+                        )
                         if r.returncode != 0:
-                            r = _run([deno, "install", "--allow-scripts=npm:canvas"],
-                                     cwd=str(server_dir), timeout=180)
+                            r = _run([deno, "install", "--allow-scripts=npm:canvas"], cwd=str(server_dir), timeout=180)
                         if r.returncode == 0:
                             success("bgutil server dependencies installed")
                         else:
@@ -1548,6 +1659,7 @@ def install_deno():
             info(f"{C.DIM}YouTube auth will fall back to browser cookies.{C.RESET}")
 
     return True
+
 
 def install_ollama():
     if IS_WIN:
@@ -1594,12 +1706,17 @@ def install_ollama():
             script.unlink(missing_ok=True)
             return False
 
+
 def _is_venv():
     """Check if running inside a virtualenv or venv."""
-    return (hasattr(sys, 'real_prefix') or  # virtualenv
-            (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix))  # venv
+    return (
+        hasattr(sys, "real_prefix")  # virtualenv
+        or (hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix)
+    )  # venv
+
 
 _pip_venv_warned = False
+
 
 def _check_pip():
     """Verify pip is available. Returns True if pip works."""
@@ -1645,7 +1762,9 @@ def install_python_deps():
         req = BASE_DIR / "requirements.txt"  # backward compat
     if not req.exists():
         SERVER_DIR.mkdir(parents=True, exist_ok=True)
-        req.write_text("faster-whisper==1.2.1\nflask==3.1.3\nflask-cors==6.0.2\nwaitress==3.0.2\nnumpy==2.4.3\npykakasi==2.3.0\npypinyin==0.55.0\nromanization==2.0.0\n")
+        req.write_text(
+            "faster-whisper==1.2.1\nflask==3.1.3\nflask-cors==6.0.2\nwaitress==3.0.2\nnumpy==2.4.3\npykakasi==2.3.0\npypinyin==0.55.0\nromanization==2.0.0\n"
+        )
 
     # On Windows, check for C++ build tools before attempting install
     # (faster-whisper's CTranslate2 dependency may need compilation)
@@ -1659,8 +1778,7 @@ def install_python_deps():
     info("Installing Whisper server Python packages...")
     try:
         r = _run(
-            [sys.executable, "-m", "pip", "install", "-r", str(req), "-q", "--no-warn-script-location"],
-            timeout=600
+            [sys.executable, "-m", "pip", "install", "-r", str(req), "-q", "--no-warn-script-location"], timeout=600
         )
         if r.returncode != 0:
             error("pip install failed. Error output:")
@@ -1688,12 +1806,14 @@ def install_python_deps():
         info(f"  {C.CYAN}3.{C.RESET} Run manually: {C.BOLD}pip install -r server/requirements.txt{C.RESET}")
         return False
 
+
 def _detect_package_manager():
     """Detect the system package manager."""
     for cmd, name in [("dnf", "dnf"), ("apt-get", "apt"), ("brew", "brew"), ("pacman", "pacman"), ("zypper", "zypper")]:
         if shutil.which(cmd):
             return name
     return None
+
 
 def _install_build_tools():
     """Install C++ build tools (ninja, cmake, gcc) needed to compile llama-cpp-python from source."""
@@ -1705,9 +1825,9 @@ def _install_build_tools():
     info(f"Installing build tools via {pm}...")
 
     cmds = {
-        "dnf":    ["sudo", "dnf", "install", "-y", "ninja-build", "cmake", "gcc-c++", "gcc"],
-        "apt":    ["sudo", "apt-get", "install", "-y", "ninja-build", "cmake", "g++", "gcc"],
-        "brew":   ["brew", "install", "ninja", "cmake"],
+        "dnf": ["sudo", "dnf", "install", "-y", "ninja-build", "cmake", "gcc-c++", "gcc"],
+        "apt": ["sudo", "apt-get", "install", "-y", "ninja-build", "cmake", "g++", "gcc"],
+        "brew": ["brew", "install", "ninja", "cmake"],
         "pacman": ["sudo", "pacman", "-S", "--noconfirm", "ninja", "cmake", "gcc"],
         "zypper": ["sudo", "zypper", "install", "-y", "ninja", "cmake", "gcc-c++"],
     }
@@ -1738,9 +1858,11 @@ def _install_build_tools():
         except Exception:
             return False
 
+
 def _has_build_tools():
     """Check if ninja and cmake are available."""
     return bool(shutil.which("ninja") or shutil.which("ninja-build")) and bool(shutil.which("cmake"))
+
 
 def install_llamacpp_python():
     """Install llama-cpp-python + server deps (uvicorn, fastapi), with GPU support if NVIDIA detected."""
@@ -1755,6 +1877,7 @@ def install_llamacpp_python():
         info(f"{C.DIM}This may take several minutes for large downloads. Please wait.{C.RESET}")
         t0 = time.time()
         stop_event = threading.Event()
+
         def _timer():
             while not stop_event.is_set():
                 elapsed = int(time.time() - t0)
@@ -1762,6 +1885,7 @@ def install_llamacpp_python():
                 sys.stdout.write(f"\r  {C.CYAN}...{C.RESET} {m}m{s:02d}s elapsed   ")
                 sys.stdout.flush()
                 stop_event.wait(5)
+
         t = threading.Thread(target=_timer, daemon=True)
         t.start()
         try:
@@ -1786,7 +1910,7 @@ def install_llamacpp_python():
                 return False
         except subprocess.TimeoutExpired:
             stop_event.set()
-            error(f"{label} — timed out after {timeout//60} minutes")
+            error(f"{label} — timed out after {timeout // 60} minutes")
             return False
         except Exception as e:
             stop_event.set()
@@ -1816,21 +1940,42 @@ def install_llamacpp_python():
     installed = False
     if gpu["has_nvidia"]:
         if IS_WIN:
-            installed = _pip_install_with_progress([
-                sys.executable, "-m", "pip", "install", "llama-cpp-python",
-                "--extra-index-url", "https://abetlen.github.io/llama-cpp-python/whl/cu124",
-                "-q", "--no-warn-script-location"
-            ], "Installing llama-cpp-python (CUDA prebuilt)", timeout=600)
+            installed = _pip_install_with_progress(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "llama-cpp-python",
+                    "--extra-index-url",
+                    "https://abetlen.github.io/llama-cpp-python/whl/cu124",
+                    "-q",
+                    "--no-warn-script-location",
+                ],
+                "Installing llama-cpp-python (CUDA prebuilt)",
+                timeout=600,
+            )
 
             if not installed:
                 warn("Prebuilt failed, trying CPU version...")
         else:
             env = os.environ.copy()
             env["CMAKE_ARGS"] = "-DGGML_CUDA=on"
-            installed = _pip_install_with_progress([
-                sys.executable, "-m", "pip", "install", "llama-cpp-python",
-                "--force-reinstall", "--no-cache-dir", "-q"
-            ], "Building llama-cpp-python (CUDA from source)", timeout=600, env=env)
+            installed = _pip_install_with_progress(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "llama-cpp-python",
+                    "--force-reinstall",
+                    "--no-cache-dir",
+                    "-q",
+                ],
+                "Building llama-cpp-python (CUDA from source)",
+                timeout=600,
+                env=env,
+            )
 
             if not installed:
                 warn("CUDA build failed, trying CPU...")
@@ -1844,10 +1989,12 @@ def install_llamacpp_python():
             # ROCm / HIP build
             env = os.environ.copy()
             env["CMAKE_ARGS"] = "-DGGML_HIP=on"
-            installed = _pip_install_with_progress([
-                sys.executable, "-m", "pip", "install", "llama-cpp-python",
-                "--force-reinstall", "--no-cache-dir"
-            ], "Building llama-cpp-python (ROCm/HIP from source)", timeout=900, env=env)
+            installed = _pip_install_with_progress(
+                [sys.executable, "-m", "pip", "install", "llama-cpp-python", "--force-reinstall", "--no-cache-dir"],
+                "Building llama-cpp-python (ROCm/HIP from source)",
+                timeout=900,
+                env=env,
+            )
 
             if not installed:
                 warn("ROCm build failed. Check that ROCm is installed:")
@@ -1857,29 +2004,49 @@ def install_llamacpp_python():
 
     if not installed:
         # Try prebuilt CPU wheel first (no ninja/cmake/gcc needed!)
-        installed = _pip_install_with_progress([
-            sys.executable, "-m", "pip", "install", "llama-cpp-python",
-            "--extra-index-url", "https://abetlen.github.io/llama-cpp-python/whl/cpu",
-            "--no-warn-script-location"
-        ], "Installing llama-cpp-python (prebuilt CPU)", timeout=300)
+        installed = _pip_install_with_progress(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "llama-cpp-python",
+                "--extra-index-url",
+                "https://abetlen.github.io/llama-cpp-python/whl/cpu",
+                "--no-warn-script-location",
+            ],
+            "Installing llama-cpp-python (prebuilt CPU)",
+            timeout=300,
+        )
 
         if not installed:
             warn("Prebuilt wheel not available, building from source...")
-            installed = _pip_install_with_progress([
-                sys.executable, "-m", "pip", "install", "llama-cpp-python",
-                "--no-warn-script-location"
-            ], "Building llama-cpp-python (CPU from source)", timeout=900)
+            installed = _pip_install_with_progress(
+                [sys.executable, "-m", "pip", "install", "llama-cpp-python", "--no-warn-script-location"],
+                "Building llama-cpp-python (CPU from source)",
+                timeout=900,
+            )
 
     # Step 2: Install server dependencies (uvicorn, fastapi, etc.)
     if installed:
         info("Installing server dependencies (uvicorn, fastapi)...")
         try:
-            r = _run([
-                sys.executable, "-m", "pip", "install",
-                "uvicorn==0.42.0", "fastapi==0.135.1", "sse-starlette==3.3.3",
-                "starlette-context==0.5.1", "pydantic-settings==2.13.1",
-                "-q", "--no-warn-script-location"
-            ], timeout=300)
+            r = _run(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "uvicorn==0.42.0",
+                    "fastapi==0.135.1",
+                    "sse-starlette==3.3.3",
+                    "starlette-context==0.5.1",
+                    "pydantic-settings==2.13.1",
+                    "-q",
+                    "--no-warn-script-location",
+                ],
+                timeout=300,
+            )
             if r.returncode == 0:
                 success("Server dependencies installed!")
             else:
@@ -1888,6 +2055,7 @@ def install_llamacpp_python():
             warn(f"Server deps install issue: {e}")
 
     return installed
+
 
 def pull_ollama_model(name):
     info(f"Pulling {name}...\n")
@@ -1903,15 +2071,16 @@ def pull_ollama_model(name):
         error("Timed out")
     return False
 
+
 # ────
 # HUGGINGFACE MODEL BROWSER
 # ────
 
+
 def hf_list_gguf(repo):
     try:
         req = urllib.request.Request(
-            f"https://huggingface.co/api/models/{repo}/tree/main",
-            headers={"User-Agent": f"Yume/{VERSION}"}
+            f"https://huggingface.co/api/models/{repo}/tree/main", headers={"User-Agent": f"Yume/{VERSION}"}
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
             files = json.loads(resp.read())
@@ -1920,10 +2089,9 @@ def hf_list_gguf(repo):
             if f.get("path", "").endswith(".gguf"):
                 sb = f.get("size", 0)
                 sg = sb / GiB
-                out.append({
-                    "name": f["path"], "bytes": sb,
-                    "size": f"{sg:.2f} GB" if sg >= 1 else f"{sb/MiB:.0f} MB"
-                })
+                out.append(
+                    {"name": f["path"], "bytes": sb, "size": f"{sg:.2f} GB" if sg >= 1 else f"{sb / MiB:.0f} MB"}
+                )
         return out
     except urllib.error.HTTPError as e:
         error(f"HuggingFace error: {e.code}")
@@ -1932,13 +2100,13 @@ def hf_list_gguf(repo):
         error(f"Failed: {e}")
         return []
 
+
 def hf_download(repo, filename):
     GGUF_DIR.mkdir(parents=True, exist_ok=True)
     return download_file(
-        f"https://huggingface.co/{repo}/resolve/main/{filename}",
-        GGUF_DIR / filename,
-        f"Downloading {filename}"
+        f"https://huggingface.co/{repo}/resolve/main/{filename}", GGUF_DIR / filename, f"Downloading {filename}"
     )
+
 
 def browse_hf(cfg):
     while True:
@@ -1991,7 +2159,7 @@ def browse_hf(cfg):
             opts.append((f"{f['name']}  ({f['size']}){fit}", None))
         opts.append(("Back", None))
 
-        ch = ask_choice("Select file:", opts, default=len(opts)-1)
+        ch = ask_choice("Select file:", opts, default=len(opts) - 1)
         if ch == -1 or ch == len(files):
             continue
 
@@ -2023,6 +2191,7 @@ def browse_hf(cfg):
 # TOOLS MENU
 # ────
 
+
 def tools_menu(cfg):
     while True:
         header("Tools Management")
@@ -2031,19 +2200,23 @@ def tools_menu(cfg):
         dn = find_tool("deno")
         # Detect current browser from manifest
         _cur_browser = _detect_extension_browser()
-        ch = ask_choice("Select a tool:", [
-            (f"yt-dlp          {'OK' if yt else 'MISSING'}", "Downloads audio from YouTube and 1000+ video sites"),
-            (f"FFmpeg          {'OK' if ff else 'MISSING'}", "Converts audio between formats (required)"),
-            (f"Deno            {'OK' if dn else '--'}", "Helps bypass YouTube bot detection (optional)"),
-            ("Translation Backend", "Choose how Yume translates: llama.cpp / Ollama / LM Studio / Custom"),
-            ("Download Translation Model", "Browse and download GGUF models (the files your translator uses)"),
-            ("Python Dependencies", "Install required Python packages + romanization libraries"),
-            ("Test Translation", "Send a test sentence to check if translation is working"),
-            ("Benchmark Whisper", "Measure how fast each speech recognition model runs on your hardware"),
-            ("Detect Fonts", "Find subtitle-compatible fonts installed on your system"),
-            (f"Browser Extension  [{_cur_browser}]", "Switch between Chrome and Firefox extension format"),
-            ("Back", None),
-        ], default=10)
+        ch = ask_choice(
+            "Select a tool:",
+            [
+                (f"yt-dlp          {'OK' if yt else 'MISSING'}", "Downloads audio from YouTube and 1000+ video sites"),
+                (f"FFmpeg          {'OK' if ff else 'MISSING'}", "Converts audio between formats (required)"),
+                (f"Deno            {'OK' if dn else '--'}", "Helps bypass YouTube bot detection (optional)"),
+                ("Translation Backend", "Choose how Yume translates: llama.cpp / Ollama / LM Studio / Custom"),
+                ("Download Translation Model", "Browse and download GGUF models (the files your translator uses)"),
+                ("Python Dependencies", "Install required Python packages + romanization libraries"),
+                ("Test Translation", "Send a test sentence to check if translation is working"),
+                ("Benchmark Whisper", "Measure how fast each speech recognition model runs on your hardware"),
+                ("Detect Fonts", "Find subtitle-compatible fonts installed on your system"),
+                (f"Browser Extension  [{_cur_browser}]", "Switch between Chrome and Firefox extension format"),
+                ("Back", None),
+            ],
+            default=10,
+        )
         if ch == -1 or ch == 10:
             return
         elif ch == 0:
@@ -2066,6 +2239,7 @@ def tools_menu(cfg):
             detect_fonts()
         elif ch == 9:
             _menu_browser_extension()
+
 
 def _detect_extension_browser():
     """Detect whether the current manifest.json is Chrome or Firefox format."""
@@ -2109,11 +2283,15 @@ def _menu_browser_extension():
         pause()
         return
 
-    ch = ask_choice("Switch to:", [
-        ("Chrome / Brave / Edge", "MV3 with service_worker (default)"),
-        ("Firefox", "MV3 with background scripts + gecko settings"),
-        ("Back", None),
-    ], default=0 if current == "Firefox" else 1)
+    ch = ask_choice(
+        "Switch to:",
+        [
+            ("Chrome / Brave / Edge", "MV3 with service_worker (default)"),
+            ("Firefox", "MV3 with background scripts + gecko settings"),
+            ("Back", None),
+        ],
+        default=0 if current == "Firefox" else 1,
+    )
 
     if ch == -1 or ch == 2:
         return
@@ -2131,6 +2309,7 @@ def _menu_browser_extension():
     backup = EXT_DIR / "manifest_backup.json"
     try:
         import shutil
+
         shutil.copy2(manifest_chrome, backup)
         info(f"Backup saved: {backup.name}")
     except Exception as e:
@@ -2140,6 +2319,7 @@ def _menu_browser_extension():
         # Switch to Firefox
         try:
             import shutil
+
             # Save current Chrome manifest as the chrome variant if it's currently Chrome
             if current == "Chrome":
                 chrome_backup = EXT_DIR / "manifest_chrome.json"
@@ -2156,6 +2336,7 @@ def _menu_browser_extension():
         if chrome_backup.exists():
             try:
                 import shutil
+
                 shutil.copy2(chrome_backup, manifest_chrome)
                 success("Switched to Chrome format!")
                 info("Reload the extension in chrome://extensions to apply changes.")
@@ -2189,16 +2370,20 @@ def _menu_ytdlp(cfg):
                 v = _run([p, "--version"], timeout=5)
                 info(f"Version: {v.stdout.strip()}")
             except Exception as e:
-                _log.debug('[_menu_ytdlp] version-check failed: %s', e)
+                _log.debug("[_menu_ytdlp] version-check failed: %s", e)
 
             info("yt-dlp supports 1000+ sites: YouTube, NicoNico, Bilibili, Twitch, etc.")
         else:
             warn("Not installed")
-        ch = ask_choice("Options:", [
-            ("Install / Update", "Download latest binary"),
-            ("YouTube Auth", "Deno vs browser cookies"),
-            ("Back", None)
-        ], default=2)
+        ch = ask_choice(
+            "Options:",
+            [
+                ("Install / Update", "Download latest binary"),
+                ("YouTube Auth", "Deno vs browser cookies"),
+                ("Back", None),
+            ],
+            default=2,
+        )
         if ch == -1 or ch == 2:
             return
         elif ch == 0:
@@ -2206,6 +2391,7 @@ def _menu_ytdlp(cfg):
             pause()
         elif ch == 1:
             _menu_yt_auth(cfg)
+
 
 def _menu_yt_auth(cfg):
     while True:
@@ -2227,20 +2413,26 @@ def _menu_yt_auth(cfg):
         cur = cfg.get("youtube_auth_method", "cookies")
         info(f"Current method: {C.BOLD}{cur}{C.RESET}")
         print()
-        ch = ask_choice("Select method:", [
-            ("Browser Cookies (recommended)", "Uses your browser's YouTube login. No extra software."),
-            ("Deno (no account needed)", "Solves YouTube's bot challenge via a local server. Needs internet."),
-            ("Back", None)
-        ], default=0 if cur == "cookies" else 1)
+        ch = ask_choice(
+            "Select method:",
+            [
+                ("Browser Cookies (recommended)", "Uses your browser's YouTube login. No extra software."),
+                ("Deno (no account needed)", "Solves YouTube's bot challenge via a local server. Needs internet."),
+                ("Back", None),
+            ],
+            default=0 if cur == "cookies" else 1,
+        )
         if ch == -1 or ch == 2:
             return
         elif ch == 0:
             cfg["youtube_auth_method"] = "cookies"
             save_config(cfg)
             browsers = ["chrome", "firefox", "edge", "brave", "opera", "chromium", "safari"]
-            bc = ask_choice("Which browser are you logged into YouTube with?",
+            bc = ask_choice(
+                "Which browser are you logged into YouTube with?",
                 [(b.capitalize(), None) for b in browsers] + [("Back", None)],
-                default=0)
+                default=0,
+            )
             if 0 <= bc < len(browsers):
                 cfg["cookies_browser"] = browsers[bc]
                 save_config(cfg)
@@ -2263,26 +2455,25 @@ def _menu_yt_auth(cfg):
                         install_deno()
             pause()
 
+
 def _menu_ffmpeg():
     while True:
         header("FFmpeg")
         p = find_tool("ffmpeg")
-        (success if p else warn)(f"{'Installed: '+p if p else 'Not installed'}")
-        ch = ask_choice("Options:", [
-            ("Install / Update", "Download latest static build"),
-            ("Back", None)
-        ], default=1)
+        (success if p else warn)(f"{'Installed: ' + p if p else 'Not installed'}")
+        ch = ask_choice("Options:", [("Install / Update", "Download latest static build"), ("Back", None)], default=1)
         if ch == -1 or ch == 1:
             return
         elif ch == 0:
             install_ffmpeg()
             pause()
 
+
 def _menu_deno(cfg):
     while True:
         header("Deno (YouTube Authentication)")
         p = find_tool("deno")
-        (success if p else info)(f"{'Installed: '+p if p else 'Not installed'}")
+        (success if p else info)(f"{'Installed: ' + p if p else 'Not installed'}")
         print()
         info("YouTube blocks automated downloads with a 'bot detection' challenge.")
         info("Deno is a JavaScript runtime that solves this challenge automatically.")
@@ -2308,12 +2499,16 @@ def _menu_deno(cfg):
             warn("Deno not installed — YouTube may block downloads")
 
         info(f"Current YouTube auth method: {C.BOLD}{cfg.get('youtube_auth_method', 'cookies')}{C.RESET}")
-        ch = ask_choice("Options:", [
-            ("Install Deno + PO token plugin", "Downloads Deno (~35 MB) and installs the YouTube auth plugin"),
-            ("Install PO token plugin only", "If Deno is already installed, just add the yt-dlp plugin"),
-            ("Switch to browser cookies", "Use your browser's YouTube login instead of Deno"),
-            ("Back", None)
-        ], default=3)
+        ch = ask_choice(
+            "Options:",
+            [
+                ("Install Deno + PO token plugin", "Downloads Deno (~35 MB) and installs the YouTube auth plugin"),
+                ("Install PO token plugin only", "If Deno is already installed, just add the yt-dlp plugin"),
+                ("Switch to browser cookies", "Use your browser's YouTube login instead of Deno"),
+                ("Back", None),
+            ],
+            default=3,
+        )
         if ch == -1 or ch == 3:
             return
         elif ch == 0:
@@ -2324,10 +2519,18 @@ def _menu_deno(cfg):
         elif ch == 1:
             info("Installing PO token plugin...")
             try:
-                r = _run([
-                    sys.executable, "-m", "pip", "install", "-q",
-                    "--no-warn-script-location", "bgutil-ytdlp-pot-provider"
-                ], timeout=120)
+                r = _run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "pip",
+                        "install",
+                        "-q",
+                        "--no-warn-script-location",
+                        "bgutil-ytdlp-pot-provider",
+                    ],
+                    timeout=120,
+                )
                 if r.returncode == 0:
                     success("PO token plugin installed")
                     cfg["youtube_auth_method"] = "deno"
@@ -2343,23 +2546,32 @@ def _menu_deno(cfg):
             success("Switched to cookies")
             pause()
 
+
 def _menu_backend(cfg):
     while True:
         header("Translation Backend")
         cur = cfg.get("translation_backend", "llamacpp")
         bi = BACKEND_INFO.get(cur, BACKEND_INFO["custom"])
         info(f"Current: {C.BOLD}{bi['name']}{C.RESET}")
-        info(f"Address: {C.CYAN}{cfg.get('translation_host', '127.0.0.1')}:{cfg.get('translation_port', DEFAULT_TRANSLATION_PORT)}{C.RESET}")
-        st = check_translation_server(cfg.get("translation_host", "127.0.0.1"), cfg.get("translation_port", DEFAULT_TRANSLATION_PORT), bi)
+        info(
+            f"Address: {C.CYAN}{cfg.get('translation_host', '127.0.0.1')}:{cfg.get('translation_port', DEFAULT_TRANSLATION_PORT)}{C.RESET}"
+        )
+        st = check_translation_server(
+            cfg.get("translation_host", "127.0.0.1"), cfg.get("translation_port", DEFAULT_TRANSLATION_PORT), bi
+        )
         (success if st["up"] else warn)(f"Status: {'RUNNING' if st['up'] else 'Not running'}")
 
-        ch = ask_choice("Options:", [
-            ("Change backend", "Switch between llama.cpp/Ollama/LM Studio/WebUI/Custom"),
-            ("Change address", f"Currently {cfg.get('translation_host')}:{cfg.get('translation_port')}"),
-            ("Install instructions", f"How to set up {bi['name']}"),
-            ("Manage model", "Pull, change, browse, or download models"),
-            ("Back", None)
-        ], default=4)
+        ch = ask_choice(
+            "Options:",
+            [
+                ("Change backend", "Switch between llama.cpp/Ollama/LM Studio/WebUI/Custom"),
+                ("Change address", f"Currently {cfg.get('translation_host')}:{cfg.get('translation_port')}"),
+                ("Install instructions", f"How to set up {bi['name']}"),
+                ("Manage model", "Pull, change, browse, or download models"),
+                ("Back", None),
+            ],
+            default=4,
+        )
         if ch == -1 or ch == 4:
             return
         elif ch == 0:
@@ -2383,6 +2595,7 @@ def _menu_backend(cfg):
         elif ch == 3:
             _manage_model(cfg)
 
+
 def _select_backend(cfg):
     header("Select Backend")
     keys = list(BACKEND_INFO.keys())
@@ -2403,6 +2616,7 @@ def _select_backend(cfg):
     for line in bi["inst"].split("\n"):
         print(f"  {line}")
     pause()
+
 
 def _change_addr(cfg, prefix):
     ch = cfg.get(f"{prefix}_host", "127.0.0.1")
@@ -2438,6 +2652,7 @@ def _change_addr(cfg, prefix):
     success(f"Set to {host}:{port}")
     pause()
 
+
 def _manage_model(cfg):
     while True:
         header("Manage Translation Model")
@@ -2461,21 +2676,31 @@ def _manage_model(cfg):
                 bullet(f"{f.name}  ({sg:.2f} GB){act}")
 
         if bk == "ollama":
-            ms = check_ollama_models(cfg.get("translation_host", "127.0.0.1"), cfg.get("translation_port", DEFAULT_OLLAMA_PORT))
+            ms = check_ollama_models(
+                cfg.get("translation_host", "127.0.0.1"), cfg.get("translation_port", DEFAULT_OLLAMA_PORT)
+            )
             if ms:
                 print()
                 info("Ollama models:")
                 for m in ms:
-                    act = f" {C.GREEN}<- active{C.RESET}" if m == mdl or m.startswith(mdl.split(":")[0] if ":" in mdl else mdl) else ""
+                    act = (
+                        f" {C.GREEN}<- active{C.RESET}"
+                        if m == mdl or m.startswith(mdl.split(":")[0] if ":" in mdl else mdl)
+                        else ""
+                    )
                     bullet(f"{m}{act}")
 
-        ch = ask_choice("Options:", [
-            ("Change model name", "Enter model name manually"),
-            ("Pull Ollama model", "Download via ollama pull"),
-            ("Download GGUF from HuggingFace", "Browse repos and pick files"),
-            ("Select local GGUF file", f"{len(gf)} file(s) in models/translation/"),
-            ("Back", None)
-        ], default=4)
+        ch = ask_choice(
+            "Options:",
+            [
+                ("Change model name", "Enter model name manually"),
+                ("Pull Ollama model", "Download via ollama pull"),
+                ("Download GGUF from HuggingFace", "Browse repos and pick files"),
+                ("Select local GGUF file", f"{len(gf)} file(s) in models/translation/"),
+                ("Back", None),
+            ],
+            default=4,
+        )
         if ch == -1 or ch == 4:
             return
         elif ch == 0:
@@ -2488,7 +2713,11 @@ def _manage_model(cfg):
         elif ch == 1:
             mn = ask_input("Ollama model to pull", mdl or "qwen2.5:7b")
             if mn:
-                if not check_server(cfg.get("translation_host", "127.0.0.1"), cfg.get("translation_port", DEFAULT_OLLAMA_PORT), HEALTH_PATH_OLLAMA)["up"]:
+                if not check_server(
+                    cfg.get("translation_host", "127.0.0.1"),
+                    cfg.get("translation_port", DEFAULT_OLLAMA_PORT),
+                    HEALTH_PATH_OLLAMA,
+                )["up"]:
                     info("Starting Ollama...")
                     try:
                         subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -2508,8 +2737,8 @@ def _manage_model(cfg):
                 warn(f"No .gguf files in {GGUF_DIR}")
                 pause()
                 continue
-            fo = [(f"{f.name} ({f.stat().st_size/GiB:.2f} GB)", None) for f in gf] + [("Back", None)]
-            fc = ask_choice("Select:", fo, default=len(fo)-1)
+            fo = [(f"{f.name} ({f.stat().st_size / GiB:.2f} GB)", None) for f in gf] + [("Back", None)]
+            fc = ask_choice("Select:", fo, default=len(fo) - 1)
             if 0 <= fc < len(gf):
                 cfg["gguf_model_path"] = str(gf[fc])
                 cfg["translation_model"] = gf[fc].stem
@@ -2523,6 +2752,7 @@ def _manage_model(cfg):
                         cfg["translation_port"] = bi2["dp"]
                         save_config(cfg)
             pause()
+
 
 def _menu_pydeps():
     header("Python Dependencies")
@@ -2573,16 +2803,26 @@ def _menu_pydeps():
         info(f"{C.DIM}Korean and Russian also have built-in client-side romanization.{C.RESET}")
         if ask_yn("Install romanization libraries? (recommended)"):
             _check_pip()
-            r = _run([
-                sys.executable, "-m", "pip", "install",
-                "pykakasi==2.3.0", "pypinyin==0.55.0", "romanization==2.0.0",
-                "-q", "--no-warn-script-location"
-            ], timeout=120)
+            r = _run(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "pykakasi==2.3.0",
+                    "pypinyin==0.55.0",
+                    "romanization==2.0.0",
+                    "-q",
+                    "--no-warn-script-location",
+                ],
+                timeout=120,
+            )
             if r.returncode == 0:
                 success("Romanization libraries installed! Restart server to activate.")
             else:
                 warn("Some libraries failed to install. Check pip output above.")
     pause()
+
 
 def _test_translation(cfg):
     header("Test Translation")
@@ -2615,17 +2855,20 @@ def _test_translation(cfg):
         body = {
             "messages": [
                 {"role": "system", "content": "You are a translation system. Output ONLY the English translation."},
-                {"role": "user", "content": txt}
+                {"role": "user", "content": txt},
             ],
-            "max_tokens": 200, "temperature": 0.1, "stream": False
+            "max_tokens": 200,
+            "temperature": 0.1,
+            "stream": False,
         }
         if bk == "ollama":
             body["model"] = m
         data = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(
-            f"http://{h}:{p}{bi['ap']}", data=data,
+            f"http://{h}:{p}{bi['ap']}",
+            data=data,
             headers={"Content-Type": "application/json", "User-Agent": "Yume"},
-            method="POST"
+            method="POST",
         )
         info("Waiting...")
         with urllib.request.urlopen(req, timeout=60) as resp:
@@ -2647,8 +2890,6 @@ def _test_translation(cfg):
     pause()
 
 
-
-
 def rotate_logs(max_size_mb=10, keep=3):
     """Rotate log files if they exceed max_size_mb. Keep N backups."""
     for name in ["whisper_server.log", "translation_server.log"]:
@@ -2661,7 +2902,7 @@ def rotate_logs(max_size_mb=10, keep=3):
         # Rotate: .log.2 -> .log.3, .log.1 -> .log.2, .log -> .log.1
         for i in range(keep, 0, -1):
             old = LOGS_DIR / f"{name}.{i}"
-            new = LOGS_DIR / f"{name}.{i+1}"
+            new = LOGS_DIR / f"{name}.{i + 1}"
             if old.exists():
                 if i == keep:
                     old.unlink()  # delete oldest
@@ -2703,14 +2944,12 @@ def recommend_whisper_model(gpu_info=None):
             return "tiny", f"GPU with {vram} MB VRAM → tiny"
 
 
-
-
 def check_for_updates():
     """Check GitHub for newer Yume releases."""
     try:
         req = urllib.request.Request(
             "https://api.github.com/repos/jenox645/Yume/releases/latest",
-            headers={"User-Agent": f"Yume/{VERSION}", "Accept": "application/vnd.github.v3+json"}
+            headers={"User-Agent": f"Yume/{VERSION}", "Accept": "application/vnd.github.v3+json"},
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -2780,10 +3019,19 @@ def health_check(cfg):
     # 3. Python packages
     # Check pip first
     pip_r = _run([sys.executable, "-m", "pip", "--version"], timeout=10)
-    results.append(("pip available", pip_r.returncode == 0,
-                     pip_r.stdout.split()[1] if pip_r.returncode == 0 else "not found — install python3-pip"))
-    for pkg, name in [("faster_whisper", "faster-whisper"), ("flask", "Flask"),
-                       ("flask_cors", "Flask-CORS"), ("llama_cpp", "llama-cpp-python")]:
+    results.append(
+        (
+            "pip available",
+            pip_r.returncode == 0,
+            pip_r.stdout.split()[1] if pip_r.returncode == 0 else "not found — install python3-pip",
+        )
+    )
+    for pkg, name in [
+        ("faster_whisper", "faster-whisper"),
+        ("flask", "Flask"),
+        ("flask_cors", "Flask-CORS"),
+        ("llama_cpp", "llama-cpp-python"),
+    ]:
         try:
             __import__(pkg)
             results.append((f"{name}", True, "installed"))
@@ -2791,9 +3039,11 @@ def health_check(cfg):
             results.append((f"{name}", False, "not installed"))
 
     # Romanization libraries (optional but recommended)
-    roma_libs = [("pykakasi", "Japanese romaji (kanji→reading)"),
-                 ("pypinyin", "Chinese pinyin"),
-                 ("romanization", "Korean romanization")]
+    roma_libs = [
+        ("pykakasi", "Japanese romaji (kanji→reading)"),
+        ("pypinyin", "Chinese pinyin"),
+        ("romanization", "Korean romanization"),
+    ]
     roma_installed = 0
     for pkg, desc in roma_libs:
         try:
@@ -2827,16 +3077,26 @@ def health_check(cfg):
             status = ws.get("data", {}).get("status", "unknown")
             results.append(("Whisper server responding", True, f"port {wp} — status: {status}"))
         else:
-            results.append(("Whisper server responding", False,
-                            f"port {wp} in use but /health failed — restart with: python pocket_yume.py launch"))
+            results.append(
+                (
+                    "Whisper server responding",
+                    False,
+                    f"port {wp} in use but /health failed — restart with: python pocket_yume.py launch",
+                )
+            )
     if not is_port_free(tp):
         bi = BACKEND_INFO.get(c.get("translation_backend", "llamacpp"), BACKEND_INFO.get("custom", {"hp": "/health"}))
         ts = check_translation_server(c.get("translation_host", "127.0.0.1"), tp, bi)
         if ts["up"]:
             results.append(("Translation server responding", True, f"port {tp} — OK"))
         else:
-            results.append(("Translation server responding", False,
-                            f"port {tp} in use but not responding — check if your LLM backend is running"))
+            results.append(
+                (
+                    "Translation server responding",
+                    False,
+                    f"port {tp} in use but not responding — check if your LLM backend is running",
+                )
+            )
 
     # 7. Server files
     ss = SERVER_DIR / "faster_whisper_server.py"
@@ -2847,18 +3107,19 @@ def health_check(cfg):
     # 7. GGUF model (if llamacpp backend)
     if cfg.get("translation_backend") == "llamacpp":
         gf = find_gguf_models()
-        results.append(("GGUF model present", len(gf) > 0,
-                        gf[0].name if gf else "none in models/translation/"))
+        results.append(("GGUF model present", len(gf) > 0, gf[0].name if gf else "none in models/translation/"))
 
     # Display results
     ok = sum(1 for _, p, _ in results if p)
     total = len(results)
     table(
         ["Check", "Result", "Details"],
-        [[name, f"{C.GREEN}PASS{C.RESET}" if passed else f"{C.RED}FAIL{C.RESET}", detail]
-         for name, passed, detail in results],
+        [
+            [name, f"{C.GREEN}PASS{C.RESET}" if passed else f"{C.RED}FAIL{C.RESET}", detail]
+            for name, passed, detail in results
+        ],
         col_styles=[C.RESET, C.RESET, C.DIM],
-        title=f"Health Check — {ok}/{total} passed"
+        title=f"Health Check — {ok}/{total} passed",
     )
 
     if ok == total:
@@ -2875,12 +3136,15 @@ def health_check(cfg):
             if "yt-dlp" in fname or "ffmpeg" in fname or "ffprobe" in fname:
                 tool = fname.split(" ")[0]
                 info(f"{C.BOLD}{fname}{C.RESET} -> Run: {C.CYAN}python pocket_yume.py setup{C.RESET}")
-                info(f"  Or download manually: {C.CYAN}https://github.com/yt-dlp/yt-dlp/releases{C.RESET}" if "yt-dlp" in tool else
-                     f"  Or download manually: {C.CYAN}https://ffmpeg.org/download.html{C.RESET}")
+                info(
+                    f"  Or download manually: {C.CYAN}https://github.com/yt-dlp/yt-dlp/releases{C.RESET}"
+                    if "yt-dlp" in tool
+                    else f"  Or download manually: {C.CYAN}https://ffmpeg.org/download.html{C.RESET}"
+                )
             elif "faster-whisper" in fname or "Flask" in fname or "llama-cpp" in fname:
                 info(f"{C.BOLD}{fname}{C.RESET} -> Run: {C.CYAN}python pocket_yume.py setup{C.RESET}")
             elif "port" in fname.lower() and "free" in fname.lower():
-                port_num = re.search(r'\d+', fname)
+                port_num = re.search(r"\d+", fname)
                 pn = port_num.group() if port_num else "?"
                 info(f"{C.BOLD}{fname}{C.RESET} -> Port {pn} in use. Another Yume instance may be running.")
                 info(f"  Run {C.CYAN}python pocket_yume.py launch{C.RESET} to auto-detect a free port.")
@@ -2897,7 +3161,9 @@ def health_check(cfg):
                 else:
                     info(f"  Start your {bk} server, then re-run health check.")
             elif "Whisper server script" in fname:
-                info(f"{C.BOLD}{fname}{C.RESET} -> Re-extract Yume or run: {C.CYAN}python pocket_yume.py setup{C.RESET}")
+                info(
+                    f"{C.BOLD}{fname}{C.RESET} -> Re-extract Yume or run: {C.CYAN}python pocket_yume.py setup{C.RESET}"
+                )
             elif "Config" in fname:
                 info(f"{C.BOLD}{fname}{C.RESET} -> Delete {C.CYAN}{CONFIG_FILE}{C.RESET} and re-run setup.")
             elif "RAM" in fname:
@@ -2911,23 +3177,25 @@ def health_check(cfg):
     gpu = detect_gpu()
     rec_model, rec_reason = recommend_whisper_model(gpu)
     print()
-    panel(f"Recommended model: {C.BOLD}{rec_model}{C.RESET}\n{C.DIM}{rec_reason}{C.RESET}",
-          title="Performance Estimate", style=C.CYAN)
+    panel(
+        f"Recommended model: {C.BOLD}{rec_model}{C.RESET}\n{C.DIM}{rec_reason}{C.RESET}",
+        title="Performance Estimate",
+        style=C.CYAN,
+    )
     pause()
-
 
 
 def settings_menu(cfg):
     while True:
         header("Settings")
         bi = BACKEND_INFO.get(cfg.get("translation_backend", "llamacpp"), BACKEND_INFO["custom"])
-        ym = cfg['youtube_auth_method']
-        if ym == 'cookies':
+        ym = cfg["youtube_auth_method"]
+        if ym == "cookies":
             ym += f" ({cfg.get('cookies_browser', 'chrome')})"
 
         # Resolve auto device/precision for display
-        dev_raw = cfg['whisper_device']
-        comp_raw = cfg['whisper_compute_type']
+        dev_raw = cfg["whisper_device"]
+        comp_raw = cfg["whisper_compute_type"]
         gpu = detect_gpu()
         if dev_raw == "auto":
             if gpu["has_nvidia"]:
@@ -2939,8 +3207,11 @@ def settings_menu(cfg):
         else:
             dev_display = dev_raw
         if comp_raw == "auto":
-            resolved_comp = "float16" if "cuda" in dev_display and gpu.get("vram_mb", 0) >= 8000 else (
-                "int8_float16" if "cuda" in dev_display else "int8")
+            resolved_comp = (
+                "float16"
+                if "cuda" in dev_display and gpu.get("vram_mb", 0) >= 8000
+                else ("int8_float16" if "cuda" in dev_display else "int8")
+            )
             comp_display = f"{resolved_comp} (auto)"
         else:
             comp_display = comp_raw
@@ -2948,37 +3219,50 @@ def settings_menu(cfg):
         table(
             ["Setting", "Value"],
             [
-                [f"{C.GOLD}Whisper Model{C.RESET}", cfg['whisper_model']],
+                [f"{C.GOLD}Whisper Model{C.RESET}", cfg["whisper_model"]],
                 [f"{C.GOLD}Device / Precision{C.RESET}", f"{dev_display} / {comp_display}"],
                 [f"{C.GOLD}Whisper Address{C.RESET}", f"{cfg['whisper_host']}:{cfg['whisper_port']}"],
                 ["", ""],
-                [f"{C.MAGENTA}Translation{C.RESET}", bi['name']],
+                [f"{C.MAGENTA}Translation{C.RESET}", bi["name"]],
                 [f"{C.MAGENTA}TL Address{C.RESET}", f"{cfg['translation_host']}:{cfg['translation_port']}"],
-                [f"{C.MAGENTA}TL Model{C.RESET}", cfg.get('translation_model', '—')],
+                [f"{C.MAGENTA}TL Model{C.RESET}", cfg.get("translation_model", "—")],
                 ["", ""],
-                [f"{C.CYAN}Chunk Duration{C.RESET}", f"{cfg['chunk_duration']}s (audio processed in this many seconds at a time)"],
-                [f"{C.DIM}Word Timestamps{C.RESET}", f"{C.DIM}{'Yes' if cfg['word_timestamps'] else 'No'} (no effect — server overrides for music optimization){C.RESET}"],
-                [f"{C.DIM}Pause Threshold{C.RESET}", f"{C.DIM}{cfg['pause_threshold']}s (no effect — requires word_timestamps which is forced off){C.RESET}"],
+                [
+                    f"{C.CYAN}Chunk Duration{C.RESET}",
+                    f"{cfg['chunk_duration']}s (audio processed in this many seconds at a time)",
+                ],
+                [
+                    f"{C.DIM}Word Timestamps{C.RESET}",
+                    f"{C.DIM}{'Yes' if cfg['word_timestamps'] else 'No'} (no effect — server overrides for music optimization){C.RESET}",
+                ],
+                [
+                    f"{C.DIM}Pause Threshold{C.RESET}",
+                    f"{C.DIM}{cfg['pause_threshold']}s (no effect — requires word_timestamps which is forced off){C.RESET}",
+                ],
                 ["", ""],
                 [f"{C.YELLOW}YouTube Auth{C.RESET}", ym],
             ],
             col_styles=[C.RESET, C.CYAN],
-            title="Current Settings"
+            title="Current Settings",
         )
 
-        ch = ask_choice("Change:", [
-            ("Whisper settings", "Speech recognition model, device, precision"),
-            ("Translation settings", "Translation backend, address, model"),
-            ("Server addresses", "Host/port for Whisper and Translation servers"),
-            ("Subtitle tuning", "Chunk size, pause detection, word splitting"),
-            ("Translation prompt", "Customize how the AI translates (tone, style, rules)"),
-            ("Romanization prompt", "Customize how the AI romanizes non-Latin text"),
-            ("YouTube auth", "How Yume accesses YouTube (Deno bot bypass or browser cookies)"),
-            ("Export config", "Save settings to a backup file"),
-            ("Import config", "Load settings from a backup file"),
-            ("Reset to defaults", None),
-            ("Back", None)
-        ], default=10)
+        ch = ask_choice(
+            "Change:",
+            [
+                ("Whisper settings", "Speech recognition model, device, precision"),
+                ("Translation settings", "Translation backend, address, model"),
+                ("Server addresses", "Host/port for Whisper and Translation servers"),
+                ("Subtitle tuning", "Chunk size, pause detection, word splitting"),
+                ("Translation prompt", "Customize how the AI translates (tone, style, rules)"),
+                ("Romanization prompt", "Customize how the AI romanizes non-Latin text"),
+                ("YouTube auth", "How Yume accesses YouTube (Deno bot bypass or browser cookies)"),
+                ("Export config", "Save settings to a backup file"),
+                ("Import config", "Load settings from a backup file"),
+                ("Reset to defaults", None),
+                ("Back", None),
+            ],
+            default=10,
+        )
         if ch == -1 or ch == 10:
             return
         elif ch == 0:
@@ -3004,7 +3288,7 @@ def settings_menu(cfg):
             if backups:
                 info("Found backup files:")
                 for i, b in enumerate(backups[:5]):
-                    bullet(f"{i+1}. {b.name}")
+                    bullet(f"{i + 1}. {b.name}")
                 choice = ask_input("File number or path", "1")
                 try:
                     idx = int(choice) - 1
@@ -3032,6 +3316,7 @@ def settings_menu(cfg):
                 success("Reset!")
             pause()
 
+
 def _set_whisper(cfg):
     header("Whisper Settings")
     gpu = detect_gpu()
@@ -3042,41 +3327,54 @@ def _set_whisper(cfg):
     info(f"Current model: {C.BOLD}{cfg['whisper_model']}{C.RESET}")
     info(f"Recommendation: {rec_model} ({rec_reason})")
 
-    ch = ask_choice("What to change:", [
-        ("Whisper model", f"Currently: {cfg['whisper_model']} — the AI that converts speech to text"),
-        ("Device (CPU/GPU)", f"Currently: {cfg['whisper_device']} — where the AI runs"),
-        ("Precision", f"Currently: {cfg['whisper_compute_type']} — speed vs accuracy trade-off"),
-        ("Back", None),
-    ], default=3)
+    ch = ask_choice(
+        "What to change:",
+        [
+            ("Whisper model", f"Currently: {cfg['whisper_model']} — the AI that converts speech to text"),
+            ("Device (CPU/GPU)", f"Currently: {cfg['whisper_device']} — where the AI runs"),
+            ("Precision", f"Currently: {cfg['whisper_compute_type']} — speed vs accuracy trade-off"),
+            ("Back", None),
+        ],
+        default=3,
+    )
     if ch == -1 or ch == 3:
         return
     elif ch == 0:
         _menu_whisper_model(cfg)
     elif ch == 1:
-        dc = ask_choice("Where should Whisper run?", [
-            ("Auto-detect", "Uses GPU if available, falls back to CPU"),
-            ("GPU (NVIDIA CUDA)", "Fastest — requires an NVIDIA graphics card"),
-            ("CPU", "Works on any computer, but slower"),
-            ("Keep current", f"{cfg['whisper_device']}"),
-        ], default=3)
+        dc = ask_choice(
+            "Where should Whisper run?",
+            [
+                ("Auto-detect", "Uses GPU if available, falls back to CPU"),
+                ("GPU (NVIDIA CUDA)", "Fastest — requires an NVIDIA graphics card"),
+                ("CPU", "Works on any computer, but slower"),
+                ("Keep current", f"{cfg['whisper_device']}"),
+            ],
+            default=3,
+        )
         if 0 <= dc < 3:
             cfg["whisper_device"] = ["auto", "cuda", "cpu"][dc]
         save_config(cfg)
         success("Saved!")
         pause()
     elif ch == 2:
-        cc = ask_choice("Precision (lower = faster but slightly less accurate):", [
-            ("Auto", "Let Yume decide based on your hardware"),
-            ("float16", "Full precision — best accuracy, needs ~4.5 GB VRAM on GPU"),
-            ("int8_float16", "Mixed — good balance, needs ~3 GB VRAM"),
-            ("int8", "Most compressed — fastest, works well on CPU"),
-            ("Keep current", f"{cfg['whisper_compute_type']}"),
-        ], default=4)
+        cc = ask_choice(
+            "Precision (lower = faster but slightly less accurate):",
+            [
+                ("Auto", "Let Yume decide based on your hardware"),
+                ("float16", "Full precision — best accuracy, needs ~4.5 GB VRAM on GPU"),
+                ("int8_float16", "Mixed — good balance, needs ~3 GB VRAM"),
+                ("int8", "Most compressed — fastest, works well on CPU"),
+                ("Keep current", f"{cfg['whisper_compute_type']}"),
+            ],
+            default=4,
+        )
         if 0 <= cc < 4:
             cfg["whisper_compute_type"] = ["auto", "float16", "int8_float16", "int8"][cc]
         save_config(cfg)
         success("Saved!")
         pause()
+
 
 def _menu_translation_prompt(cfg):
     """Edit the system prompt that controls how the AI translates subtitles."""
@@ -3116,12 +3414,16 @@ def _menu_translation_prompt(cfg):
         info(f"  {C.CYAN}{default_prompt}{C.RESET}")
 
     print()
-    ch = ask_choice("Options:", [
-        ("Edit prompt", "Write your own translation instruction"),
-        ("Reset to default", "Restore the built-in prompt"),
-        ("View example prompts", "See templates for different styles"),
-        ("Back", None)
-    ], default=3)
+    ch = ask_choice(
+        "Options:",
+        [
+            ("Edit prompt", "Write your own translation instruction"),
+            ("Reset to default", "Restore the built-in prompt"),
+            ("View example prompts", "See templates for different styles"),
+            ("Back", None),
+        ],
+        default=3,
+    )
 
     if ch == -1 or ch == 3:
         return
@@ -3142,19 +3444,29 @@ def _menu_translation_prompt(cfg):
     elif ch == 2:
         section("Example Prompts")
         examples = [
-            ("Casual / informal",
-             "Translate {src} to casual {tgt}. Use everyday language, contractions, and slang where appropriate. Output ONLY the translation."),
-            ("Formal / literary",
-             "Translate {src} to formal {tgt}. Use proper grammar and literary vocabulary. Output ONLY the translation."),
-            ("Song lyrics (poetic)",
-             "Translate these {src} song lyrics to {tgt}. Preserve poetic rhythm and feeling. Output ONLY the translation."),
-            ("Keep honorifics (anime)",
-             "Translate {src} to {tgt}. Keep Japanese honorifics (-san, -kun, -chan, -sama, -sensei) untranslated. Output ONLY the translation."),
-            ("Technical / precise",
-             "Translate {src} to {tgt}. Preserve technical terms and proper nouns exactly. Output ONLY the translation."),
+            (
+                "Casual / informal",
+                "Translate {src} to casual {tgt}. Use everyday language, contractions, and slang where appropriate. Output ONLY the translation.",
+            ),
+            (
+                "Formal / literary",
+                "Translate {src} to formal {tgt}. Use proper grammar and literary vocabulary. Output ONLY the translation.",
+            ),
+            (
+                "Song lyrics (poetic)",
+                "Translate these {src} song lyrics to {tgt}. Preserve poetic rhythm and feeling. Output ONLY the translation.",
+            ),
+            (
+                "Keep honorifics (anime)",
+                "Translate {src} to {tgt}. Keep Japanese honorifics (-san, -kun, -chan, -sama, -sensei) untranslated. Output ONLY the translation.",
+            ),
+            (
+                "Technical / precise",
+                "Translate {src} to {tgt}. Preserve technical terms and proper nouns exactly. Output ONLY the translation.",
+            ),
         ]
         for i, (name, prompt) in enumerate(examples):
-            info(f"  {C.BOLD}{i+1}. {name}{C.RESET}")
+            info(f"  {C.BOLD}{i + 1}. {name}{C.RESET}")
             info(f"     {C.DIM}{prompt}{C.RESET}")
             print()
         choice = ask_input("Use which? (number, or press Enter to go back)", "")
@@ -3208,12 +3520,16 @@ def _menu_romanization_prompt(cfg):
             info(f"  {C.DIM}{lang}: {prompt[:70]}...{C.RESET}")
 
     print()
-    ch = ask_choice("Options:", [
-        ("Edit prompt", "Write your own romanization instruction"),
-        ("Reset to default", "Restore the built-in per-language prompts"),
-        ("View example prompts", "See templates for different styles"),
-        ("Back", None)
-    ], default=3)
+    ch = ask_choice(
+        "Options:",
+        [
+            ("Edit prompt", "Write your own romanization instruction"),
+            ("Reset to default", "Restore the built-in per-language prompts"),
+            ("View example prompts", "See templates for different styles"),
+            ("Back", None),
+        ],
+        default=3,
+    )
 
     if ch == -1 or ch == 3:
         return
@@ -3234,15 +3550,21 @@ def _menu_romanization_prompt(cfg):
     elif ch == 2:
         section("Example Prompts")
         examples = [
-            ("Standard transliteration",
-             "Convert {src} text to Latin characters using {sys}. Output ONLY the result. No translation. No explanations."),
-            ("Phonetic (pronunciation-focused)",
-             "Convert {src} to how it sounds in English letters. Prioritize pronunciation over spelling rules. Output ONLY the result."),
-            ("Academic (strict system)",
-             "Transliterate {src} to Latin using the ISO 9 standard. Be precise. Output ONLY the transliteration."),
+            (
+                "Standard transliteration",
+                "Convert {src} text to Latin characters using {sys}. Output ONLY the result. No translation. No explanations.",
+            ),
+            (
+                "Phonetic (pronunciation-focused)",
+                "Convert {src} to how it sounds in English letters. Prioritize pronunciation over spelling rules. Output ONLY the result.",
+            ),
+            (
+                "Academic (strict system)",
+                "Transliterate {src} to Latin using the ISO 9 standard. Be precise. Output ONLY the transliteration.",
+            ),
         ]
         for i, (name, prompt) in enumerate(examples):
-            info(f"  {C.BOLD}{i+1}. {name}{C.RESET}")
+            info(f"  {C.BOLD}{i + 1}. {name}{C.RESET}")
             info(f"     {C.DIM}{prompt}{C.RESET}")
             print()
         choice = ask_input("Use which? (number, or press Enter to go back)", "")
@@ -3253,20 +3575,23 @@ def _menu_romanization_prompt(cfg):
                 save_config(cfg)
                 success(f"Prompt set to: {examples[idx][0]}")
         pause()
+
+
 def _set_addrs(cfg):
     while True:
         header("Server Addresses")
         info(f"Whisper:     {C.CYAN}{cfg['whisper_host']}:{cfg['whisper_port']}{C.RESET}")
         info(f"Translation: {C.CYAN}{cfg['translation_host']}:{cfg['translation_port']}{C.RESET}")
-        ch = ask_choice("Change:", [
-            ("Whisper address", None), ("Translation address", None), ("Back", None)
-        ], default=2)
+        ch = ask_choice(
+            "Change:", [("Whisper address", None), ("Translation address", None), ("Back", None)], default=2
+        )
         if ch == -1 or ch == 2:
             return
         elif ch == 0:
             _change_addr(cfg, "whisper")
         elif ch == 1:
             _change_addr(cfg, "translation")
+
 
 def _set_subs(cfg):
     header("Subtitle Tuning")
@@ -3287,7 +3612,7 @@ def _set_subs(cfg):
     try:
         cfg["pause_threshold"] = float(pt)
     except Exception as e:
-        _log.debug('[_set_subs] float-parse failed: %s', e)
+        _log.debug("[_set_subs] float-parse failed: %s", e)
 
     print()
     info(f"{C.BOLD}Chunk duration{C.RESET}: Yume processes audio in chunks of this many seconds.")
@@ -3299,11 +3624,12 @@ def _set_subs(cfg):
     try:
         cfg["chunk_duration"] = int(cd)
     except Exception as e:
-        _log.debug('[_set_subs] int-parse failed: %s', e)
+        _log.debug("[_set_subs] int-parse failed: %s", e)
 
     save_config(cfg)
     success("Saved!")
     pause()
+
 
 # ────
 # BENCHMARK
@@ -3311,15 +3637,15 @@ def _set_subs(cfg):
 
 WHISPER_MODELS_INFO = [
     # (name, params, vram, user-friendly description)
-    ("tiny",            "39M params",   "~1 GB",   "Fastest, low accuracy"),
-    ("base",            "74M params",   "~1 GB",   "Fast, decent accuracy"),
-    ("small",           "244M params",  "~2 GB",   "Good balance of speed and accuracy"),
-    ("medium",          "769M params",  "~5 GB",   "High accuracy, slower"),
-    ("large-v2",        "1550M params", "~10 GB",  "Very high accuracy"),
-    ("large-v3",        "1550M params", "~10 GB",  "Best accuracy (recommended if VRAM allows)"),
-    ("large-v3-turbo",  "809M params",  "~6 GB",   "Near-v3 accuracy at 2x speed (best mid-range)"),
-    ("distil-large-v2", "756M params",  "~4 GB",   "Compressed v2 -- 2x faster, similar accuracy"),
-    ("distil-large-v3", "756M params",  "~4 GB",   "Compressed v3 -- 2x faster, similar accuracy"),
+    ("tiny", "39M params", "~1 GB", "Fastest, low accuracy"),
+    ("base", "74M params", "~1 GB", "Fast, decent accuracy"),
+    ("small", "244M params", "~2 GB", "Good balance of speed and accuracy"),
+    ("medium", "769M params", "~5 GB", "High accuracy, slower"),
+    ("large-v2", "1550M params", "~10 GB", "Very high accuracy"),
+    ("large-v3", "1550M params", "~10 GB", "Best accuracy (recommended if VRAM allows)"),
+    ("large-v3-turbo", "809M params", "~6 GB", "Near-v3 accuracy at 2x speed (best mid-range)"),
+    ("distil-large-v2", "756M params", "~4 GB", "Compressed v2 -- 2x faster, similar accuracy"),
+    ("distil-large-v3", "756M params", "~4 GB", "Compressed v3 -- 2x faster, similar accuracy"),
 ]
 
 
@@ -3351,6 +3677,7 @@ def _is_whisper_model_cached(model_name):
     except Exception:
         return False  # Can't tell — assume not cached
 
+
 def benchmark_whisper(cfg):
     """Compare Whisper model speeds on this hardware."""
     header("Whisper Benchmark")
@@ -3361,7 +3688,8 @@ def benchmark_whisper(cfg):
 
     # Check faster-whisper is installed
     try:
-        import faster_whisper # noqa: F401
+        import faster_whisper  # noqa: F401
+
         success("faster-whisper found")
     except ImportError:
         error("faster-whisper not installed. Run: pip install faster-whisper")
@@ -3386,22 +3714,31 @@ def benchmark_whisper(cfg):
     if ffmpeg:
         try:
             # Generate 5s of sine wave at speech frequency (300Hz) with harmonics
-            _run([
-                ffmpeg, "-y", "-f", "lavfi", "-i",
-                "sine=frequency=300:duration=5",
-                "-ar", str(WHISPER_SAMPLE_RATE), "-ac", "1",
-                str(test_wav)
-            ], timeout=10)
+            _run(
+                [
+                    ffmpeg,
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=300:duration=5",
+                    "-ar",
+                    str(WHISPER_SAMPLE_RATE),
+                    "-ac",
+                    "1",
+                    str(test_wav),
+                ],
+                timeout=10,
+            )
         except Exception as e:
-            _log.debug('[benchmark_whisper] test-audio-gen failed: %s', e)
-
-
+            _log.debug("[benchmark_whisper] test-audio-gen failed: %s", e)
 
     if not test_wav.exists():
         # Fallback: create raw audio in Python
         try:
             import struct
             import math
+
             sr = WHISPER_SAMPLE_RATE
             dur = 5
             samples = []
@@ -3410,6 +3747,7 @@ def benchmark_whisper(cfg):
                 v = 0.5 * math.sin(2 * math.pi * 300 * t) + 0.3 * math.sin(2 * math.pi * 600 * t)
                 samples.append(int(v * 32767))  # 16-bit PCM full scale
             import wave
+
             with wave.open(str(test_wav), "w") as wf:
                 wf.setnchannels(1)
                 wf.setsampwidth(2)
@@ -3448,14 +3786,15 @@ def benchmark_whisper(cfg):
         cached = _is_whisper_model_cached(name)
         dl_tag = f"{C.GREEN}downloaded{C.RESET}" if cached else f"{C.DIM}not downloaded{C.RESET}"
         cur = f" {C.GOLD}<- current{C.RESET}" if name == cfg.get("whisper_model") else ""
-        print(f"    {i+1:2d}. {name:22s} {vr:8s} [{tag}] [{dl_tag}]{cur}")
+        print(f"    {i + 1:2d}. {name:22s} {vr:8s} [{tag}] [{dl_tag}]{cur}")
         print(f"        {C.DIM}{desc}{C.RESET}")
     print()
 
-    selection = ask_input(
-        "Enter model numbers (comma-separated) or 'rec' for recommended, 'all' for all that fit",
-        "rec"
-    ).strip().lower()
+    selection = (
+        ask_input("Enter model numbers (comma-separated) or 'rec' for recommended, 'all' for all that fit", "rec")
+        .strip()
+        .lower()
+    )
 
     models_to_test = []
     if selection == "all":
@@ -3512,7 +3851,7 @@ def benchmark_whisper(cfg):
     results = []
     total = len(models_to_test)
     for idx, model_name in enumerate(models_to_test):
-        section(f"Testing {idx+1}/{total}: {model_name}")
+        section(f"Testing {idx + 1}/{total}: {model_name}")
         cached = _is_whisper_model_cached(model_name)
         if not cached:
             info(f"{C.DIM}Downloading model... (this may take a few minutes the first time){C.RESET}")
@@ -3524,6 +3863,7 @@ def benchmark_whisper(cfg):
             # Suppress HuggingFace Hub warnings during download
             # (unauthenticated request warnings, Windows symlink warnings)
             import warnings
+
             warnings.filterwarnings("ignore", message=".*huggingface.*")
             warnings.filterwarnings("ignore", message=".*symlinks.*")
             os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
@@ -3559,27 +3899,31 @@ def benchmark_whisper(cfg):
             rtf = median_time / 5.0  # Real-time factor (5s audio)
             speed = 5.0 / median_time if median_time > 0 else 0
 
-            results.append({
-                "model": model_name,
-                "load_s": round(load_time, 1),
-                "median_s": round(median_time, 3),
-                "rtf": round(rtf, 3),
-                "speed_x": round(speed, 1),
-                "segments": segments_count,
-                "status": "OK",
-            })
+            results.append(
+                {
+                    "model": model_name,
+                    "load_s": round(load_time, 1),
+                    "median_s": round(median_time, 3),
+                    "rtf": round(rtf, 3),
+                    "speed_x": round(speed, 1),
+                    "segments": segments_count,
+                    "status": "OK",
+                }
+            )
             success(f"Median: {median_time:.3f}s for 5s audio ({speed:.1f}x realtime)")
 
             # Free memory
             del model
             try:
                 import gc
+
                 gc.collect()
                 if device == "cuda":
                     import torch
+
                     torch.cuda.empty_cache()
             except Exception as e:
-                _log.debug('[benchmark_whisper] cuda-cleanup failed: %s', e)
+                _log.debug("[benchmark_whisper] cuda-cleanup failed: %s", e)
 
         except Exception as e:
             err_msg = str(e)
@@ -3587,10 +3931,20 @@ def benchmark_whisper(cfg):
             error(f"Failed: {short_err}")
 
             # Detect missing CUDA libraries and offer CPU fallback
-            is_cuda_lib_error = any(lib in err_msg.lower() for lib in [
-                "cublas", "cudnn", "cudart", "cufft", "cusolver", "cusparse",
-                "nvcuda", "is not found or cannot be loaded", "cuda",
-            ])
+            is_cuda_lib_error = any(
+                lib in err_msg.lower()
+                for lib in [
+                    "cublas",
+                    "cudnn",
+                    "cudart",
+                    "cufft",
+                    "cusolver",
+                    "cusparse",
+                    "nvcuda",
+                    "is not found or cannot be loaded",
+                    "cuda",
+                ]
+            )
 
             if is_cuda_lib_error and device in ("cuda", "auto"):
                 print()
@@ -3607,6 +3961,7 @@ def benchmark_whisper(cfg):
                     try:
                         info(f"Retrying {model_name} on CPU...")
                         from faster_whisper import WhisperModel as WM2
+
                         t0 = time.time()
                         model = WM2(model_name, device="cpu", compute_type="int8")
                         load_time = time.time() - t0
@@ -3616,43 +3971,64 @@ def benchmark_whisper(cfg):
                         times = []
                         for run in range(3):
                             t0 = time.time()
-                            segs, _ = model.transcribe(str(test_wav), language="ja",
-                                                       vad_filter=False, word_timestamps=False)
+                            segs, _ = model.transcribe(
+                                str(test_wav), language="ja", vad_filter=False, word_timestamps=False
+                            )
                             list(segs)
                             times.append(time.time() - t0)
 
                         median_time = sorted(times)[len(times) // 2]
                         speed = 5.0 / median_time if median_time > 0 else 0
-                        results.append({
-                            "model": f"{model_name} (CPU)",
-                            "load_s": round(load_time, 1),
-                            "median_s": round(median_time, 3),
-                            "rtf": round(median_time / 5.0, 3),
-                            "speed_x": round(speed, 1),
-                            "segments": 0,
-                            "status": "OK",
-                        })
+                        results.append(
+                            {
+                                "model": f"{model_name} (CPU)",
+                                "load_s": round(load_time, 1),
+                                "median_s": round(median_time, 3),
+                                "rtf": round(median_time / 5.0, 3),
+                                "speed_x": round(speed, 1),
+                                "segments": 0,
+                                "status": "OK",
+                            }
+                        )
                         success(f"CPU median: {median_time:.3f}s for 5s audio ({speed:.1f}x realtime)")
                         del model
                     except Exception as e2:
                         error(f"CPU fallback also failed: {str(e2)[:60]}")
-                        results.append({
-                            "model": model_name, "load_s": 0, "median_s": 0, "rtf": 0,
-                            "speed_x": 0, "segments": 0,
-                            "status": f"FAIL: {short_err}",
-                        })
+                        results.append(
+                            {
+                                "model": model_name,
+                                "load_s": 0,
+                                "median_s": 0,
+                                "rtf": 0,
+                                "speed_x": 0,
+                                "segments": 0,
+                                "status": f"FAIL: {short_err}",
+                            }
+                        )
                 else:
-                    results.append({
-                        "model": model_name, "load_s": 0, "median_s": 0, "rtf": 0,
-                        "speed_x": 0, "segments": 0,
-                        "status": f"FAIL: {short_err}",
-                    })
+                    results.append(
+                        {
+                            "model": model_name,
+                            "load_s": 0,
+                            "median_s": 0,
+                            "rtf": 0,
+                            "speed_x": 0,
+                            "segments": 0,
+                            "status": f"FAIL: {short_err}",
+                        }
+                    )
             else:
-                results.append({
-                    "model": model_name, "load_s": 0, "median_s": 0, "rtf": 0,
-                    "speed_x": 0, "segments": 0,
-                    "status": f"FAIL: {short_err}",
-                })
+                results.append(
+                    {
+                        "model": model_name,
+                        "load_s": 0,
+                        "median_s": 0,
+                        "rtf": 0,
+                        "speed_x": 0,
+                        "segments": 0,
+                        "status": f"FAIL: {short_err}",
+                    }
+                )
 
     # Clean up test audio
     try:
@@ -3675,13 +4051,15 @@ def benchmark_whisper(cfg):
             bar_len = min(25, int(r["speed_x"] / max(best_speed, 1) * 25))
             speed_bar = f"{C.GREEN}{'█' * bar_len}{C.DIM}{'░' * (25 - bar_len)}{C.RESET}"
             is_best = f" {C.GOLD}★{C.RESET}" if r["speed_x"] == best_speed and len(results) > 1 else ""
-            rows.append([
-                r["model"],
-                f"{r['load_s']}s",
-                f"{r['median_s']:.3f}s",
-                f"{r['speed_x']}x{is_best}",
-                speed_bar,
-            ])
+            rows.append(
+                [
+                    r["model"],
+                    f"{r['load_s']}s",
+                    f"{r['median_s']:.3f}s",
+                    f"{r['speed_x']}x{is_best}",
+                    speed_bar,
+                ]
+            )
         else:
             rows.append([r["model"], "-", "-", "-", f"{C.RED}{r['status']}{C.RESET}"])
 
@@ -3689,7 +4067,7 @@ def benchmark_whisper(cfg):
         ["Model", "Load", "5s Audio", "Speed", ""],
         rows,
         col_styles=[C.CYAN, C.RESET, C.RESET, C.GREEN, C.RESET],
-        title="Whisper Benchmark"
+        title="Whisper Benchmark",
     )
 
     if results:
@@ -3717,9 +4095,11 @@ def benchmark_whisper(cfg):
                     success(f"Config updated to {fastest['model']}")
     pause()
 
+
 # ────
 # STATUS
 # ────
+
 
 def show_status(cfg):
     header("System Status")
@@ -3742,7 +4122,7 @@ def show_status(cfg):
             ["OS", f"{PLAT} ({ARCH})"],
         ],
         col_styles=[C.BOLD, C.RESET],
-        title="Hardware"
+        title="Hardware",
     )
 
     tool_rows = []
@@ -3754,19 +4134,21 @@ def show_status(cfg):
             tool_rows.append([t, f"{C.DIM}skipped{C.RESET}", "using cookies"])
         else:
             tool_rows.append([t, f"{C.RED}MISSING{C.RESET}", "run Tools menu to install"])
-    table(["Tool", "Status", "Path"], tool_rows,
-          col_styles=[C.CYAN, C.RESET, C.DIM], title="Tools")
+    table(["Tool", "Status", "Path"], tool_rows, col_styles=[C.CYAN, C.RESET, C.DIM], title="Tools")
 
     pkg_rows = []
-    for pkg, display in [("faster_whisper", "faster-whisper"), ("flask", "Flask"),
-                          ("flask_cors", "Flask-CORS"), ("llama_cpp", "llama-cpp-python")]:
+    for pkg, display in [
+        ("faster_whisper", "faster-whisper"),
+        ("flask", "Flask"),
+        ("flask_cors", "Flask-CORS"),
+        ("llama_cpp", "llama-cpp-python"),
+    ]:
         try:
             __import__(pkg)
             pkg_rows.append([display, f"{C.GREEN}✓{C.RESET}"])
         except ImportError:
             pkg_rows.append([display, f"{C.RED}✗  not installed{C.RESET}"])
-    table(["Package", "Status"], pkg_rows,
-          col_styles=[C.CYAN, C.RESET], title="Python Packages")
+    table(["Package", "Status"], pkg_rows, col_styles=[C.CYAN, C.RESET], title="Python Packages")
 
     bk = cfg.get("translation_backend", "llamacpp")
     bi = BACKEND_INFO.get(bk, BACKEND_INFO["custom"])
@@ -3783,7 +4165,7 @@ def show_status(cfg):
             [bi["name"], f"{cfg['translation_host']}:{cfg['translation_port']}", ts_s],
         ],
         col_styles=[C.CYAN, C.DIM, C.RESET],
-        title="Servers"
+        title="Servers",
     )
 
     gf = find_gguf_models()
@@ -3811,7 +4193,7 @@ def show_status(cfg):
     elif gf:
         info(f"Translation:  {len(gf)} GGUF file(s) in models/translation/")
         for f in gf:
-            bullet(f"{f.name} ({f.stat().st_size/GiB:.2f} GB)")
+            bullet(f"{f.name} ({f.stat().st_size / GiB:.2f} GB)")
     else:
         info(f"Translation:  {C.DIM}no GGUF models found{C.RESET}")
 
@@ -3859,10 +4241,31 @@ def detect_fonts():
 
     # CJK font families to look for
     cjk_targets = {
-        "Japanese": ["NotoSansJP", "NotoSerifJP", "Noto Sans JP", "MPLUS", "M PLUS", "Yu Gothic",
-                      "Meiryo", "MS Gothic", "HiraginoSans", "Hiragino", "Kosugi", "ZenMaru"],
-        "Chinese": ["NotoSansSC", "NotoSansTC", "Noto Sans SC", "Noto Sans TC", "SimHei",
-                     "Microsoft YaHei", "PingFang", "STHeiti", "Source Han Sans"],
+        "Japanese": [
+            "NotoSansJP",
+            "NotoSerifJP",
+            "Noto Sans JP",
+            "MPLUS",
+            "M PLUS",
+            "Yu Gothic",
+            "Meiryo",
+            "MS Gothic",
+            "HiraginoSans",
+            "Hiragino",
+            "Kosugi",
+            "ZenMaru",
+        ],
+        "Chinese": [
+            "NotoSansSC",
+            "NotoSansTC",
+            "Noto Sans SC",
+            "Noto Sans TC",
+            "SimHei",
+            "Microsoft YaHei",
+            "PingFang",
+            "STHeiti",
+            "Source Han Sans",
+        ],
         "Korean": ["NotoSansKR", "Noto Sans KR", "Malgun", "NanumGothic", "AppleSD"],
         "Arabic": ["NotoNaskhArabic", "Noto Naskh Arabic", "Amiri", "Scheherazade"],
     }
@@ -4037,7 +4440,7 @@ def _launch_inner(cfg, procs, lhs):
             try:
                 out = _run(["rocminfo"], timeout=10)
                 if out.returncode == 0:
-                    arches = re.findall(r'gfx(\d+)', out.stdout)
+                    arches = re.findall(r"gfx(\d+)", out.stdout)
                     # RDNA1 (gfx1010/1011/1012) needs override to 10.3.0
                     rdna1 = [a for a in arches if a in ("1010", "1011", "1012")]
                     if rdna1:
@@ -4045,9 +4448,7 @@ def _launch_inner(cfg, procs, lhs):
                         warn(f"AMD RDNA1 GPU detected (gfx{rdna1[0]}). Setting HSA_OVERRIDE_GFX_VERSION=10.3.0")
                         info("Add 'export HSA_OVERRIDE_GFX_VERSION=10.3.0' to ~/.bashrc to make this permanent.")
             except Exception as e:
-                _log.debug('[_launch_inner] rocm-detect failed: %s', e)
-
-
+                _log.debug("[_launch_inner] rocm-detect failed: %s", e)
 
     bk = cfg.get("translation_backend", "llamacpp")
     bi = BACKEND_INFO.get(bk, BACKEND_INFO.get("custom", {"hp": "/health"}))
@@ -4090,12 +4491,23 @@ def _launch_inner(cfg, procs, lhs):
             warn("Server dependencies missing (uvicorn/fastapi)")
             info("Installing them now...")
             try:
-                _run([
-                    sys.executable, "-m", "pip", "install",
-                    "uvicorn==0.42.0", "fastapi==0.135.1", "sse-starlette==3.3.3",
-                    "starlette-context==0.5.1", "pydantic-settings==2.13.1",
-                    "-q", "--no-warn-script-location"
-                ], timeout=300, env=env)
+                _run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "pip",
+                        "install",
+                        "uvicorn==0.42.0",
+                        "fastapi==0.135.1",
+                        "sse-starlette==3.3.3",
+                        "starlette-context==0.5.1",
+                        "pydantic-settings==2.13.1",
+                        "-q",
+                        "--no-warn-script-location",
+                    ],
+                    timeout=300,
+                    env=env,
+                )
                 success("Server dependencies installed!")
             except Exception as e:
                 error(f"Failed to install: {e}")
@@ -4112,11 +4524,17 @@ def _launch_inner(cfg, procs, lhs):
             info(f"Starting llama.cpp server with {Path(gp).name}...")
             gpu = detect_gpu()
             cmd = [
-                sys.executable, "-m", "llama_cpp.server",
-                "--model", gp,
-                "--host", cfg.get("translation_host", "127.0.0.1"),
-                "--port", str(port),
-                "--n_ctx", "2048",
+                sys.executable,
+                "-m",
+                "llama_cpp.server",
+                "--model",
+                gp,
+                "--host",
+                cfg.get("translation_host", "127.0.0.1"),
+                "--port",
+                str(port),
+                "--n_ctx",
+                "2048",
             ]
             if gpu["has_nvidia"]:
                 cmd.extend(["--n_gpu_layers", "-1"])  # offload all layers to GPU
@@ -4134,17 +4552,14 @@ def _launch_inner(cfg, procs, lhs):
             p = subprocess.Popen(cmd, stdout=lh, stderr=subprocess.STDOUT, env=tl_env)
             procs.append(("Translation", p))
             info(f"Log: {lp}")
+
             def _trans_ready():
                 if p.poll() is not None:
                     return None  # crashed
                 # llama-cpp-python doesn't have /health — try /v1/models too
                 return check_translation_server(cfg["translation_host"], port, bi)["up"]
 
-            ready = spin_wait(
-                lambda: _trans_ready() is True,
-                "Loading translation model...",
-                timeout=180, interval=2
-            )
+            ready = spin_wait(lambda: _trans_ready() is True, "Loading translation model...", timeout=180, interval=2)
             if p.poll() is not None:
                 error("llama.cpp server crashed!")
                 crash_log = ""
@@ -4155,13 +4570,15 @@ def _launch_inner(cfg, procs, lhs):
                         for line in crash_lines[-10:]:
                             print(f"  {C.DIM}{line.rstrip()}{C.RESET}")
                 except Exception as e:
-                    _log.debug('[_launch_inner] translation-crash-log-read failed: %s', e)
+                    _log.debug("[_launch_inner] translation-crash-log-read failed: %s", e)
                 # Diagnose common crash causes
                 cl = crash_log.lower()
                 if "cuda" in cl and ("out of memory" in cl or "oom" in cl or "alloc" in cl):
                     print()
                     info(f"{C.BOLD}Diagnosis: GPU out of VRAM for this model.{C.RESET}")
-                    info(f"Try: {C.CYAN}python pocket_yume.py settings{C.RESET} -> change model to a smaller quantization,")
+                    info(
+                        f"Try: {C.CYAN}python pocket_yume.py settings{C.RESET} -> change model to a smaller quantization,"
+                    )
                     info("  or reduce n_gpu_layers, or set device to 'cpu'.")
                 elif "modulenotfounderror" in cl or "no module named" in cl:
                     print()
@@ -4237,17 +4654,25 @@ def _launch_inner(cfg, procs, lhs):
             else:
                 dev = "cpu"
         if comp == "auto":
-            comp = "float16" if dev == "cuda" and gpu.get("vram_mb", 0) >= 8000 else (
-                "int8_float16" if dev == "cuda" else "int8"
+            comp = (
+                "float16"
+                if dev == "cuda" and gpu.get("vram_mb", 0) >= 8000
+                else ("int8_float16" if dev == "cuda" else "int8")
             )
 
         cmd = [
-            sys.executable, str(ss),
-            "--model", cfg["whisper_model"],
-            "--device", dev,
-            "--compute-type", comp,
-            "--port", str(cfg["whisper_port"]),
-            "--pause-threshold", str(cfg["pause_threshold"]),
+            sys.executable,
+            str(ss),
+            "--model",
+            cfg["whisper_model"],
+            "--device",
+            dev,
+            "--compute-type",
+            comp,
+            "--port",
+            str(cfg["whisper_port"]),
+            "--pause-threshold",
+            str(cfg["pause_threshold"]),
         ]
         if not cfg.get("word_timestamps"):
             cmd.append("--no-word-timestamps")
@@ -4263,6 +4688,7 @@ def _launch_inner(cfg, procs, lhs):
 
         p = subprocess.Popen(cmd, stdout=lh, stderr=subprocess.STDOUT, env=env)
         procs.append(("Whisper", p))
+
         def _whisper_ready():
             if p.poll() is not None:
                 return None  # crashed
@@ -4272,7 +4698,8 @@ def _launch_inner(cfg, procs, lhs):
         ready = spin_wait(
             lambda: _whisper_ready() is True,
             f"Loading Whisper model ({cfg['whisper_model']})...",
-            timeout=240, interval=2
+            timeout=240,
+            interval=2,
         )
         if p.poll() is not None:
             error("Whisper server crashed!")
@@ -4284,14 +4711,16 @@ def _launch_inner(cfg, procs, lhs):
                     for line in crash_lines[-10:]:
                         print(f"  {C.DIM}{line.rstrip()}{C.RESET}")
             except Exception as e:
-                _log.debug('[_launch_inner] whisper-crash-log-read failed: %s', e)
+                _log.debug("[_launch_inner] whisper-crash-log-read failed: %s", e)
             # Diagnose common crash causes with actionable solutions
             cl = crash_log.lower()
             diagnosed = False
             if "cuda" in cl and ("out of memory" in cl or "oom" in cl or "alloc" in cl):
                 print()
                 info(f"{C.BOLD}Diagnosis: Your GPU doesn't have enough VRAM for this model.{C.RESET}")
-                info(f"Try: {C.CYAN}python pocket_yume.py settings{C.RESET} -> change Whisper model to 'small' or 'tiny',")
+                info(
+                    f"Try: {C.CYAN}python pocket_yume.py settings{C.RESET} -> change Whisper model to 'small' or 'tiny',"
+                )
                 info("  or set device to 'cpu'.")
                 diagnosed = True
             elif "cublas" in cl or "cudnn" in cl or "cudart" in cl:
@@ -4374,7 +4803,7 @@ def _runtime_menu(cfg, procs, lhs, bk):
                     p.kill()
                     p.wait(timeout=3)
                 except Exception as e:
-                    _log.debug('[_runtime_menu] process-cleanup failed: %s', e)
+                    _log.debug("[_runtime_menu] process-cleanup failed: %s", e)
 
         for lh in lhs:
             try:
@@ -4399,9 +4828,17 @@ def _runtime_menu(cfg, procs, lhs, bk):
                         lines = f.readlines()
                     # Show informative lines first (Yume pipeline output), then recent access logs
                     # Filter out noisy health check polling that drowns real info
-                    yume_lines = [ln for ln in lines if "[Yume]" in ln or "error" in ln.lower() or "fail" in ln.lower() or "warn" in ln.lower()]
+                    yume_lines = [
+                        ln
+                        for ln in lines
+                        if "[Yume]" in ln or "error" in ln.lower() or "fail" in ln.lower() or "warn" in ln.lower()
+                    ]
                     access_lines = [ln for ln in lines if "HTTP/" in ln and "/health" not in ln]
-                    other_lines = [ln for ln in lines if ln not in yume_lines and ln not in access_lines and "GET /health" not in ln]
+                    other_lines = [
+                        ln
+                        for ln in lines
+                        if ln not in yume_lines and ln not in access_lines and "GET /health" not in ln
+                    ]
                     # Combine: last 10 Yume lines + last 5 non-health access lines
                     shown = yume_lines[-10:] + access_lines[-5:] + other_lines[-5:]
                     if not shown:
@@ -4441,15 +4878,20 @@ def _runtime_menu(cfg, procs, lhs, bk):
                 style=C.GREEN,
             )
 
-            ch = ask_choice("Runtime:", [
-                ("Server Stats", "GPU usage, memory, how many chunks have been processed"),
-                ("Subtitle Filter", "Block phrases Whisper hallucinates (fake 'Subscribe' etc.)"),
-                ("Whisper Model", "Switch speech recognition model without restarting"),
-                ("Test Translation", "Send a test sentence to verify the translation pipeline"),
-                ("Benchmark Whisper", "Measure how fast each model runs on your hardware"),
-                ("View Logs", "Recent server output (for troubleshooting)"),
-                ("Stop & Return", "Shut down all servers and go back to main menu"),
-            ], default=6, allow_back=False)
+            ch = ask_choice(
+                "Runtime:",
+                [
+                    ("Server Stats", "GPU usage, memory, how many chunks have been processed"),
+                    ("Subtitle Filter", "Block phrases Whisper hallucinates (fake 'Subscribe' etc.)"),
+                    ("Whisper Model", "Switch speech recognition model without restarting"),
+                    ("Test Translation", "Send a test sentence to verify the translation pipeline"),
+                    ("Benchmark Whisper", "Measure how fast each model runs on your hardware"),
+                    ("View Logs", "Recent server output (for troubleshooting)"),
+                    ("Stop & Return", "Shut down all servers and go back to main menu"),
+                ],
+                default=6,
+                allow_back=False,
+            )
 
             if ch == 0:
                 cli_server_stats(cfg)
@@ -4474,9 +4916,11 @@ def _runtime_menu(cfg, procs, lhs, bk):
         print()
         _stop_all()
 
+
 # ────
 # SETUP WIZARD
 # ────
+
 
 def setup_wizard(cfg):
     header("First-Time Setup")
@@ -4502,9 +4946,12 @@ def setup_wizard(cfg):
 
     has_gpu = gpu["has_nvidia"] or (gpu.get("has_amd") and not IS_WIN)
     (success if has_gpu else warn)(
-        f"GPU:  {gpu['name'] or 'None'}" + (
-            f" ({gpu['vram_mb']} MB)" if gpu["has_nvidia"]
-            else f" ({gpu.get('vram_mb', '?')} MB, ROCm)" if gpu.get("has_amd") and not IS_WIN
+        f"GPU:  {gpu['name'] or 'None'}"
+        + (
+            f" ({gpu['vram_mb']} MB)"
+            if gpu["has_nvidia"]
+            else f" ({gpu.get('vram_mb', '?')} MB, ROCm)"
+            if gpu.get("has_amd") and not IS_WIN
             else " -- CPU mode"
         )
     )
@@ -4554,9 +5001,9 @@ def setup_wizard(cfg):
     yt = find_tool("yt-dlp")
     ff = find_tool("ffmpeg")
     dn = find_tool("deno")
-    (success if yt else warn)(f"yt-dlp: {'OK '+yt if yt else 'MISSING'}")
-    (success if ff else warn)(f"FFmpeg: {'OK '+ff if ff else 'MISSING'}")
-    info(f"Deno:   {'OK '+dn if dn else '-- not installed (optional)'}")
+    (success if yt else warn)(f"yt-dlp: {'OK ' + yt if yt else 'MISSING'}")
+    (success if ff else warn)(f"FFmpeg: {'OK ' + ff if ff else 'MISSING'}")
+    info(f"Deno:   {'OK ' + dn if dn else '-- not installed (optional)'}")
 
     if not yt:
         missing.append("yt-dlp")
@@ -4565,22 +5012,25 @@ def setup_wizard(cfg):
 
     # Check Python packages
     try:
-        import faster_whisper # noqa: F401
+        import faster_whisper  # noqa: F401
+
         success("faster-whisper: OK")  # noqa: F401
     except ImportError:
         warn("faster-whisper: MISSING")
         missing.append("python_deps")
 
     try:
-        import llama_cpp # noqa: F401
+        import llama_cpp  # noqa: F401
+
         success("llama-cpp-python: OK")  # noqa: F401
     except ImportError:
         warn("llama-cpp-python: MISSING")
         missing.append("llama_cpp")
 
     try:
-        import uvicorn # noqa: F401
-        import fastapi # noqa: F401
+        import uvicorn  # noqa: F401
+        import fastapi  # noqa: F401
+
         success("Server deps (uvicorn/fastapi): OK")  # noqa: F401
     except ImportError:
         warn("Server deps (uvicorn/fastapi): MISSING")
@@ -4615,11 +5065,16 @@ def setup_wizard(cfg):
 
     if missing:
         print(f"\n  Missing: {C.BOLD}{', '.join(missing)}{C.RESET}\n")
-        mode = ask_choice("Proceed?", [
-            ("Install all", "Download everything needed"),
-            ("Choose each", "Ask per component"),
-            ("Skip", "Set up later"),
-        ], default=0, allow_back=False)
+        mode = ask_choice(
+            "Proceed?",
+            [
+                ("Install all", "Download everything needed"),
+                ("Choose each", "Ask per component"),
+                ("Skip", "Set up later"),
+            ],
+            default=0,
+            allow_back=False,
+        )
 
         if mode == 2:
             cfg["first_run_complete"] = True
@@ -4627,7 +5082,7 @@ def setup_wizard(cfg):
             pause()
             return cfg
 
-        ae = (mode == 1)  # ask-each
+        ae = mode == 1  # ask-each
         header("Installing")
 
         if "yt-dlp" in missing:
@@ -4648,22 +5103,34 @@ def setup_wizard(cfg):
         info("YouTube blocks automated downloads to prevent bots.")
         info("Yume needs a way to prove you're a real person.")
         print()
-        ch = ask_choice("How do you want to authenticate with YouTube?", [
-            ("Browser Cookies (recommended)",
-             "Uses your browser's YouTube login. Be logged into YouTube in your browser."),
-            ("Deno (no account needed)",
-             "Downloads Deno (~35 MB) + sets up a local server that solves YouTube's\n"
-             "      bot challenge without any login. Requires internet connection."),
-            ("Skip for now", "You can set this up later in Settings."),
-        ], default=0, allow_back=False)
+        ch = ask_choice(
+            "How do you want to authenticate with YouTube?",
+            [
+                (
+                    "Browser Cookies (recommended)",
+                    "Uses your browser's YouTube login. Be logged into YouTube in your browser.",
+                ),
+                (
+                    "Deno (no account needed)",
+                    "Downloads Deno (~35 MB) + sets up a local server that solves YouTube's\n"
+                    "      bot challenge without any login. Requires internet connection.",
+                ),
+                ("Skip for now", "You can set this up later in Settings."),
+            ],
+            default=0,
+            allow_back=False,
+        )
         if ch == 0:
             cfg["youtube_auth_method"] = "cookies"
             browsers = ["chrome", "firefox", "edge", "brave", "safari"]
             print()
             info("This only affects audio downloading — the extension itself works in any browser.")
-            bc = ask_choice("Which browser are you logged into YouTube with?",
-                            [(b.capitalize(), None) for b in browsers],
-                            default=0, allow_back=False)
+            bc = ask_choice(
+                "Which browser are you logged into YouTube with?",
+                [(b.capitalize(), None) for b in browsers],
+                default=0,
+                allow_back=False,
+            )
             cfg["cookies_browser"] = browsers[bc]
             success(f"Using cookies from: {browsers[bc]}")
         elif ch == 1:
@@ -4685,12 +5152,22 @@ def setup_wizard(cfg):
             if not ae or ask_yn("Install server dependencies (uvicorn, fastapi)?"):
                 info("Installing server dependencies...")
                 try:
-                    _run([
-                        sys.executable, "-m", "pip", "install",
-                        "uvicorn==0.42.0", "fastapi==0.135.1", "sse-starlette==3.3.3",
-                        "starlette-context==0.5.1", "pydantic-settings==2.13.1",
-                        "-q", "--no-warn-script-location"
-                    ], timeout=300)
+                    _run(
+                        [
+                            sys.executable,
+                            "-m",
+                            "pip",
+                            "install",
+                            "uvicorn==0.42.0",
+                            "fastapi==0.135.1",
+                            "sse-starlette==3.3.3",
+                            "starlette-context==0.5.1",
+                            "pydantic-settings==2.13.1",
+                            "-q",
+                            "--no-warn-script-location",
+                        ],
+                        timeout=300,
+                    )
                     success("Server dependencies installed!")
                 except Exception as e:
                     error(f"Failed: {e}")
@@ -4702,11 +5179,16 @@ def setup_wizard(cfg):
             info("Yume needs a GGUF model file to translate Japanese -> English.")
             info("Default: llama.cpp loads it directly. No external servers needed.")
             print()
-            ch = ask_choice("How to get a model?", [
-                ("Download from HuggingFace", "Browse repos, pick quantization"),
-                ("Use Ollama instead", "One-click, manages models for you"),
-                ("Skip", "I'll add a .gguf file later"),
-            ], default=0, allow_back=False)
+            ch = ask_choice(
+                "How to get a model?",
+                [
+                    ("Download from HuggingFace", "Browse repos, pick quantization"),
+                    ("Use Ollama instead", "One-click, manages models for you"),
+                    ("Skip", "I'll add a .gguf file later"),
+                ],
+                default=0,
+                allow_back=False,
+            )
             if ch == 0:
                 browse_hf(cfg)
             elif ch == 1:
@@ -4721,10 +5203,12 @@ def setup_wizard(cfg):
                     if ask_yn(f"Download model ({cfg['translation_model']})?"):
                         if not check_server("127.0.0.1", DEFAULT_OLLAMA_PORT, HEALTH_PATH_OLLAMA)["up"]:
                             try:
-                                subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                subprocess.Popen(
+                                    ["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                                )
                                 time.sleep(3)
                             except Exception as e:
-                                _log.debug('[setup_wizard] post-setup-backup failed: %s', e)
+                                _log.debug("[setup_wizard] post-setup-backup failed: %s", e)
 
                         pull_ollama_model(cfg["translation_model"])
             save_config(cfg)
@@ -4734,7 +5218,7 @@ def setup_wizard(cfg):
     try:
         config_export(cfg, BASE_DIR / "yume_config_post_setup.json")
     except Exception as e:
-        _log.debug('[setup_wizard] config-backup failed: %s', e)
+        _log.debug("[setup_wizard] config-backup failed: %s", e)
 
     # ── Installation summary ──
     print()
@@ -4749,7 +5233,9 @@ def setup_wizard(cfg):
         checks.append(("llama-cpp-python", _try_import("llama_cpp")))
         checks.append(("GGUF model", len(find_gguf_models()) > 0))
     elif bk == "ollama":
-        checks.append(("Ollama", check_server("127.0.0.1", cfg.get("translation_port", 11434), HEALTH_PATH_OLLAMA)["up"]))
+        checks.append(
+            ("Ollama", check_server("127.0.0.1", cfg.get("translation_port", 11434), HEALTH_PATH_OLLAMA)["up"])
+        )
 
     all_ok = True
     for name, ok in checks:
@@ -4769,9 +5255,11 @@ def setup_wizard(cfg):
     pause()
     return cfg
 
+
 # ────
 # UNINSTALL
 # ────
+
 
 def uninstall_yume():
     header("Uninstall Yume")
@@ -4792,25 +5280,38 @@ def uninstall_yume():
                 try:
                     sz += f.stat().st_size
                 except Exception as e:
-                    _log.debug('[uninstall_yume] file-stat failed: %s', e)
+                    _log.debug("[uninstall_yume] file-stat failed: %s", e)
 
         mb = sz / MiB
         marker = f"{C.GREEN}✓{C.RESET}" if d.exists() else f"{C.DIM}—{C.RESET}"
         print(f"    {marker} {label:40s} {mb:>8.1f} MB  {d}")
     print()
 
-    pip_pkgs = ["faster-whisper", "llama-cpp-python", "flask", "flask-cors",
-                "uvicorn", "fastapi", "sse-starlette", "starlette-context", "pydantic-settings"]
+    pip_pkgs = [
+        "faster-whisper",
+        "llama-cpp-python",
+        "flask",
+        "flask-cors",
+        "uvicorn",
+        "fastapi",
+        "sse-starlette",
+        "starlette-context",
+        "pydantic-settings",
+    ]
     info("Pip packages that can be removed:")
     print(f"    {', '.join(pip_pkgs)}")
     print()
 
-    ch = ask_choice("What to remove?", [
-        ("Everything (data + pip packages)", "Full clean uninstall"),
-        ("Data only (keep pip packages)", "Remove tools, models, config, logs"),
-        ("Pip packages only", "Uninstall Python packages installed by Yume"),
-        ("Cancel", None),
-    ], default=3)
+    ch = ask_choice(
+        "What to remove?",
+        [
+            ("Everything (data + pip packages)", "Full clean uninstall"),
+            ("Data only (keep pip packages)", "Remove tools, models, config, logs"),
+            ("Pip packages only", "Uninstall Python packages installed by Yume"),
+            ("Cancel", None),
+        ],
+        default=3,
+    )
 
     if ch == 3 or ch == -1:
         info("Cancelled.")
@@ -4839,8 +5340,7 @@ def uninstall_yume():
             try:
                 shutil.rmtree(MODELS_DIR)
             except Exception as e:
-                _log.debug('[uninstall_yume] cleanup failed: %s', e)
-
+                _log.debug("[uninstall_yume] cleanup failed: %s", e)
 
     if remove_pip:
         info("Uninstalling pip packages...")
@@ -4853,9 +5353,7 @@ def uninstall_yume():
                     # Package wasn't installed, that's fine
                     pass
             except Exception as e:
-                _log.debug('[uninstall_yume] dir-remove failed: %s', e)
-
-
+                _log.debug("[uninstall_yume] dir-remove failed: %s", e)
 
     print()
     success("Uninstall complete!")
@@ -4863,9 +5361,11 @@ def uninstall_yume():
     info("To remove the browser extension: go to chrome://extensions and remove Yume.")
     pause()
 
+
 # ────
 # MAIN MENU
 # ────
+
 
 def main_menu():
     cfg = load_config()
@@ -4902,6 +5402,7 @@ def main_menu():
         global _update_result
         if _update_result is None:
             _update_result = [None, None, False]  # [latest, url, checked]
+
             def _bg_check():
                 global _update_result
                 try:
@@ -4909,22 +5410,28 @@ def main_menu():
                     _update_result = [latest, url, True]
                 except Exception:
                     _update_result = [None, None, True]
+
             threading.Thread(target=_bg_check, daemon=True).start()
         if _update_result[2] and _update_result[0]:
-            print(f"  {C.YELLOW}⬆{C.RESET}  Update available: v{_update_result[0]}  {C.DIM}{_update_result[1]}{C.RESET}")
+            print(
+                f"  {C.YELLOW}⬆{C.RESET}  Update available: v{_update_result[0]}  {C.DIM}{_update_result[1]}{C.RESET}"
+            )
 
-
-
-        ch = ask_choice("What would you like to do?", [
-            ("Launch Yume", "Start servers + runtime menu"),
-            ("System Status", "Hardware, tools, packages, ports"),
-            ("Health Check", "Test every component end-to-end"),
-            ("Settings", "Whisper, translation, addresses, subtitles"),
-            ("Tools & Fonts", "Install, update, manage components, detect fonts"),
-            ("Re-run Setup", "Guided first-time configuration"),
-            ("Uninstall", "Remove Yume and all data"),
-            ("Exit", None),
-        ], default=0, allow_back=False)
+        ch = ask_choice(
+            "What would you like to do?",
+            [
+                ("Launch Yume", "Start servers + runtime menu"),
+                ("System Status", "Hardware, tools, packages, ports"),
+                ("Health Check", "Test every component end-to-end"),
+                ("Settings", "Whisper, translation, addresses, subtitles"),
+                ("Tools & Fonts", "Install, update, manage components, detect fonts"),
+                ("Re-run Setup", "Guided first-time configuration"),
+                ("Uninstall", "Remove Yume and all data"),
+                ("Exit", None),
+            ],
+            default=0,
+            allow_back=False,
+        )
 
         if ch == 0:
             launch_services(cfg)
@@ -4946,11 +5453,16 @@ def main_menu():
             print(f"\n  {C.GOLD}Goodbye!{C.RESET}\n")
             break
 
+
 def main():
     # Logging: --verbose or LOG_LEVEL env enables debug output
     verbose = "--verbose" in sys.argv or "-v" in sys.argv
     env_level = os.environ.get("LOG_LEVEL", "").upper()
-    log_level = logging.DEBUG if (verbose or env_level == "DEBUG") else max(getattr(logging, env_level, logging.WARNING), logging.DEBUG)
+    log_level = (
+        logging.DEBUG
+        if (verbose or env_level == "DEBUG")
+        else max(getattr(logging, env_level, logging.WARNING), logging.DEBUG)
+    )
     logging.basicConfig(level=log_level, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s", stream=sys.stderr)
     sys.argv = [a for a in sys.argv if a not in ("--verbose", "-v")]
 
@@ -5042,6 +5554,7 @@ def main():
         error(f"Error: {e}")
         traceback.print_exc()
         pause()
+
 
 if __name__ == "__main__":
     try:

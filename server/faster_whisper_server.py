@@ -53,13 +53,16 @@ app = Flask(__name__)
 API_TOKEN = secrets.token_urlsafe(32)
 TOKEN_FILE = None  # Set in main() after BASE_DIR is known
 
-CORS(app, resources={
-    r"/*": {
-        "origins": ["chrome-extension://*", "http://localhost:*", "http://127.0.0.1:*"],
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type", "X-API-Token"]
-    }
-})
+CORS(
+    app,
+    resources={
+        r"/*": {
+            "origins": ["chrome-extension://*", "http://localhost:*", "http://127.0.0.1:*"],
+            "methods": ["GET", "POST", "OPTIONS"],
+            "allow_headers": ["Content-Type", "X-API-Token"],
+        }
+    },
+)
 
 
 # ============================================================================
@@ -67,6 +70,7 @@ CORS(app, resources={
 # Defends against DNS rebinding (CVE-style) and CSRF from malicious pages.
 # ============================================================================
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
+
 
 @app.before_request
 def _security_checks():
@@ -142,8 +146,10 @@ def _cleanup_stale_temps():
     if cleaned:
         print(f"[Yume] Startup cleanup: removed {cleaned} stale temp dirs")
 
+
 # Run startup cleanup immediately
 # _cleanup_stale_temps() called in main()
+
 
 def _shutdown_handler(signum, frame):
     """Handle SIGTERM/SIGINT — clean up and exit gracefully."""
@@ -157,13 +163,14 @@ def _shutdown_handler(signum, frame):
             pass
     sys.exit(0)
 
+
 # Signal handlers registered in main()
 
 
 @app.teardown_request
-def _cleanup_request_temps(exception):
+def _cleanup_request_temps(_exception):
     """Clean temp files created during this request (defense against unclean exits)."""
-    for path in getattr(g, '_temp_files', []):
+    for path in getattr(g, "_temp_files", []):
         try:
             if os.path.isfile(path):
                 os.unlink(path)
@@ -171,6 +178,7 @@ def _cleanup_request_temps(exception):
                 shutil.rmtree(path, ignore_errors=True)
         except OSError:
             pass
+
 
 # Global state
 model = None
@@ -209,9 +217,9 @@ FULL_AUDIO_TTL = 600  # 10 minutes
 def _cleanup_audio_entry(entry):
     """Delete the temp directory for a cached audio file."""
     try:
-        parent = os.path.dirname(entry.get('path', ''))
+        parent = os.path.dirname(entry.get("path", ""))
         basename = os.path.basename(parent)
-        if parent and os.path.isdir(parent) and (basename.startswith('yume_') or basename.startswith('tmp')):
+        if parent and os.path.isdir(parent) and (basename.startswith("yume_") or basename.startswith("tmp")):
             shutil.rmtree(parent, ignore_errors=True)
     except Exception:
         pass
@@ -223,6 +231,7 @@ def _cleanup_all_audio():
         _cleanup_audio_entry(entry)
     full_audio_cache.clear()
 
+
 # atexit registered in main()
 
 # Stream URL cache: avoids calling yt-dlp --get-url for every chunk
@@ -231,15 +240,15 @@ stream_url_cache = {}  # bounded: max STREAM_URL_CACHE_MAX entries
 STREAM_URL_TTL = 300  # 5 minutes (YouTube stream URLs expire)
 
 # YouTube auth (set from config at startup)
-youtube_auth_method = "cookies"    # "cookies" or "deno"
+youtube_auth_method = "cookies"  # "cookies" or "deno"
 cookies_browser = "chrome"
 
 # Translation server info (read from config, reported in /health so extension can auto-discover)
 translation_host = "127.0.0.1"
 translation_port = 5000
 translation_backend = "llamacpp"
-translation_prompt = ""      # Custom translation prompt from CLI config (passed to extension via /health)
-romanization_prompt = ""     # Custom romanization prompt from CLI config (passed to extension via /health)
+translation_prompt = ""  # Custom translation prompt from CLI config (passed to extension via /health)
+romanization_prompt = ""  # Custom romanization prompt from CLI config (passed to extension via /health)
 
 # ============================================================================
 # SESSION STATISTICS (accumulated, reset on server restart)
@@ -266,9 +275,14 @@ def _get_gpu_stats():
     """Get GPU VRAM and utilization via nvidia-smi. Returns dict or None."""
     try:
         result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.used,memory.total,utilization.gpu,temperature.gpu,name",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=5
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.used,memory.total,utilization.gpu,temperature.gpu,name",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():
             parts = result.stdout.strip().split(", ")
@@ -289,7 +303,8 @@ def _get_gpu_stats():
 # HEALTH CHECK
 # ============================================================================
 
-@app.route('/health', methods=['GET'])
+
+@app.route("/health", methods=["GET"])
 def health():
     # Minimal response for unauthenticated callers (bootstrap/discovery only)
     # Only expose token to Chrome extension or local callers (blocks CSRF from malicious sites)
@@ -309,25 +324,27 @@ def health():
     # Full response only for authenticated callers — hides translation server details
     token = request.headers.get("X-API-Token", "")
     if token == API_TOKEN:
-        base.update({
-            "model": model_name,
-            "device": device,
-            "compute_type": compute_type,
-            "vad_filter": False,
-            "translation_host": translation_host,
-            "translation_port": translation_port,
-            "translation_backend": translation_backend,
-            "translation_url": f"http://{translation_host}:{translation_port}",
-            "translation_prompt": translation_prompt,
-            "romanization_prompt": romanization_prompt,
-        })
+        base.update(
+            {
+                "model": model_name,
+                "device": device,
+                "compute_type": compute_type,
+                "vad_filter": False,
+                "translation_host": translation_host,
+                "translation_port": translation_port,
+                "translation_backend": translation_backend,
+                "translation_url": f"http://{translation_host}:{translation_port}",
+                "translation_prompt": translation_prompt,
+                "romanization_prompt": romanization_prompt,
+            }
+        )
 
     # Return 503 while model is loading — extension checks response.ok
     status_code = 200 if is_ready else 503
     return jsonify(base), status_code
 
 
-@app.route('/stats', methods=['GET'])
+@app.route("/stats", methods=["GET"])
 def stats():
     """Session statistics + live GPU info for the popup dashboard."""
     with stats_lock:
@@ -361,25 +378,36 @@ def stats():
     return jsonify(s)
 
 
-@app.route('/model/switch', methods=['POST'])
+@app.route("/model/switch", methods=["POST"])
 def switch_model():
     """Hot-swap the Whisper model without restarting the server."""
     global model, model_name, device, compute_type
 
     data = request.get_json() or {}
-    new_model = data.get('model')
+    new_model = data.get("model")
     if not new_model:
         return jsonify({"error": "Missing 'model' field"}), 400
 
     valid_models = [
-        'tiny', 'tiny.en', 'base', 'base.en', 'small', 'small.en',
-        'medium', 'medium.en', 'large-v1', 'large-v2', 'large-v3',
-        'turbo', 'large-v3-turbo',
-        'distil-large-v2', 'distil-large-v3',
+        "tiny",
+        "tiny.en",
+        "base",
+        "base.en",
+        "small",
+        "small.en",
+        "medium",
+        "medium.en",
+        "large-v1",
+        "large-v2",
+        "large-v3",
+        "turbo",
+        "large-v3-turbo",
+        "distil-large-v2",
+        "distil-large-v3",
     ]
 
     # Accept standard model names OR local directory paths (for custom/fine-tuned models)
-    is_local_path = os.path.sep in new_model or '/' in new_model
+    is_local_path = os.path.sep in new_model or "/" in new_model
     if is_local_path:
         if not os.path.isdir(new_model):
             return jsonify({"error": f"Directory not found: {new_model}"}), 400
@@ -392,8 +420,8 @@ def switch_model():
         return jsonify({"error": f"Unknown model: {new_model}", "valid": valid_models}), 400
 
     # Normalize turbo alias
-    if new_model == 'turbo':
-        new_model = 'large-v3-turbo'
+    if new_model == "turbo":
+        new_model = "large-v3-turbo"
 
     if new_model == model_name:
         return jsonify({"status": "already_loaded", "model": model_name})
@@ -425,18 +453,21 @@ def switch_model():
         return jsonify({"error": f"Switch failed: {str(e)}"}), 500
 
 
-@app.route('/config', methods=['GET'])
+@app.route("/config", methods=["GET"])
 def get_config():
-    return jsonify({
-        "model": model_name,
-        "device": device,
-        "compute_type": compute_type,
-        "word_timestamps": use_word_timestamps,
-        "pause_threshold": pause_threshold,
-    })
+    return jsonify(
+        {
+            "model": model_name,
+            "device": device,
+            "compute_type": compute_type,
+            "word_timestamps": use_word_timestamps,
+            "pause_threshold": pause_threshold,
+        }
+    )
 
 
 _ytdlp_cache = {"available": None, "checked_at": 0}
+
 
 def _ytdlp_cmd():
     """Return the yt-dlp command prefix.
@@ -470,7 +501,7 @@ def _check_ytdlp():
     return available
 
 
-@app.route('/translation/models', methods=['GET'])
+@app.route("/translation/models", methods=["GET"])
 def list_translation_models():
     """Query the translation backend for available models."""
     url = f"http://{translation_host}:{translation_port}"
@@ -480,6 +511,7 @@ def list_translation_models():
         if translation_backend == "ollama":
             # Ollama: /api/tags
             import urllib.request
+
             req = urllib.request.Request(f"http://{translation_host}:{translation_port}/api/tags")
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read())
@@ -488,6 +520,7 @@ def list_translation_models():
         else:
             # OpenAI-compatible: /v1/models
             import urllib.request
+
             req = urllib.request.Request(f"{url}/v1/models")
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read())
@@ -501,15 +534,17 @@ def list_translation_models():
     ggufs = []
     if gguf_dir.exists():
         for f in gguf_dir.glob("*.gguf"):
-            ggufs.append({"name": f.name, "size_mb": round(f.stat().st_size / (1024*1024), 1)})
+            ggufs.append({"name": f.name, "size_mb": round(f.stat().st_size / (1024 * 1024), 1)})
 
-    return jsonify({
-        "backend": translation_backend,
-        "translation_url": url,
-        "models": models,
-        "local_ggufs": ggufs,
-        "note": "llama.cpp requires server restart to switch models" if translation_backend == "llamacpp" else ""
-    })
+    return jsonify(
+        {
+            "backend": translation_backend,
+            "translation_url": url,
+            "models": models,
+            "local_ggufs": ggufs,
+            "note": "llama.cpp requires server restart to switch models" if translation_backend == "llamacpp" else "",
+        }
+    )
 
 
 def _is_youtube_url(url):
@@ -518,10 +553,16 @@ def _is_youtube_url(url):
         return False
     try:
         parsed = urlparse(url)
-        host = (parsed.hostname or '').lower()
-        yt_domains = {"youtube.com", "www.youtube.com", "youtu.be",
-                      "youtube-nocookie.com", "www.youtube-nocookie.com",
-                      "music.youtube.com", "m.youtube.com"}
+        host = (parsed.hostname or "").lower()
+        yt_domains = {
+            "youtube.com",
+            "www.youtube.com",
+            "youtu.be",
+            "youtube-nocookie.com",
+            "www.youtube-nocookie.com",
+            "music.youtube.com",
+            "m.youtube.com",
+        }
         return host in yt_domains or host.endswith(".youtube.com")
     except Exception:
         return False
@@ -531,16 +572,17 @@ def _is_youtube_url(url):
 # PREPARE VIDEO - Download full audio once
 # ============================================================================
 
-@app.route('/prepare', methods=['POST', 'OPTIONS'])
+
+@app.route("/prepare", methods=["POST", "OPTIONS"])
 def prepare():
     """Download full audio for a video. Called once before chunk transcription."""
-    if request.method == 'OPTIONS':
-        return '', 204
+    if request.method == "OPTIONS":
+        return "", 204
 
     try:
         data = request.get_json()
-        url = data.get('url')
-        video_id = data.get('video_id', 'unknown')
+        url = data.get("url")
+        video_id = data.get("video_id", "unknown")
 
         if not url:
             return jsonify({"error": "Missing url"}), 400
@@ -553,9 +595,9 @@ def prepare():
         # Check cache
         with cache_lock:
             cached = full_audio_cache.get(video_id)
-            if cached and time.time() - cached['timestamp'] < FULL_AUDIO_TTL and os.path.exists(cached['path']):
+            if cached and time.time() - cached["timestamp"] < FULL_AUDIO_TTL and os.path.exists(cached["path"]):
                 print(f"[Yume] Full audio cache hit for {video_id} ({cached['duration']:.0f}s)")
-                return jsonify({"status": "ready", "duration": cached['duration'], "cached": True})
+                return jsonify({"status": "ready", "duration": cached["duration"], "cached": True})
 
             # Clean up expired entry if it exists
             if cached:
@@ -578,17 +620,14 @@ def prepare():
                 evicted = full_audio_cache.pop(oldest, None)
                 if evicted:
                     _cleanup_audio_entry(evicted)
-            full_audio_cache[video_id] = {
-                "path": audio_path,
-                "duration": duration,
-                "timestamp": time.time()
-            }
+            full_audio_cache[video_id] = {"path": audio_path, "duration": duration, "timestamp": time.time()}
 
         print(f"[Yume] Full audio ready: {duration:.1f}s, {size_kb:.0f}KB")
         return jsonify({"status": "ready", "duration": duration, "cached": False})
 
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
@@ -598,54 +637,61 @@ def _friendlify_ytdlp_error(raw_error):
     lower = raw_error.lower()
 
     # YouTube DRM / bot detection / sign-in errors
-    if 'drm protected' in lower:
-        return ("YouTube blocked the download (DRM error). "
-                "Fix: In yume_config.json set youtube_auth_method to 'cookies' "
-                "and cookies_browser to your browser name (e.g. 'firefox'). "
-                "Or paste a stream URL in the extension popup.")
-    if 'sign in to confirm' in lower or 'confirm you' in lower:
-        return ("YouTube requires sign-in to access this video. "
-                "Fix: In yume_config.json set youtube_auth_method to 'cookies' "
-                "and cookies_browser to your browser name.")
-    if 'http error 403' in lower or '403 forbidden' in lower:
-        if 'cloudflare' in lower:
-            return ("Access denied (403) — Cloudflare anti-bot protection. "
-                    "This site blocks automated downloads. "
-                    "Try: copy the direct video/audio URL (often .m3u8 or .mp4) "
-                    "from the browser's Network tab and paste it as a Custom Stream URL "
-                    "in the Yume extension popup.")
-        return ("Access denied (403). The site is blocking yt-dlp. "
-                "For YouTube: try switching to cookie auth in yume_config.json. "
-                "For other sites: use the Custom Stream URL option in the extension — "
-                "open DevTools > Network > filter 'm3u8' or 'mp4' > copy the URL. "
-                "Also try: pip install -U yt-dlp")
-    if 'video unavailable' in lower or 'private video' in lower:
+    if "drm protected" in lower:
+        return (
+            "YouTube blocked the download (DRM error). "
+            "Fix: In yume_config.json set youtube_auth_method to 'cookies' "
+            "and cookies_browser to your browser name (e.g. 'firefox'). "
+            "Or paste a stream URL in the extension popup."
+        )
+    if "sign in to confirm" in lower or "confirm you" in lower:
+        return (
+            "YouTube requires sign-in to access this video. "
+            "Fix: In yume_config.json set youtube_auth_method to 'cookies' "
+            "and cookies_browser to your browser name."
+        )
+    if "http error 403" in lower or "403 forbidden" in lower:
+        if "cloudflare" in lower:
+            return (
+                "Access denied (403) — Cloudflare anti-bot protection. "
+                "This site blocks automated downloads. "
+                "Try: copy the direct video/audio URL (often .m3u8 or .mp4) "
+                "from the browser's Network tab and paste it as a Custom Stream URL "
+                "in the Yume extension popup."
+            )
+        return (
+            "Access denied (403). The site is blocking yt-dlp. "
+            "For YouTube: try switching to cookie auth in yume_config.json. "
+            "For other sites: use the Custom Stream URL option in the extension — "
+            "open DevTools > Network > filter 'm3u8' or 'mp4' > copy the URL. "
+            "Also try: pip install -U yt-dlp"
+        )
+    if "video unavailable" in lower or "private video" in lower:
         return "This video is unavailable or private."
-    if 'age' in lower and 'restricted' in lower:
-        return ("Age-restricted video. "
-                "Fix: Set youtube_auth_method to 'cookies' with a logged-in browser.")
-    if 'geo' in lower and 'block' in lower:
+    if "age" in lower and "restricted" in lower:
+        return "Age-restricted video. Fix: Set youtube_auth_method to 'cookies' with a logged-in browser."
+    if "geo" in lower and "block" in lower:
         return "This video is not available in your region."
 
     # Network / connectivity
-    if 'unable to download' in lower and ('webpage' in lower or 'player' in lower):
-        return ("Cannot reach YouTube. Check your internet connection, "
-                "or YouTube may be temporarily down.")
-    if 'timed out' in lower or 'timeout' in lower:
+    if "unable to download" in lower and ("webpage" in lower or "player" in lower):
+        return "Cannot reach YouTube. Check your internet connection, or YouTube may be temporarily down."
+    if "timed out" in lower or "timeout" in lower:
         return "Download timed out — the video may be too long or the connection too slow."
 
     # yt-dlp itself
-    if 'no such file' in lower and 'yt-dlp' in lower:
+    if "no such file" in lower and "yt-dlp" in lower:
         return "yt-dlp is not installed. Run the Yume setup wizard to install it."
-    if 'no video formats' in lower or 'requested format' in lower:
-        return ("No compatible audio format found. Try updating yt-dlp: "
-                "pip install -U yt-dlp")
+    if "no video formats" in lower or "requested format" in lower:
+        return "No compatible audio format found. Try updating yt-dlp: pip install -U yt-dlp"
 
     # Deno-specific
-    if 'deno' in lower and ('not found' in lower or 'no such file' in lower):
-        return ("Deno is not installed (needed for YouTube auth). "
-                "Fix: Switch youtube_auth_method to 'cookies' in yume_config.json, "
-                "or install Deno: https://deno.land/#installation")
+    if "deno" in lower and ("not found" in lower or "no such file" in lower):
+        return (
+            "Deno is not installed (needed for YouTube auth). "
+            "Fix: Switch youtube_auth_method to 'cookies' in yume_config.json, "
+            "or install Deno: https://deno.land/#installation"
+        )
 
     return raw_error
 
@@ -682,27 +728,23 @@ def _download_full_audio(url):
         if youtube_auth_method == "deno":
             # Try 1: bgutil PO token (no extra args — plugin handles everything)
             strategies.append(("deno+default", []))
-            strategies.append(("deno+tv,web", [
-                "--extractor-args", "youtube:player_client=tv,web"
-            ]))
+            strategies.append(("deno+tv,web", ["--extractor-args", "youtube:player_client=tv,web"]))
             # Try 2: cookies fallback (always available as backup)
             if cookie_args:
                 strategies.append(("cookies-fallback", [*cookie_args]))
-                strategies.append(("cookies+tv,web", [
-                    "--extractor-args", "youtube:player_client=tv,web", *cookie_args
-                ]))
+                strategies.append(
+                    ("cookies+tv,web", ["--extractor-args", "youtube:player_client=tv,web", *cookie_args])
+                )
             # Try 3: no auth (last resort, works for public non-restricted videos)
             strategies.append(("no-auth", []))
         else:
             # Pure cookies mode
             if cookie_args:
                 strategies.append(("cookies+default", [*cookie_args]))
-                strategies.append(("cookies+tv,web", [
-                    "--extractor-args", "youtube:player_client=tv,web", *cookie_args
-                ]))
-                strategies.append(("cookies+mweb", [
-                    "--extractor-args", "youtube:player_client=mweb", *cookie_args
-                ]))
+                strategies.append(
+                    ("cookies+tv,web", ["--extractor-args", "youtube:player_client=tv,web", *cookie_args])
+                )
+                strategies.append(("cookies+mweb", ["--extractor-args", "youtube:player_client=mweb", *cookie_args]))
             # Always include no-auth as last resort (public videos work without cookies)
             strategies.append(("no-auth", []))
     else:
@@ -718,38 +760,51 @@ def _download_full_audio(url):
                     [
                         *_ytdlp_cmd(),
                         *fmt_args,
-                        "-x", "--audio-format", "wav",
-                        "--postprocessor-args", "ffmpeg:-ar 16000 -ac 1",
-                        "--no-playlist", "--no-cache-dir",
+                        "-x",
+                        "--audio-format",
+                        "wav",
+                        "--postprocessor-args",
+                        "ffmpeg:-ar 16000 -ac 1",
+                        "--no-playlist",
+                        "--no-cache-dir",
                         "--no-exec",
                         *extra_args,
-                        "-o", output_template,
-                        "--", url
+                        "-o",
+                        output_template,
+                        "--",
+                        url,
                     ],
-                    capture_output=True, text=True, timeout=300
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
                 )
 
                 if result.returncode == 0 and os.path.exists(output_path):
                     print(f"[Yume] yt-dlp ({tag}) succeeded!")
                     return output_path, None
 
-                stderr_lower = (result.stderr or '').lower()
+                stderr_lower = (result.stderr or "").lower()
 
                 # If format error, skip to nofmt pass of same auth strategy
-                if 'requested format' in stderr_lower and fmt_pass == "bestaudio":
+                if "requested format" in stderr_lower and fmt_pass == "bestaudio":
                     continue
 
                 # Extract error for reporting
-                error_lines = [ln.strip() for ln in (result.stderr or '').split('\n')
-                               if ln.strip() and 'ERROR' in ln.upper()]
+                error_lines = [
+                    ln.strip() for ln in (result.stderr or "").split("\n") if ln.strip() and "ERROR" in ln.upper()
+                ]
                 raw_err = error_lines[-1][:300] if error_lines else f"exit code {result.returncode}"
                 last_error = _friendlify_ytdlp_error(raw_err)
                 print(f"[Yume] yt-dlp ({tag}) failed: {last_error[:150]}")
 
                 # If auth error, skip to next strategy (try cookies fallback)
-                if ('drm' in stderr_lower or 'sign in' in stderr_lower
-                        or 'forbidden' in stderr_lower or 'invalid token' in stderr_lower
-                        or 'bot' in stderr_lower):
+                if (
+                    "drm" in stderr_lower
+                    or "sign in" in stderr_lower
+                    or "forbidden" in stderr_lower
+                    or "invalid token" in stderr_lower
+                    or "bot" in stderr_lower
+                ):
                     break  # skip nofmt pass, move to next auth strategy
 
             except subprocess.TimeoutExpired:
@@ -767,14 +822,24 @@ def _download_full_audio(url):
                 ffmpeg_output = os.path.join(tmp_dir, "full_audio_stream.wav")
                 result = subprocess.run(
                     [
-                        "ffmpeg", "-y",
-                        "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
-                        "-i", stream_url,
-                        "-vn", "-ar", "16000", "-ac", "1",
-                        "-f", "wav",
-                        ffmpeg_output
+                        "ffmpeg",
+                        "-y",
+                        "-protocol_whitelist",
+                        "file,http,https,tcp,tls,crypto",
+                        "-i",
+                        stream_url,
+                        "-vn",
+                        "-ar",
+                        "16000",
+                        "-ac",
+                        "1",
+                        "-f",
+                        "wav",
+                        ffmpeg_output,
                     ],
-                    capture_output=True, text=True, timeout=300
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
                 )
                 if result.returncode == 0 and os.path.exists(ffmpeg_output) and os.path.getsize(ffmpeg_output) > 10000:
                     print("[Yume] yt-dlp get-url + ffmpeg succeeded!")
@@ -787,29 +852,39 @@ def _download_full_audio(url):
             print(f"[Yume] Strategy 2 error: {e}")
 
     # ---- Strategy 3: ffmpeg direct (for m3u8 / direct media URLs only) ----
-    if url.endswith('.m3u8') or '.m3u8' in url or not _is_youtube_url(url):
+    if url.endswith(".m3u8") or ".m3u8" in url or not _is_youtube_url(url):
         try:
             print("[Yume] Trying ffmpeg direct on URL...")
             ffmpeg_output = os.path.join(tmp_dir, "full_audio_ffmpeg.wav")
             result = subprocess.run(
                 [
-                    "ffmpeg", "-y",
-                    "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
-                    "-i", url,
-                    "-vn", "-ar", "16000", "-ac", "1",
-                    "-f", "wav",
-                    ffmpeg_output
+                    "ffmpeg",
+                    "-y",
+                    "-protocol_whitelist",
+                    "file,http,https,tcp,tls,crypto",
+                    "-i",
+                    url,
+                    "-vn",
+                    "-ar",
+                    "16000",
+                    "-ac",
+                    "1",
+                    "-f",
+                    "wav",
+                    ffmpeg_output,
                 ],
-                capture_output=True, text=True, timeout=300
+                capture_output=True,
+                text=True,
+                timeout=300,
             )
 
             if result.returncode == 0 and os.path.exists(ffmpeg_output) and os.path.getsize(ffmpeg_output) > 10000:
                 print("[Yume] ffmpeg direct succeeded")
                 return ffmpeg_output, None
 
-            stderr = (result.stderr or '').strip()
+            stderr = (result.stderr or "").strip()
             if stderr:
-                ffmpeg_err = stderr.split('\n')[-1][:200]
+                ffmpeg_err = stderr.split("\n")[-1][:200]
                 print(f"[Yume] ffmpeg also failed: {ffmpeg_err}")
 
         except subprocess.TimeoutExpired:
@@ -830,12 +905,18 @@ def _get_audio_duration(audio_path):
     try:
         result = subprocess.run(
             [
-                "ffprobe", "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1",
-                audio_path
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                audio_path,
             ],
-            capture_output=True, text=True, timeout=10
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         return float(result.stdout.strip())
     except Exception:
@@ -846,17 +927,18 @@ def _get_audio_duration(audio_path):
 # PREPARE DIRECT - Download from a direct stream URL (m3u8, mp4, etc.)
 # ============================================================================
 
-@app.route('/prepare_direct', methods=['POST', 'OPTIONS'])
+
+@app.route("/prepare_direct", methods=["POST", "OPTIONS"])
 def prepare_direct():
     """Download audio from a direct stream URL (m3u8, mp4, etc).
     For when yt-dlp can't extract from the page URL."""
-    if request.method == 'OPTIONS':
-        return '', 204
+    if request.method == "OPTIONS":
+        return "", 204
 
     try:
         data = request.get_json()
-        stream_url = data.get('stream_url')
-        video_id = data.get('video_id', 'direct-' + str(int(time.time())))
+        stream_url = data.get("stream_url")
+        video_id = data.get("video_id", "direct-" + str(int(time.time())))
 
         if not stream_url:
             return jsonify({"error": "Missing stream_url"}), 400
@@ -869,8 +951,8 @@ def prepare_direct():
         # Check cache
         with cache_lock:
             cached = full_audio_cache.get(video_id)
-            if cached and time.time() - cached['timestamp'] < FULL_AUDIO_TTL and os.path.exists(cached['path']):
-                return jsonify({"status": "ready", "duration": cached['duration'], "cached": True})
+            if cached and time.time() - cached["timestamp"] < FULL_AUDIO_TTL and os.path.exists(cached["path"]):
+                return jsonify({"status": "ready", "duration": cached["duration"], "cached": True})
 
             # Clean up expired entry if it exists
             if cached:
@@ -885,13 +967,24 @@ def prepare_direct():
         # Try ffmpeg first (best for m3u8 and direct media URLs)
         result = subprocess.run(
             [
-                "ffmpeg", "-y",
-                "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
-                "-i", stream_url,
-                "-vn", "-ar", "16000", "-ac", "1",
-                "-f", "wav", output_path
+                "ffmpeg",
+                "-y",
+                "-protocol_whitelist",
+                "file,http,https,tcp,tls,crypto",
+                "-i",
+                stream_url,
+                "-vn",
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-f",
+                "wav",
+                output_path,
             ],
-            capture_output=True, text=True, timeout=600
+            capture_output=True,
+            text=True,
+            timeout=600,
         )
 
         if result.returncode != 0 or not os.path.exists(output_path) or os.path.getsize(output_path) < 10000:
@@ -899,31 +992,41 @@ def prepare_direct():
             print("[Yume] ffmpeg failed, trying yt-dlp on stream URL...")
             output_template = os.path.join(tmp_dir, "full_audio.%(ext)s")
             result = subprocess.run(
-                [*_ytdlp_cmd(), "-x", "--audio-format", "wav",
-                 "--postprocessor-args", "ffmpeg:-ar 16000 -ac 1",
-                 "--no-playlist", "--no-cache-dir", "--no-exec",
-                 "-o", output_template, "--", stream_url],
-                capture_output=True, text=True, timeout=300
+                [
+                    *_ytdlp_cmd(),
+                    "-x",
+                    "--audio-format",
+                    "wav",
+                    "--postprocessor-args",
+                    "ffmpeg:-ar 16000 -ac 1",
+                    "--no-playlist",
+                    "--no-cache-dir",
+                    "--no-exec",
+                    "-o",
+                    output_template,
+                    "--",
+                    stream_url,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=300,
             )
             if result.returncode != 0 or not os.path.exists(output_path):
-                stderr = (result.stderr or '')[-300:]
+                stderr = (result.stderr or "")[-300:]
                 return jsonify({"error": f"Direct download failed: {stderr[:200]}"}), 500
 
         duration = _get_audio_duration(output_path)
         size_kb = os.path.getsize(output_path) / 1024
 
         with cache_lock:
-            full_audio_cache[video_id] = {
-                "path": output_path,
-                "duration": duration,
-                "timestamp": time.time()
-            }
+            full_audio_cache[video_id] = {"path": output_path, "duration": duration, "timestamp": time.time()}
 
         print(f"[Yume] Direct audio ready: {duration:.1f}s, {size_kb:.0f}KB")
         return jsonify({"status": "ready", "duration": duration, "cached": False})
 
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
@@ -934,21 +1037,30 @@ def _slice_audio(full_audio_path, start_time, duration):
         print(f"[Yume] Slice failed: source file missing ({full_audio_path})")
         return None
 
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
     tmp.close()
 
     try:
         result = subprocess.run(
             [
-                "ffmpeg", "-y",
-                "-ss", str(start_time),
-                "-i", full_audio_path,
-                "-t", str(duration),
-                "-ar", "16000", "-ac", "1",
-                "-f", "wav",
-                tmp.name
+                "ffmpeg",
+                "-y",
+                "-ss",
+                str(start_time),
+                "-i",
+                full_audio_path,
+                "-t",
+                str(duration),
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-f",
+                "wav",
+                tmp.name,
             ],
-            capture_output=True, timeout=10
+            capture_output=True,
+            timeout=10,
         )
 
         if result.returncode == 0 and os.path.exists(tmp.name) and os.path.getsize(tmp.name) > 1000:
@@ -971,28 +1083,29 @@ def _slice_audio(full_audio_path, start_time, duration):
 # URL-BASED PRE-FETCH TRANSCRIPTION
 # ============================================================================
 
-@app.route('/transcribe_url', methods=['POST', 'OPTIONS'])
+
+@app.route("/transcribe_url", methods=["POST", "OPTIONS"])
 def transcribe_url():
-    if request.method == 'OPTIONS':
-        return '', 204
+    if request.method == "OPTIONS":
+        return "", 204
 
     try:
         data = request.get_json()
-        if not data or 'url' not in data:
+        if not data or "url" not in data:
             return jsonify({"error": "Missing 'url' field"}), 400
 
-        url = data['url']
-        video_id = data.get('video_id', 'unknown')
+        url = data["url"]
+        video_id = data.get("video_id", "unknown")
 
         # SECURITY: Validate URL
         valid, err = _validate_url(url)
         if not valid:
             return jsonify({"error": f"Invalid URL: {err}"}), 400
 
-        chunk_index = int(data.get('chunk_index', 0))
-        chunk_duration = int(data.get('chunk_duration', 30))  # Whisper window
-        step_size = int(data.get('step_size', 25))            # Advance per chunk
-        language = data.get('language') or None  # None = Whisper auto-detect
+        chunk_index = int(data.get("chunk_index", 0))
+        chunk_duration = int(data.get("chunk_duration", 30))  # Whisper window
+        step_size = int(data.get("step_size", 25))  # Advance per chunk
+        language = data.get("language") or None  # None = Whisper auto-detect
 
         # Cache key
         cache_key = f"{video_id}:{step_size}:{chunk_index}"
@@ -1003,7 +1116,9 @@ def transcribe_url():
                 # Don't serve cached empty results — Whisper may have been wrong
                 # (e.g., music intro confused VAD, or audio download was bad)
                 if len(cached_result.get("segments", [])) > 0:
-                    print(f"[Yume] Cache hit for chunk {chunk_index} of {video_id} ({len(cached_result['segments'])} segments)")
+                    print(
+                        f"[Yume] Cache hit for chunk {chunk_index} of {video_id} ({len(cached_result['segments'])} segments)"
+                    )
                     cached_result["cached"] = True
                     with stats_lock:
                         server_stats["cache_hits"] += 1
@@ -1022,7 +1137,9 @@ def transcribe_url():
         owned_start = whisper_start
         owned_end = whisper_start + step_size
 
-        print(f"[Yume] Chunk {chunk_index}: whisper [{whisper_start}s-{whisper_start + whisper_duration}s], owns [{owned_start}s-{owned_end}s]")
+        print(
+            f"[Yume] Chunk {chunk_index}: whisper [{whisper_start}s-{whisper_start + whisper_duration}s], owns [{owned_start}s-{owned_end}s]"
+        )
 
         with stats_lock:
             server_stats["cache_misses"] += 1
@@ -1031,7 +1148,7 @@ def transcribe_url():
         audio_path = None
         with cache_lock:
             prepared = full_audio_cache.get(video_id)
-            prepared_path = prepared['path'] if prepared and os.path.exists(prepared['path']) else None
+            prepared_path = prepared["path"] if prepared and os.path.exists(prepared["path"]) else None
         if prepared_path:
             audio_path = _slice_audio(prepared_path, whisper_start, whisper_duration)
 
@@ -1049,7 +1166,7 @@ def transcribe_url():
                 os.unlink(audio_path)
                 # Also remove the parent temp dir (created by _download_audio_segment)
                 parent = os.path.dirname(audio_path)
-                if parent and os.path.isdir(parent) and os.path.basename(parent).startswith(('yume_', 'tmp')):
+                if parent and os.path.isdir(parent) and os.path.basename(parent).startswith(("yume_", "tmp")):
                     shutil.rmtree(parent, ignore_errors=True)
             except Exception:
                 pass
@@ -1071,16 +1188,19 @@ def transcribe_url():
         if len(trimmed) > 0:
             with prefetch_lock:
                 if len(subtitle_cache) >= SUBTITLE_CACHE_MAX:
-                    keys_to_remove = list(subtitle_cache.keys())[:len(subtitle_cache) - SUBTITLE_CACHE_MAX + 1]
+                    keys_to_remove = list(subtitle_cache.keys())[: len(subtitle_cache) - SUBTITLE_CACHE_MAX + 1]
                     for k in keys_to_remove:
                         del subtitle_cache[k]
                 subtitle_cache[cache_key] = result
 
-        print(f"[Yume] Chunk {chunk_index} done: {len(trimmed)} segments (from {raw_count} raw, {'cached' if len(trimmed) > 0 else 'not cached — empty'})")
+        print(
+            f"[Yume] Chunk {chunk_index} done: {len(trimmed)} segments (from {raw_count} raw, {'cached' if len(trimmed) > 0 else 'not cached — empty'})"
+        )
         return jsonify(result)
 
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
@@ -1089,26 +1209,27 @@ def transcribe_url():
 # RAW AUDIO TRANSCRIPTION (fallback)
 # ============================================================================
 
-@app.route('/transcribe', methods=['POST', 'OPTIONS'])
+
+@app.route("/transcribe", methods=["POST", "OPTIONS"])
 def transcribe():
-    if request.method == 'OPTIONS':
-        return '', 204
+    if request.method == "OPTIONS":
+        return "", 204
 
     try:
         data = request.get_json()
-        if not data or 'audio' not in data:
+        if not data or "audio" not in data:
             return jsonify({"error": "No audio data provided"}), 400
 
-        audio_base64 = data['audio']
-        language = data.get('language') or None  # auto-detect
-        start_offset = float(data.get('start_offset', 0))
+        audio_base64 = data["audio"]
+        language = data.get("language") or None  # auto-detect
+        start_offset = float(data.get("start_offset", 0))
 
         try:
             audio_bytes = base64.b64decode(audio_base64)
         except Exception as e:
             return jsonify({"error": f"Invalid base64: {str(e)}"}), 400
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as f:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as f:
             f.write(audio_bytes)
             temp_path = f.name
 
@@ -1124,6 +1245,7 @@ def transcribe():
 
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
@@ -1132,7 +1254,8 @@ def transcribe():
 # CACHE MANAGEMENT
 # ============================================================================
 
-@app.route('/cache/clear', methods=['POST'])
+
+@app.route("/cache/clear", methods=["POST"])
 def clear_cache():
     with prefetch_lock:
         count = len(subtitle_cache)
@@ -1146,7 +1269,8 @@ def clear_cache():
         full_audio_cache.clear()
     return jsonify({"cleared": count, "audio_cleared": audio_count})
 
-@app.route('/cache/status', methods=['GET'])
+
+@app.route("/cache/status", methods=["GET"])
 def cache_status():
     with prefetch_lock:
         keys = list(subtitle_cache.keys())
@@ -1156,6 +1280,7 @@ def cache_status():
 # ============================================================================
 # AUDIO DOWNLOAD (supports ALL yt-dlp sites, not just YouTube)
 # ============================================================================
+
 
 def _build_auth_args(url):
     """Build yt-dlp auth arguments for non-download calls (get-url, prepare).
@@ -1239,15 +1364,16 @@ def _get_stream_url(url):
     for fmt_args in format_attempts:
         try:
             result = subprocess.run(
-                [*_ytdlp_cmd(), "--get-url", *fmt_args, "--no-playlist", "--no-exec",
-                 *auth_args, "--", url],
-                capture_output=True, text=True, timeout=30
+                [*_ytdlp_cmd(), "--get-url", *fmt_args, "--no-playlist", "--no-exec", *auth_args, "--", url],
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
         except subprocess.TimeoutExpired:
             print("[Yume] yt-dlp get-url timed out (30s)")
             return None
         if result.returncode == 0 and result.stdout.strip().startswith("http"):
-            stream_url = result.stdout.strip().split('\n')[0]
+            stream_url = result.stdout.strip().split("\n")[0]
             print("[Yume] Stream URL obtained and cached")
             # Evict oldest if cache full
             with cache_lock:
@@ -1256,9 +1382,9 @@ def _get_stream_url(url):
                     stream_url_cache.pop(oldest_key, None)
                 stream_url_cache[url] = {"stream_url": stream_url, "timestamp": time.time()}
             return stream_url
-        last_stderr = (result.stderr or '')
+        last_stderr = result.stderr or ""
         stderr_lower = last_stderr.lower()
-        if 'requested format' in stderr_lower:
+        if "requested format" in stderr_lower:
             continue  # try next format
         break  # non-format error, stop trying
 
@@ -1295,17 +1421,25 @@ def _download_audio_segment(url, start_time, duration):
         ffmpeg_result = subprocess.run(
             [
                 "ffmpeg",
-                "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
-                "-ss", str(start_time),
-                "-i", stream_url,
-                "-t", str(duration),
-                "-ar", "16000",
-                "-ac", "1",
-                "-f", "wav",
+                "-protocol_whitelist",
+                "file,http,https,tcp,tls,crypto",
+                "-ss",
+                str(start_time),
+                "-i",
+                stream_url,
+                "-t",
+                str(duration),
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-f",
+                "wav",
                 "-y",
-                output_path
+                output_path,
             ],
-            capture_output=True, timeout=60
+            capture_output=True,
+            timeout=60,
         )
 
         if ffmpeg_result.returncode == 0 and os.path.exists(output_path):
@@ -1346,16 +1480,24 @@ def _download_audio_segment_fallback(url, start_time, duration, output_path):
         result = subprocess.run(
             [
                 *_ytdlp_cmd(),
-                "--download-sections", f"*{start_time}-{start_time + duration}",
+                "--download-sections",
+                f"*{start_time}-{start_time + duration}",
                 "--force-keyframes-at-cuts",
-                "-x", "--audio-format", "wav",
-                "--postprocessor-args", "ffmpeg:-ar 16000 -ac 1",
-                "--no-playlist", "--no-exec",
+                "-x",
+                "--audio-format",
+                "wav",
+                "--postprocessor-args",
+                "ffmpeg:-ar 16000 -ac 1",
+                "--no-playlist",
+                "--no-exec",
                 *auth_args,
-                "-o", tmp_template,
-                "--", url
+                "-o",
+                tmp_template,
+                "--",
+                url,
             ],
-            capture_output=True, timeout=90
+            capture_output=True,
+            timeout=90,
         )
 
         if result.returncode == 0 and os.path.exists(output_path):
@@ -1379,10 +1521,11 @@ def _download_audio_segment_fallback(url, start_time, duration, output_path):
 # ============================================================================
 
 # Lazy-loaded romanizers (only import when first needed)
-_kakasi = None       # pykakasi.kakasi instance or None
+_kakasi = None  # pykakasi.kakasi instance or None
 _kakasi_checked = False  # Whether we've attempted to load pykakasi
 _kakasi_lock = threading.Lock()
 _pinyin_available = False
+
 
 def _get_kakasi():
     """Lazy-load pykakasi (Japanese kanji→romaji converter). Thread-safe."""
@@ -1392,6 +1535,7 @@ def _get_kakasi():
             _kakasi_checked = True
             try:
                 import pykakasi
+
                 print(f"[Yume] pykakasi found at {pykakasi.__file__}")
                 _kakasi = pykakasi.kakasi()
                 print("[Yume] pykakasi loaded — deterministic Japanese romanization enabled")
@@ -1414,9 +1558,9 @@ def _romanize_japanese(text):
         result = kakasi.convert(text)
         parts = []
         for item in result:
-            r = item.get('hepburn', '') or item.get('passport', '') or item.get('orig', '')
+            r = item.get("hepburn", "") or item.get("passport", "") or item.get("orig", "")
             parts.append(r)
-        return ' '.join(parts).strip()
+        return " ".join(parts).strip()
     except Exception as e:
         print(f"[Yume] pykakasi error: {e}")
         return None
@@ -1426,8 +1570,9 @@ def _romanize_chinese(text):
     """Convert Chinese text to pinyin using pypinyin. ~1ms."""
     try:
         from pypinyin import pinyin, Style
+
         result = pinyin(text, style=Style.TONE)
-        return ' '.join(p[0] for p in result).strip()
+        return " ".join(p[0] for p in result).strip()
     except ImportError:
         return None
     except Exception:
@@ -1438,6 +1583,7 @@ def _romanize_korean(text):
     """Convert Korean text to Revised Romanization using `romanization` (MIT). ~1ms."""
     try:
         from romanization import romanize as kr_romanize
+
         return kr_romanize(text)
     except ImportError:
         return None
@@ -1446,26 +1592,26 @@ def _romanize_korean(text):
         return None
 
 
-@app.route('/romanize', methods=['POST', 'OPTIONS'])
+@app.route("/romanize", methods=["POST", "OPTIONS"])
 def romanize():
     """Deterministic romanization for ja/zh/ko. Returns in <5ms vs 1-10s for LLM.
     Falls back to {supported: false} if library not available."""
-    if request.method == 'OPTIONS':
-        return '', 204
+    if request.method == "OPTIONS":
+        return "", 204
 
     data = request.get_json() or {}
-    text = data.get('text', '').strip()
-    lang = data.get('language') or None  # auto-detect
+    text = data.get("text", "").strip()
+    lang = data.get("language") or None  # auto-detect
 
     if not text:
         return jsonify({"romanization": "", "method": "empty"})
 
     result = None
-    if lang == 'ja':
+    if lang == "ja":
         result = _romanize_japanese(text)
-    elif lang == 'zh':
+    elif lang == "zh":
         result = _romanize_chinese(text)
-    elif lang == 'ko':
+    elif lang == "ko":
         result = _romanize_korean(text)
 
     if result is not None:
@@ -1474,29 +1620,29 @@ def romanize():
         return jsonify({"supported": False, "language": lang}), 501
 
 
-@app.route('/romanize_batch', methods=['POST', 'OPTIONS'])
+@app.route("/romanize_batch", methods=["POST", "OPTIONS"])
 def romanize_batch():
     """Batch deterministic romanization — single round trip for N texts.
     Accepts: {"texts": ["text1", "text2", ...], "language": "ja"}
     Returns: {"romanizations": ["roma1", "roma2", ...], "method": "deterministic"}
     Falls back to empty strings for unsupported languages."""
-    if request.method == 'OPTIONS':
-        return '', 204
+    if request.method == "OPTIONS":
+        return "", 204
 
     data = request.get_json() or {}
-    texts = data.get('texts', [])
-    lang = data.get('language') or None
+    texts = data.get("texts", [])
+    lang = data.get("language") or None
 
     if not texts or not isinstance(texts, list):
         return jsonify({"romanizations": [], "method": "empty"})
 
     # Pick the right romanizer
     romanizer = None
-    if lang == 'ja':
+    if lang == "ja":
         romanizer = _romanize_japanese
-    elif lang == 'zh':
+    elif lang == "zh":
         romanizer = _romanize_chinese
-    elif lang == 'ko':
+    elif lang == "ko":
         romanizer = _romanize_korean
 
     if romanizer is None:
@@ -1505,10 +1651,10 @@ def romanize_batch():
     results = []
     for text in texts:
         try:
-            r = romanizer(text.strip()) if text.strip() else ''
-            results.append(r or '')
+            r = romanizer(text.strip()) if text.strip() else ""
+            results.append(r or "")
         except Exception:
-            results.append('')
+            results.append("")
 
     return jsonify({"romanizations": results, "method": "deterministic", "language": lang})
 
@@ -1520,21 +1666,39 @@ HALLUCINATION_PATTERNS = [
     "\u304a\u75b2\u308c\u69d8",
     "\u5b57\u5e55\u306f\u81ea\u52d5\u751f\u6210",
     "\u5b57\u5e55\u5236\u4f5c",
-    "\u4f5c\u8a5e", "\u4f5c\u66f2", "\u7de8\u66f2", "\u6b4c\uff1a", "feat.",
+    "\u4f5c\u8a5e",
+    "\u4f5c\u66f2",
+    "\u7de8\u66f2",
+    "\u6b4c\uff1a",
+    "feat.",
     "\u8a5e\u66f2",
     "Sound Hodori",
     "\uc0ac\uc6b4\ub4dc \ud638\ub3cc\uc774",
     "\u30db\u30c9\u30ea",
-    "Instagram", "Twitter",
+    "Instagram",
+    "Twitter",
     "\u30c1\u30e3\u30f3\u30cd\u30eb\u767b\u9332",
     "\u9ad8\u8a55\u4fa1",
     "\u30b5\u30d6\u30b9\u30af\u30e9\u30a4\u30d6",
-    "Subscribe", "Like and subscribe",
-    "Thank you for watching", "Thanks for watching", "Please subscribe",
-    "[Music]", "[Applause]", "[Laughter]", "(Music)",
+    "Subscribe",
+    "Like and subscribe",
+    "Thank you for watching",
+    "Thanks for watching",
+    "Please subscribe",
+    "[Music]",
+    "[Applause]",
+    "[Laughter]",
+    "(Music)",
     # Chinese common hallucinations
-    "请订阅", "感谢观看", "感谢收看", "字幕制作", "字幕组",
-    "谢谢大家的支持", "记得点赞", "关注我", "一键三连",
+    "请订阅",
+    "感谢观看",
+    "感谢收看",
+    "字幕制作",
+    "字幕组",
+    "谢谢大家的支持",
+    "记得点赞",
+    "关注我",
+    "一键三连",
     # Russian common hallucinations
     "Подписывайтесь на канал",
     "Спасибо за просмотр",
@@ -1546,17 +1710,21 @@ HALLUCINATION_PATTERNS = [
     "لا تنسى الاعجاب",  # bare alef form
     "لا تنسى الإعجاب",  # hamza-below form (Whisper standard)
     # Universal social media
-    "Like", "Share", "Comment", "Follow",
+    "Like",
+    "Share",
+    "Comment",
+    "Follow",
 ]
 
 # User-reported hallucinations (populated via /blacklist/update from extension popup)
 user_blacklist = []
 
-@app.route('/blacklist/update', methods=['POST'])
+
+@app.route("/blacklist/update", methods=["POST"])
 def update_blacklist():
     global user_blacklist
     data = request.get_json() or {}
-    incoming = data.get('blacklist', [])
+    incoming = data.get("blacklist", [])
     if not isinstance(incoming, list):
         return jsonify({"error": "blacklist must be a list"}), 400
     user_blacklist = [str(item).strip() for item in incoming if str(item).strip()]
@@ -1568,41 +1736,58 @@ def update_blacklist():
         print(f"[Yume]   ... and {count - 10} more")
     return jsonify({"success": True, "count": count})
 
-@app.route('/blacklist', methods=['GET'])
+
+@app.route("/blacklist", methods=["GET"])
 def get_blacklist():
     return jsonify({"blacklist": user_blacklist, "count": len(user_blacklist)})
 
 
 CREDITS_PATTERNS = [
-    "\u4f5c\u8a5e\u30fb\u4f5c\u66f2", "\u4f5c\u66f2\u30fb\u7de8\u66f2",
-    "\u4f5c\u8a5e", "\u4f5c\u66f2", "\u7de8\u66f2",
-    "vocals", "vocal", "guitar", "bass", "drums", "piano",
-    "illustration", "illust", "animation", "video",
-    "mix", "mastering",
+    "\u4f5c\u8a5e\u30fb\u4f5c\u66f2",
+    "\u4f5c\u66f2\u30fb\u7de8\u66f2",
+    "\u4f5c\u8a5e",
+    "\u4f5c\u66f2",
+    "\u7de8\u66f2",
+    "vocals",
+    "vocal",
+    "guitar",
+    "bass",
+    "drums",
+    "piano",
+    "illustration",
+    "illust",
+    "animation",
+    "video",
+    "mix",
+    "mastering",
 ]
 
-SINGLE_WORD_BLOCKLIST = ['music', 'mm', 'hmm']  # No vocal sounds (la/na/da/oh/ah are real lyrics)
+SINGLE_WORD_BLOCKLIST = ["music", "mm", "hmm"]  # No vocal sounds (la/na/da/oh/ah are real lyrics)
 
-@app.route('/hallucination_patterns', methods=['GET'])
+
+@app.route("/hallucination_patterns", methods=["GET"])
 def get_hallucination_patterns():
     """Server-authoritative hallucination patterns. Client fetches at startup
     instead of maintaining a duplicate list. Eliminates drift bugs."""
-    return jsonify({
-        "builtin": HALLUCINATION_PATTERNS,
-        "credits": CREDITS_PATTERNS,
-        "user_blacklist": user_blacklist,
-        "single_word_blocklist": SINGLE_WORD_BLOCKLIST,
-        "repeat_threshold": 6,     # words >= this with <=2 unique = spam
-        "concat_min_len": 4,       # min clean length for concatenated repetition check
-        "concat_coverage": 0.95,   # coverage threshold for concat repetition (high to avoid dropping real choruses)
-    })
+    return jsonify(
+        {
+            "builtin": HALLUCINATION_PATTERNS,
+            "credits": CREDITS_PATTERNS,
+            "user_blacklist": user_blacklist,
+            "single_word_blocklist": SINGLE_WORD_BLOCKLIST,
+            "repeat_threshold": 6,  # words >= this with <=2 unique = spam
+            "concat_min_len": 4,  # min clean length for concatenated repetition check
+            "concat_coverage": 0.95,  # coverage threshold for concat repetition (high to avoid dropping real choruses)
+        }
+    )
+
 
 def _is_hallucination(text):
     t = text.strip()
     if not t:
         return True
     # Normalize Unicode (NFC) to catch alternate representations of JA/ZH/AR text
-    t = unicodedata.normalize('NFC', t)
+    t = unicodedata.normalize("NFC", t)
     t_lower = t.lower()
     for pat in HALLUCINATION_PATTERNS:
         if pat.lower() in t_lower:
@@ -1627,7 +1812,7 @@ def _is_hallucination(text):
     if len(clean) >= 4:
         for sub_len in range(2, min(9, len(clean) // 2 + 1)):
             sub = clean[:sub_len]
-            if sub * (len(clean) // len(sub)) == clean[:len(sub) * (len(clean) // len(sub))]:
+            if sub * (len(clean) // len(sub)) == clean[: len(sub) * (len(clean) // len(sub))]:
                 repeats = len(clean) // len(sub)
                 if repeats >= 2 and len(sub) * repeats >= len(clean) * 0.95:
                     print(f"[Yume] Hallucination: repeated '{sub}' x{repeats} in '{t}'")
@@ -1638,6 +1823,7 @@ def _is_hallucination(text):
         return True
 
     return False
+
 
 def _is_credits_line(text):
     t = text.strip()
@@ -1673,13 +1859,13 @@ def _transcribe_file(audio_path, language, start_offset=0.0):
     params = dict(
         language=language,
         beam_size=5,
-        vad_filter=False,              # MUST be False - Silero VAD drops singing
-        word_timestamps=False,         # v2.0.7: False (different decode path when True)
+        vad_filter=False,  # MUST be False - Silero VAD drops singing
+        word_timestamps=False,  # v2.0.7: False (different decode path when True)
         condition_on_previous_text=False,
         temperature=0.0,
         compression_ratio_threshold=2.4,  # v2.0.7 value
-        log_prob_threshold=-2.0,          # widened from -1.5: catch more speech at low confidence
-        no_speech_threshold=0.3,          # lowered from 0.45: catch speech after silence/intros
+        log_prob_threshold=-2.0,  # widened from -1.5: catch more speech at low confidence
+        no_speech_threshold=0.3,  # lowered from 0.45: catch speech after silence/intros
     )
 
     # CRITICAL: Serialize model access. CTranslate2 is NOT thread-safe.
@@ -1710,12 +1896,14 @@ def _transcribe_file(audio_path, language, start_offset=0.0):
         # valid vocals mixed with background music (the primary use case for Yume).
         # Hallucination patterns + user blacklist are the correct quality filter.
 
-        segments.append({
-            "start": round(seg.start + start_offset, 2),
-            "end":   round(seg.end   + start_offset, 2),
-            "text":  text,
-            "confidence": round(seg.avg_logprob, 2) if hasattr(seg, "avg_logprob") else 0
-        })
+        segments.append(
+            {
+                "start": round(seg.start + start_offset, 2),
+                "end": round(seg.end + start_offset, 2),
+                "text": text,
+                "confidence": round(seg.avg_logprob, 2) if hasattr(seg, "avg_logprob") else 0,
+            }
+        )
         full_text_parts.append(text)
 
     print(f"[Yume] Transcription done: {len(segments)} segments ({dropped} dropped)")
@@ -1735,7 +1923,7 @@ def _transcribe_file(audio_path, language, start_offset=0.0):
         "segments": segments,
         "language": info.language,
         "duration": info.duration,
-        "start_offset": start_offset
+        "start_offset": start_offset,
     }
 
 
@@ -1758,18 +1946,22 @@ def _transcribe_file(audio_path, language, start_offset=0.0):
 BGUTIL_PORT = 4416
 _bgutil_proc = None  # Managed subprocess
 
+
 def _bgutil_server_dir():
     """Where the bgutil server files live."""
     return Path(__file__).parent.parent / "tools" / "bgutil-ytdlp-pot-provider" / "server"
+
 
 def _is_bgutil_server_ready():
     """Check if bgutil HTTP server is responding."""
     try:
         import urllib.request
+
         resp = urllib.request.urlopen(f"http://127.0.0.1:{BGUTIL_PORT}/ping", timeout=3)
         return resp.status == 200
     except Exception:
         return False
+
 
 def _setup_bgutil_server():
     """Download and set up the bgutil server if not already present.
@@ -1791,6 +1983,7 @@ def _setup_bgutil_server():
     zip_path = repo_parent / "bgutil-ytdlp-pot-provider.zip"
     try:
         import urllib.request
+
         url = "https://github.com/Brainicism/bgutil-ytdlp-pot-provider/archive/refs/tags/1.3.1.zip"
         print("  bgutil server:    downloading from GitHub...")
         urllib.request.urlretrieve(url, str(zip_path))
@@ -1801,7 +1994,8 @@ def _setup_bgutil_server():
     # Extract
     try:
         import zipfile
-        with zipfile.ZipFile(str(zip_path), 'r') as zf:
+
+        with zipfile.ZipFile(str(zip_path), "r") as zf:
             zf.extractall(str(repo_parent))
         zip_path.unlink(missing_ok=True)
 
@@ -1828,7 +2022,9 @@ def _setup_bgutil_server():
         r = subprocess.run(
             ["deno", "install", "--allow-scripts=npm:canvas", "--frozen"],
             cwd=str(server_dir),
-            capture_output=True, text=True, timeout=180
+            capture_output=True,
+            text=True,
+            timeout=180,
         )
         if r.returncode == 0:
             print("  bgutil server:    dependencies installed")
@@ -1837,7 +2033,9 @@ def _setup_bgutil_server():
             r2 = subprocess.run(
                 ["deno", "install", "--allow-scripts=npm:canvas"],
                 cwd=str(server_dir),
-                capture_output=True, text=True, timeout=180
+                capture_output=True,
+                text=True,
+                timeout=180,
             )
             if r2.returncode == 0:
                 print("  bgutil server:    dependencies installed (without --frozen)")
@@ -1884,17 +2082,22 @@ def _start_bgutil_server():
     try:
         _bgutil_proc = subprocess.Popen(
             [
-                "deno", "run",
+                "deno",
+                "run",
                 "--no-prompt",
-                "--allow-env", "--allow-net", "--allow-ffi=.",
-                "--allow-read=.", "--allow-sys",
+                "--allow-env",
+                "--allow-net",
+                "--allow-ffi=.",
+                "--allow-read=.",
+                "--allow-sys",
                 main_rel,
-                "--port", str(BGUTIL_PORT),
+                "--port",
+                str(BGUTIL_PORT),
             ],
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
 
         # Wait for server to be ready (max 30s)
@@ -1907,7 +2110,11 @@ def _start_bgutil_server():
             if _bgutil_proc.poll() is not None:
                 stderr = ""
                 try:
-                    stderr = _bgutil_proc.stderr.read().decode('utf-8', errors='replace')[-300:] if _bgutil_proc.stderr else ""
+                    stderr = (
+                        _bgutil_proc.stderr.read().decode("utf-8", errors="replace")[-300:]
+                        if _bgutil_proc.stderr
+                        else ""
+                    )
                 except Exception:
                     pass
                 print(f"  bgutil server:    process exited with code {_bgutil_proc.returncode}")
@@ -1953,16 +2160,19 @@ def main():
     if sys.platform == "win32":
         try:
             import ctypes
+
             kernel32 = ctypes.windll.kernel32
             CTRL_CLOSE_EVENT = 2
             CTRL_LOGOFF_EVENT = 5
             CTRL_SHUTDOWN_EVENT = 6
+
             @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_ulong)
             def _win_console_handler(event):
                 if event in (CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT):
                     _shutdown_handler(event, None)
                     return True  # handled — don't pass to MKL
                 return False
+
             kernel32.SetConsoleCtrlHandler(_win_console_handler, True)
             # prevent garbage collection of the callback (must survive until process exit)
             global _win_console_handler_ref
@@ -1978,16 +2188,17 @@ def main():
     global TOKEN_FILE
 
     parser = argparse.ArgumentParser(description="Yume Whisper Server")
-    parser.add_argument('--model', default='large-v3')
-    parser.add_argument('--device', default='cuda')
-    parser.add_argument('--compute-type', default='float16')
-    parser.add_argument('--port', type=int, default=5001)
-    parser.add_argument('--no-word-timestamps', action='store_true', help='Disable word-level timestamps')
-    parser.add_argument('--pause-threshold', type=float, default=0.25, help='Seconds of silence to split segments')
-    parser.add_argument('--config', type=str, default=None, help='Path to yume_config.json')
-    parser.add_argument('--prewarm', action='store_true',
-                        help='Run CUDA kernel warmup at startup (slower startup, faster first chunk)')
-    parser.add_argument('--verbose', '-v', action='store_true', help='Enable debug logging')
+    parser.add_argument("--model", default="large-v3")
+    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--compute-type", default="float16")
+    parser.add_argument("--port", type=int, default=5001)
+    parser.add_argument("--no-word-timestamps", action="store_true", help="Disable word-level timestamps")
+    parser.add_argument("--pause-threshold", type=float, default=0.25, help="Seconds of silence to split segments")
+    parser.add_argument("--config", type=str, default=None, help="Path to yume_config.json")
+    parser.add_argument(
+        "--prewarm", action="store_true", help="Run CUDA kernel warmup at startup (slower startup, faster first chunk)"
+    )
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
 
     # Configure logging level
@@ -2031,6 +2242,7 @@ def main():
     if device == "auto":
         try:
             import ctranslate2
+
             if "cuda" in ctranslate2.get_supported_compute_types("cuda"):
                 device = "cuda"
             else:
@@ -2039,6 +2251,7 @@ def main():
             # Fallback: try torch, then nvidia-smi
             try:
                 import torch
+
                 device = "cuda" if torch.cuda.is_available() else "cpu"
             except ImportError:
                 try:
@@ -2073,20 +2286,24 @@ def main():
     print(f"  Python exe:       {sys.executable}")
     try:
         import pykakasi  # noqa: F401
+
         roma_parts.append("ja(pykakasi)")
     except Exception as e:
         # Show where Python is looking for packages
         import site
-        paths = site.getsitepackages() if hasattr(site, 'getsitepackages') else ['(no site-packages)']
+
+        paths = site.getsitepackages() if hasattr(site, "getsitepackages") else ["(no site-packages)"]
         print(f"  [roma] pykakasi import failed: {type(e).__name__}: {e}")
         print(f"  [roma] site-packages: {paths[0] if paths else '?'}")
     try:
         from pypinyin import pinyin  # noqa: F401
+
         roma_parts.append("zh(pypinyin)")
     except ImportError:
         pass
     try:
         from romanization import romanize  # noqa: F401
+
         roma_parts.append("ko(romanization)")
     except ImportError:
         pass  # optional, don't spam
@@ -2107,23 +2324,33 @@ def main():
             else:
                 v = subprocess.run(
                     [*_ytdlp_cmd(), "--version"],
-                    capture_output=True, text=True, timeout=10,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
                 results.append(("yt-dlp", v.stdout.strip() or "?", None))
         except Exception as exc:
             results.append(("yt-dlp", None, [f"  WARNING: yt-dlp check failed: {exc}"]))
         try:
             if not shutil.which("ffmpeg"):
-                results.append(("ffmpeg", None, [
-                    "  WARNING: ffmpeg not found in PATH!",
-                    "  Audio slicing will fail. Run the setup wizard to install ffmpeg.",
-                ]))
+                results.append(
+                    (
+                        "ffmpeg",
+                        None,
+                        [
+                            "  WARNING: ffmpeg not found in PATH!",
+                            "  Audio slicing will fail. Run the setup wizard to install ffmpeg.",
+                        ],
+                    )
+                )
             else:
                 v = subprocess.run(
                     ["ffmpeg", "-version"],
-                    capture_output=True, text=True, timeout=10,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
-                ffver = v.stdout.split('\n')[0].split(' ')[2] if v.returncode == 0 else "?"
+                ffver = v.stdout.split("\n")[0].split(" ")[2] if v.returncode == 0 else "?"
                 results.append(("ffmpeg", ffver, None))
         except Exception as exc:
             results.append(("ffmpeg", None, [f"  WARNING: ffmpeg check failed: {exc}"]))
@@ -2133,6 +2360,7 @@ def main():
             elif warnings:
                 for line in warnings:
                     print(line)
+
     threading.Thread(target=_check_tool_versions, daemon=True).start()
 
     # Auth method viability check
@@ -2151,7 +2379,7 @@ def main():
             r = subprocess.run(["deno", "--version"], capture_output=True, text=True, timeout=5)
             deno_found = r.returncode == 0
             if deno_found:
-                deno_ver = r.stdout.split('\n')[0].strip()
+                deno_ver = r.stdout.split("\n")[0].strip()
                 print(f"  Deno:             {deno_ver}")
         except Exception:
             pass
@@ -2162,8 +2390,7 @@ def main():
             pip_ytdlp_ok = False
             try:
                 r = subprocess.run(
-                    [sys.executable, "-m", "yt_dlp", "--version"],
-                    capture_output=True, text=True, timeout=10
+                    [sys.executable, "-m", "yt_dlp", "--version"], capture_output=True, text=True, timeout=10
                 )
                 pip_ytdlp_ok = r.returncode == 0
                 if pip_ytdlp_ok:
@@ -2175,9 +2402,9 @@ def main():
                 print("  yt-dlp (pip):     not found — installing...")
                 try:
                     subprocess.run(
-                        [sys.executable, "-m", "pip", "install", "-q",
-                         "--no-warn-script-location", "yt-dlp"],
-                        capture_output=True, timeout=120
+                        [sys.executable, "-m", "pip", "install", "-q", "--no-warn-script-location", "yt-dlp"],
+                        capture_output=True,
+                        timeout=120,
                     )
                     print("  yt-dlp (pip):     installed")
                 except Exception as e:
@@ -2189,7 +2416,9 @@ def main():
             try:
                 r = subprocess.run(
                     [sys.executable, "-m", "pip", "show", "bgutil-ytdlp-pot-provider"],
-                    capture_output=True, text=True, timeout=10
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
                 bgutil_installed = r.returncode == 0
             except Exception:
@@ -2199,9 +2428,17 @@ def main():
                 print("  PO Token plugin:  not found — installing bgutil-ytdlp-pot-provider...")
                 try:
                     subprocess.run(
-                        [sys.executable, "-m", "pip", "install", "-q",
-                         "--no-warn-script-location", "bgutil-ytdlp-pot-provider"],
-                        capture_output=True, timeout=120
+                        [
+                            sys.executable,
+                            "-m",
+                            "pip",
+                            "install",
+                            "-q",
+                            "--no-warn-script-location",
+                            "bgutil-ytdlp-pot-provider",
+                        ],
+                        capture_output=True,
+                        timeout=120,
                     )
                     print("  PO Token plugin:  installed (YouTube BotGuard bypass via Deno)")
                 except Exception as e:
@@ -2235,7 +2472,7 @@ def main():
     base_dir = Path(__file__).parent.parent.resolve()
     TOKEN_FILE = str(base_dir / ".yume_token")
     try:
-        with open(TOKEN_FILE, 'w') as f:
+        with open(TOKEN_FILE, "w") as f:
             f.write(API_TOKEN)
         os.chmod(TOKEN_FILE, 0o600)  # owner-only read/write
         print(f"  API token:        written to {TOKEN_FILE}")
@@ -2252,14 +2489,14 @@ def main():
     def _start_server():
         try:
             from waitress import serve
+
             print("  Server:           Waitress (production)")
             print("")
-            serve(app, host='127.0.0.1', port=port, threads=4,
-                  channel_timeout=300, recv_bytes=65536)
+            serve(app, host="127.0.0.1", port=port, threads=4, channel_timeout=300, recv_bytes=65536)
         except ImportError:
             print("  Server:           Flask dev (install waitress for production)")
             print("")
-            app.run(host='127.0.0.1', port=port, debug=False, threaded=True)
+            app.run(host="127.0.0.1", port=port, debug=False, threaded=True)
 
     server_thread = threading.Thread(target=_start_server, daemon=True)
     server_thread.start()
@@ -2278,6 +2515,7 @@ def main():
             _get_kakasi()
         except Exception as e:
             print(f"[Yume] Background kakasi init failed: {e}")
+
     threading.Thread(target=_init_kakasi_background, daemon=True).start()
 
     try:
@@ -2291,16 +2529,24 @@ def main():
             print("  Prewarm:          skipped (use --prewarm to enable)")
         else:
             import numpy as np
+
             _dummy = np.zeros(16000, dtype=np.float32)  # 1 second of silence
             try:
                 list(model.transcribe(_dummy, language="en"))
                 print("  Prewarm:          done (CUDA kernels compiled)")
             except Exception as pw_err:
                 pw_msg = str(pw_err)
-                cuda_lib_missing = any(lib in pw_msg.lower() for lib in [
-                    "cublas", "cudnn", "cudart", "cufft", "cusolver",
-                    "is not found or cannot be loaded",
-                ])
+                cuda_lib_missing = any(
+                    lib in pw_msg.lower()
+                    for lib in [
+                        "cublas",
+                        "cudnn",
+                        "cudart",
+                        "cufft",
+                        "cusolver",
+                        "is not found or cannot be loaded",
+                    ]
+                )
                 if cuda_lib_missing and device == "cuda":
                     print(f"  Prewarm:          CUDA library missing: {pw_msg[:80]}")
                     print("")
@@ -2393,5 +2639,5 @@ def main():
         sys.exit(1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

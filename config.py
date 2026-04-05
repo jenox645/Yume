@@ -8,7 +8,7 @@ import time
 import logging
 from pathlib import Path
 
-_log = logging.getLogger('pocket_yume.config')
+_log = logging.getLogger("pocket_yume.config")
 
 # Use logging for diagnostics — no monkey-patching needed
 
@@ -57,7 +57,7 @@ def load_config() -> dict:
             with open(CONFIG_FILE, encoding="utf-8") as f:
                 data = json.load(f)
             if not isinstance(data, dict):
-                _log.warning('[load_config] Config file is not a JSON object — using defaults')
+                _log.warning("[load_config] Config file is not a JSON object — using defaults")
                 return dict(DEFAULT_CONFIG)
             return {**DEFAULT_CONFIG, **data}
         except json.JSONDecodeError as e:
@@ -69,7 +69,7 @@ def load_config() -> dict:
             try:
                 raw = CONFIG_FILE.read_text(encoding="utf-8")
                 # Replace single backslashes that aren't already escaped or part of JSON escapes
-                fixed = re.sub(r'(?<!\\)\\(?![\\"/bfnrtu])', r'\\\\', raw)
+                fixed = re.sub(r'(?<!\\)\\(?![\\"/bfnrtu])', r"\\\\", raw)
                 data = json.loads(fixed)
                 if isinstance(data, dict):
                     print("     Auto-recovered by fixing backslash escapes.")
@@ -81,7 +81,7 @@ def load_config() -> dict:
             print("     Using default settings. Your config file was not overwritten.")
             print(f"     Fix the JSON manually or delete {CONFIG_FILE.name} to start fresh.\n")
         except Exception as e:
-            _log.debug('[load_config] config-parse failed: %s', e)
+            _log.debug("[load_config] config-parse failed: %s", e)
     return dict(DEFAULT_CONFIG)
 
 
@@ -114,7 +114,7 @@ def validate_host(value: str | None) -> str | None:
     if not value:
         print("  x  Host cannot be empty")
         return None
-    if re.match(r'^[a-zA-Z0-9._-]+$', value) or re.match(r'^\d+\.\d+\.\d+\.\d+$', value):
+    if re.match(r"^[a-zA-Z0-9._-]+$", value) or re.match(r"^\d+\.\d+\.\d+\.\d+$", value):
         return value
     print(f"  x  Invalid host: {value!r}")
     return None

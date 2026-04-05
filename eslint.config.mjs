@@ -44,6 +44,13 @@ export default [
                 cancelAnimationFrame: "readonly",
                 // Chrome extension APIs
                 chrome: "readonly",
+                URLSearchParams: "readonly",
+                history: "readonly",
+                CSS: "readonly",
+                // Extension script globals (injected via manifest)
+                DEBUG: "readonly",
+                AudioCapture: "readonly",
+                SubtitleWindow: "readonly",
                 // Vendored libraries
                 wanakana: "readonly",
             },

@@ -216,7 +216,7 @@ class SubtitleWindow {
     // otherwise use fetched (whisper-only). This ensures the counter only
     // goes up when ALL enabled processing is done for a chunk.
     const showTranslation = this.settings.showEnglish !== false;
-    const mainCount = showTranslation ? (translated || 0) : fetched;
+    const _mainCount = showTranslation ? (translated || 0) : fetched;
     // Show as complete when all chunks are fetched — empty chunks (instrumental
     // sections with no vocals) are legitimately done, not missing.
     const allDone = complete;
