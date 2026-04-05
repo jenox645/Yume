@@ -18,6 +18,13 @@ pip install pytest                       # for running tests
 python pocket_yume.py --verbose launch   # debug logging
 ```
 
+**Code analysis & pre-commit hooks** (recommended):
+```bash
+pip install pre-commit && pre-commit install
+pip install -r tools/analyze-requirements.txt
+python tools/analyze.py all  # full analysis report
+```
+
 **Extension** (Chrome/Brave/Edge):
 - Edit files in `extension/js/`, `extension/css/`, or `extension/popup.*`
 - Reload the extension in `chrome://extensions` after changes

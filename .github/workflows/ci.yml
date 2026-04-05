@@ -29,6 +29,14 @@ jobs:
           python -m py_compile config.py
           python -m py_compile server/faster_whisper_server.py
 
+      - name: Ruff lint
+        run: |
+          pip install ruff
+          ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check pocket_yume.py config.py server/faster_whisper_server.py
+
       - name: JavaScript syntax check
         run: |
           node --check extension/js/background.js
@@ -58,7 +66,7 @@ jobs:
           "
 
   test:
-    name: Tests
+    name: Tests + Coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -69,10 +77,109 @@ jobs:
           python-version: '3.11'
 
       - name: Install test deps
-        run: pip install pytest
+        run: pip install pytest pytest-cov
 
-      - name: Run unit tests
-        run: pytest tests/test_config.py tests/test_server_logic.py -v --tb=short
+      - name: Run tests with coverage
+        run: |
+          mkdir -p reports
+          pytest tests/ -v --tb=short \
+            --cov=. --cov-report=xml:reports/coverage.xml --cov-report=term-missing
 
-      - name: Run integration tests
-        run: pytest tests/test_integration.py -v --tb=short
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: reports/coverage.xml
+
+  quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install tools
+        run: pip install radon vulture
+
+      - name: Cyclomatic complexity
+        run: radon cc pocket_yume.py server/faster_whisper_server.py config.py -a -nc
+
+      - name: Maintainability index
+        run: radon mi pocket_yume.py server/faster_whisper_server.py config.py -nc
+
+      - name: Dead code detection
+        run: vulture pocket_yume.py config.py server/faster_whisper_server.py vulture_whitelist.py --min-confidence 80
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install tools
+        run: pip install bandit pip-audit
+
+      - name: Bandit security scan
+        run: bandit -r pocket_yume.py config.py server/faster_whisper_server.py -ll -c pyproject.toml
+
+      - name: Dependency audit
+        run: pip-audit -r server/requirements.txt
+
+  callgraph:
+    name: Call Graph
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install tools
+        run: |
+          pip install pyan3
+          sudo apt-get install -y graphviz
+
+      - name: Generate call graphs
+        run: |
+          mkdir -p reports
+          pyan3 pocket_yume.py --dot --no-defines --grouped | dot -Tsvg -o reports/callgraph_pocket_yume.svg || true
+          pyan3 server/faster_whisper_server.py --dot --no-defines --grouped | dot -Tsvg -o reports/callgraph_server.svg || true
+
+      - name: Upload call graphs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: call-graphs
+          path: reports/*.svg
+
+  js-lint:
+    name: JavaScript Lint
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install ESLint
+        run: npm install
+
+      - name: Run ESLint
+        run: npx eslint extension/js/ extension/popup.js
