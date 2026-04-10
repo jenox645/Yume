@@ -70,5 +70,13 @@ node_modules/
 reports/
 pyan_err.txt
 
+# ── Dev tooling (not needed at runtime) ──
+.editorconfig
+.pre-commit-config.yaml
+pyrightconfig.json
+tools/analyze.py
+tools/analyze-requirements.txt
+extension/fonts/README.md
+
 # ── Claude Code ──
 .claude/
