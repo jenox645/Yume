@@ -270,7 +270,7 @@ class TestVersionConsistencyExtended:
 
     def test_architecture_doc_version(self):
         v = self._get_version()
-        arch = (ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
+        arch = (ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
         assert f"v{v}" in arch, f"ARCHITECTURE.md doesn't show v{v}"
 
 
@@ -434,7 +434,7 @@ class TestNamingConsistency:
 
     def test_no_pocketyume_in_docs(self):
         """Docs should say 'Yume' or 'Pocket Yume', never 'PocketYume'."""
-        for doc in ["README.md", "ARCHITECTURE.md", "DEVELOPER_GUIDE.md", "CONTRIBUTING.md"]:
+        for doc in ["README.md", "docs/ARCHITECTURE.md", "docs/DEVELOPER_GUIDE.md", "docs/CONTRIBUTING.md"]:
             path = ROOT / doc
             if not path.exists():
                 continue

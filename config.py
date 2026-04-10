@@ -15,9 +15,10 @@ _log = logging.getLogger("pocket_yume.config")
 # Paths
 BASE_DIR = Path(__file__).parent.resolve()
 CONFIG_DIR = BASE_DIR / "config"
-CONFIG_FILE = CONFIG_DIR / "yume_config.json"
-if not CONFIG_FILE.exists() and (BASE_DIR / "yume_config.json").exists():
-    CONFIG_FILE = BASE_DIR / "yume_config.json"
+CONFIG_FILENAME = "yume_config.json"
+CONFIG_FILE = CONFIG_DIR / CONFIG_FILENAME
+if not CONFIG_FILE.exists() and (BASE_DIR / CONFIG_FILENAME).exists():
+    CONFIG_FILE = BASE_DIR / CONFIG_FILENAME
 
 # Port defaults
 DEFAULT_WHISPER_PORT = 5001

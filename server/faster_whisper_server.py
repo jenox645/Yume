@@ -192,6 +192,13 @@ _win_console_handler_ref = None
 use_word_timestamps = True
 pause_threshold = 0.25  # seconds of silence to split segments (0.25 = better for songs)
 
+# Duplicated string constants (SonarCloud S1192)
+FFMPEG_PROTOCOL_WHITELIST = "file,http,https,tcp,tls,crypto"
+FFMPEG_AUDIO_OPTS = "ffmpeg:-ar 16000 -ac 1"
+YT_PLAYER_CLIENT_TV_WEB = "youtube:player_client=tv,web"
+ERR_REQUESTED_FORMAT = "requested format"
+ERR_NO_SUCH_FILE = "no such file"
+
 # Server-side cache (LRU-limited to prevent memory leaks on long sessions)
 subtitle_cache = {}
 SUBTITLE_CACHE_MAX = 2000
@@ -680,13 +687,13 @@ def _friendlify_ytdlp_error(raw_error):
         return "Download timed out — the video may be too long or the connection too slow."
 
     # yt-dlp itself
-    if "no such file" in lower and "yt-dlp" in lower:
+    if ERR_NO_SUCH_FILE in lower and "yt-dlp" in lower:
         return "yt-dlp is not installed. Run the Yume setup wizard to install it."
-    if "no video formats" in lower or "requested format" in lower:
+    if "no video formats" in lower or ERR_REQUESTED_FORMAT in lower:
         return "No compatible audio format found. Try updating yt-dlp: pip install -U yt-dlp"
 
     # Deno-specific
-    if "deno" in lower and ("not found" in lower or "no such file" in lower):
+    if "deno" in lower and ("not found" in lower or ERR_NO_SUCH_FILE in lower):
         return (
             "Deno is not installed (needed for YouTube auth). "
             "Fix: Switch youtube_auth_method to 'cookies' in yume_config.json, "
@@ -728,22 +735,18 @@ def _download_full_audio(url):
         if youtube_auth_method == "deno":
             # Try 1: bgutil PO token (no extra args — plugin handles everything)
             strategies.append(("deno+default", []))
-            strategies.append(("deno+tv,web", ["--extractor-args", "youtube:player_client=tv,web"]))
+            strategies.append(("deno+tv,web", ["--extractor-args", YT_PLAYER_CLIENT_TV_WEB]))
             # Try 2: cookies fallback (always available as backup)
             if cookie_args:
                 strategies.append(("cookies-fallback", [*cookie_args]))
-                strategies.append(
-                    ("cookies+tv,web", ["--extractor-args", "youtube:player_client=tv,web", *cookie_args])
-                )
+                strategies.append(("cookies+tv,web", ["--extractor-args", YT_PLAYER_CLIENT_TV_WEB, *cookie_args]))
             # Try 3: no auth (last resort, works for public non-restricted videos)
             strategies.append(("no-auth", []))
         else:
             # Pure cookies mode
             if cookie_args:
                 strategies.append(("cookies+default", [*cookie_args]))
-                strategies.append(
-                    ("cookies+tv,web", ["--extractor-args", "youtube:player_client=tv,web", *cookie_args])
-                )
+                strategies.append(("cookies+tv,web", ["--extractor-args", YT_PLAYER_CLIENT_TV_WEB, *cookie_args]))
                 strategies.append(("cookies+mweb", ["--extractor-args", "youtube:player_client=mweb", *cookie_args]))
             # Always include no-auth as last resort (public videos work without cookies)
             strategies.append(("no-auth", []))
@@ -764,7 +767,7 @@ def _download_full_audio(url):
                         "--audio-format",
                         "wav",
                         "--postprocessor-args",
-                        "ffmpeg:-ar 16000 -ac 1",
+                        FFMPEG_AUDIO_OPTS,
                         "--no-playlist",
                         "--no-cache-dir",
                         "--no-exec",
@@ -786,7 +789,7 @@ def _download_full_audio(url):
                 stderr_lower = (result.stderr or "").lower()
 
                 # If format error, skip to nofmt pass of same auth strategy
-                if "requested format" in stderr_lower and fmt_pass == "bestaudio":
+                if ERR_REQUESTED_FORMAT in stderr_lower and fmt_pass == "bestaudio":
                     continue
 
                 # Extract error for reporting
@@ -825,7 +828,7 @@ def _download_full_audio(url):
                         "ffmpeg",
                         "-y",
                         "-protocol_whitelist",
-                        "file,http,https,tcp,tls,crypto",
+                        FFMPEG_PROTOCOL_WHITELIST,
                         "-i",
                         stream_url,
                         "-vn",
@@ -861,7 +864,7 @@ def _download_full_audio(url):
                     "ffmpeg",
                     "-y",
                     "-protocol_whitelist",
-                    "file,http,https,tcp,tls,crypto",
+                    FFMPEG_PROTOCOL_WHITELIST,
                     "-i",
                     url,
                     "-vn",
@@ -970,7 +973,7 @@ def prepare_direct():
                 "ffmpeg",
                 "-y",
                 "-protocol_whitelist",
-                "file,http,https,tcp,tls,crypto",
+                FFMPEG_PROTOCOL_WHITELIST,
                 "-i",
                 stream_url,
                 "-vn",
@@ -998,7 +1001,7 @@ def prepare_direct():
                     "--audio-format",
                     "wav",
                     "--postprocessor-args",
-                    "ffmpeg:-ar 16000 -ac 1",
+                    FFMPEG_AUDIO_OPTS,
                     "--no-playlist",
                     "--no-cache-dir",
                     "--no-exec",
@@ -1384,7 +1387,7 @@ def _get_stream_url(url):
             return stream_url
         last_stderr = result.stderr or ""
         stderr_lower = last_stderr.lower()
-        if "requested format" in stderr_lower:
+        if ERR_REQUESTED_FORMAT in stderr_lower:
             continue  # try next format
         break  # non-format error, stop trying
 
@@ -1422,7 +1425,7 @@ def _download_audio_segment(url, start_time, duration):
             [
                 "ffmpeg",
                 "-protocol_whitelist",
-                "file,http,https,tcp,tls,crypto",
+                FFMPEG_PROTOCOL_WHITELIST,
                 "-ss",
                 str(start_time),
                 "-i",
@@ -1487,7 +1490,7 @@ def _download_audio_segment_fallback(url, start_time, duration, output_path):
                 "--audio-format",
                 "wav",
                 "--postprocessor-args",
-                "ffmpeg:-ar 16000 -ac 1",
+                FFMPEG_AUDIO_OPTS,
                 "--no-playlist",
                 "--no-exec",
                 *auth_args,
@@ -2610,7 +2613,7 @@ def main():
             print("  SOLUTION: Run the setup wizard to install dependencies:")
             print("    python pocket_yume.py setup")
             print(f"    Or manually: pip install {missing}")
-        elif "no such file" in err_msg or "filenotfound" in err_msg:
+        elif ERR_NO_SUCH_FILE in err_msg or "filenotfound" in err_msg:
             print("")
             print("  CAUSE: Model files not found on disk.")
             print("")

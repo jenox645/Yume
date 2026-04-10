@@ -251,6 +251,9 @@ class C:
         cls.WHITE = cls.GOLD = cls.PURPLE = ""
 
 
+# Pre-compiled regex for stripping ANSI escape codes (used in panel/table rendering)
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+
 # ────
 # BOX DRAWING & PANELS (inspired by Rich library patterns)
 # ────
@@ -297,7 +300,7 @@ def panel(text, title="", style="", width=None, pad=1):
     if title:
         t = f" {title} "
         # Strip ANSI for width calculation (colored titles made border too short)
-        t_visible = len(re.sub(r"\x1b\[[0-9;]*m", "", t))
+        t_visible = len(ANSI_ESCAPE_RE.sub("", t))
         top = f"{b['tl']}{t}{b['h'] * max(0, w - 2 - t_visible)}{b['tr']}"
     else:
         top = f"{b['tl']}{b['h'] * (w - 2)}{b['tr']}"
@@ -307,7 +310,7 @@ def panel(text, title="", style="", width=None, pad=1):
     print(f"  {color}{top}{C.RESET}")
     for line in lines:
         # Strip ANSI for length calc
-        clean = re.sub(r"\x1b\[[0-9;]*m", "", line)
+        clean = ANSI_ESCAPE_RE.sub("", line)
         padding = inner - len(clean)
         print(f"  {color}{b['v']}{C.RESET}{' ' * pad}{line}{' ' * max(0, padding)}{' ' * pad}{color}{b['v']}{C.RESET}")
     print(f"  {color}{bot}{C.RESET}")
@@ -321,7 +324,7 @@ def table(headers, rows, col_styles=None, title=""):
     for row in rows:
         for i, cell in enumerate(row):
             if i < len(widths):
-                clean = re.sub(r"\x1b\[[0-9;]*m", "", str(cell))
+                clean = ANSI_ESCAPE_RE.sub("", str(cell))
                 widths[i] = max(widths[i], len(clean))
 
     # Cap total width
@@ -335,7 +338,7 @@ def table(headers, rows, col_styles=None, title=""):
         parts = []
         for i, cell in enumerate(cells):
             s = styles[i] if styles and i < len(styles) else C.RESET
-            clean = re.sub(r"\x1b\[[0-9;]*m", "", str(cell))
+            clean = ANSI_ESCAPE_RE.sub("", str(cell))
             pad = widths[i] - len(clean) if i < len(widths) else 0
             parts.append(f"{s}{cell}{C.RESET}{' ' * max(0, pad)}")
         return "   ".join(parts)
