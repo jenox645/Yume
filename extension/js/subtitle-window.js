@@ -2,6 +2,7 @@
 // SUBTITLE WINDOW v0.0.8 - Chunk counter, ready toast, per-line fonts
 // ============================================================================
 
+// eslint-disable-next-line no-redeclare
 class SubtitleWindow {
   constructor() {
     this.element    = null;

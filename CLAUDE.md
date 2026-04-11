@@ -10,7 +10,11 @@ Yume is a browser extension + local server system for real-time AI-powered video
 - **Browser extension** (`extension/`) — Chrome/Firefox MV3, overlays subtitles, no build step required
 - **Whisper server** (`server/faster_whisper_server.py`) — Flask on port 5001, transcribes audio via faster-whisper
 - **Translation server** — Port 5000, runs llama.cpp / Ollama / custom OpenAI-compatible API
-- **CLI** (`pocket_yume.py`) — Cross-platform installer, launcher, and config manager (single-file, ~4700 lines)
+- **CLI** (`pocket_yume.py`) — Thin entry point; all logic lives in the `yume/` package (benchmark, hardware, health, installers, launch, menus, network, ports, setup, ui, utils)
+
+## Code Review Policy
+
+After every fix or refactoring session, run CodeRabbit on all changed files before committing. Fix all critical and high-severity issues. Re-run until no critical issues remain.
 
 ## Commands
 
@@ -86,8 +90,8 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 **Subprocess safety:**
 - Always use the `_run()` wrapper (forces UTF-8 on Windows); never use bare `subprocess.run()` with `shell=True`
 
-**Single-file CLI design:**
-- Do not split `pocket_yume.py`. Only `config.py` has been extracted. Users run: `python pocket_yume.py`
+**CLI package layout:**
+- `pocket_yume.py` is the user-facing entry point; all logic lives in `yume/`. Shared state (GPU info, version, download URLs) is injected via `set_*()` setters called from `_init_modules()`. Do not import from `pocket_yume.py` inside `yume/` modules — use the injected values instead.
 
 **Config hygiene:**
 - Every key in `DEFAULT_CONFIG` must be actively used — integration tests detect dead config keys
@@ -103,8 +107,19 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 
 | File | Purpose |
 |------|---------|
-| `pocket_yume.py` | CLI menu, setup wizard, server launcher, cross-platform installer |
+| `pocket_yume.py` | Thin entry point: arg parsing, module wiring via `_init_modules()`, top-level menu dispatch |
 | `config.py` | Config load/save/validate, `DEFAULT_CONFIG` |
+| `yume/launch.py` | Server lifecycle: start llama.cpp / Ollama / Whisper, runtime menu |
+| `yume/setup.py` | Setup wizard, first-run detection, uninstall |
+| `yume/menus.py` | Interactive menus: main menu, settings, model selection, blacklist, stats |
+| `yume/health.py` | Health check, system status display, font detection |
+| `yume/benchmark.py` | Whisper speed benchmark across models |
+| `yume/network.py` | HTTP helpers (`server_get`, `server_post`), download, server health checks |
+| `yume/ports.py` | Port availability checks, conflict resolution, status display |
+| `yume/hardware.py` | GPU/CPU detection (NVIDIA, AMD, Apple Silicon) |
+| `yume/installers.py` | Tool download/install: yt-dlp, ffmpeg, Deno, llama.cpp, pip packages |
+| `yume/ui.py` | ANSI colour helpers, `header()`, `panel()`, `pause()`, `error()` |
+| `yume/utils.py` | `_run()`, `find_tool()`, update checker, shared path constants |
 | `server/faster_whisper_server.py` | Flask server: `/transcribe`, `/transcribe_url`, `/romanize`, `/model/switch`, `/stats` |
 | `extension/js/audio-capture.js` | Pipeline engine, chunking, retry logic |
 | `extension/js/background.js` | Service worker, proxy requests, translation/romanization cache |

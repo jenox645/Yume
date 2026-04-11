@@ -206,6 +206,7 @@ class DebugSystem {
 }
 
 // Global instance
+// eslint-disable-next-line no-redeclare
 const DEBUG = new DebugSystem();
 
 // Make available globally

@@ -14,6 +14,7 @@ const DETERMINISTIC_ROMA_LANGS = new Set(['ja', 'zh', 'ko', 'ru']);
 let _deterministicRomaAvailable = null;
 let _deterministicRomaProbeTime = 0;  // timestamp of last probe (for re-probe on failure)
 
+// eslint-disable-next-line no-redeclare
 class AudioCapture {
   constructor() {
     DEBUG.functionStart('AudioCapture', 'constructor');

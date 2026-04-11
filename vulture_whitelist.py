@@ -5,6 +5,7 @@
 gold_hr       # yume.ui — decorative separator, available for menu code to call
 MIN_PORT      # yume.ports — public constant for callers that validate user input
 dwLength      # yume.hardware — ctypes MEMORYSTATUSEX struct field, must be present
+frame         # server/faster_whisper_server.py — required second arg of signal handler signature
 
 # Flask route handlers (server/faster_whisper_server.py)
 _security_checks
