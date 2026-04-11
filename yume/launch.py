@@ -21,7 +21,7 @@ from yume.network import (
 from yume.ports import ensure_port_free, find_free_port, is_port_free, kill_port_process
 from yume.ui import (
     C,
-    ask_choice,
+    ask_arrow,
     ask_yn,
     clear,
     error,
@@ -34,13 +34,13 @@ from yume.ui import (
     success,
     warn,
 )
-from yume.utils import LOGS_DIR, SERVER_DIR, TOOLS_DIR, _run, find_gguf_models, rotate_logs
+from yume.utils import LOGS_DIR, SERVER_DIR, TOOLS_DIR, _run, find_gguf_models
 
 _log = logging.getLogger("pocket_yume")
 
 # Injected at startup by pocket_yume
 _BACKEND_INFO: dict = {}
-_VERSION: str = "0.0.8"
+_VERSION: str = "0.0.9"
 
 
 def set_launch_context(backend_info: dict, version: str) -> None:
@@ -53,9 +53,32 @@ def set_launch_context(backend_info: dict, version: str) -> None:
 # ── Public entry point ────────────────────────────────────────────────────────
 
 
+def _open_rotating_log(name: str):
+    """Open a log file for subprocess output, rotating if it exceeds 5 MB.
+
+    Rotation happens before opening so the subprocess always writes to a fresh
+    (or small) file. Returns a file handle suitable for Popen(stdout=...).
+
+    RotatingFileHandler only fires when Python writes through the handler — it
+    cannot rotate data written directly by a subprocess to a plain file handle.
+    Manual pre-open rotation is the correct approach here.
+    """
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    lp = LOGS_DIR / name
+    max_bytes = 5 * 1024 * 1024  # 5 MB
+    backup_count = 3
+    if lp.exists() and lp.stat().st_size > max_bytes:
+        for i in range(backup_count - 1, 0, -1):
+            old = LOGS_DIR / f"{name}.{i}"
+            new_p = LOGS_DIR / f"{name}.{i + 1}"
+            if old.exists():
+                old.replace(new_p)
+        lp.replace(LOGS_DIR / f"{name}.1")
+    return open(str(lp), "a", encoding="utf-8", errors="replace")  # noqa: SIM115
+
+
 def launch_services(cfg: dict) -> None:
     header("Launching Yume")
-    rotate_logs()  # Clean up old logs before starting
     procs: list = []
     lhs: list = []
 
@@ -296,9 +319,8 @@ def _start_llamacpp(cfg: dict, procs: list, lhs: list, bi: dict, env: dict, tpor
     elif gpu["has_amd"] and not IS_WIN:
         cmd.extend(["--n_gpu_layers", "-1"])
 
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
     lp = LOGS_DIR / "translation_server.log"
-    lh = open(lp, "w", encoding="utf-8", errors="replace")  # noqa: SIM115
+    lh = _open_rotating_log("translation_server.log")
     lhs.append(lh)
     tl_env = env.copy()
     tl_env["PYTHONUTF8"] = "1"
@@ -436,9 +458,8 @@ def _start_whisper(cfg: dict, procs: list, lhs: list, env: dict) -> bool:
     if CONFIG_FILE.exists():
         cmd.extend(["--config", str(CONFIG_FILE)])
 
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
     lp = LOGS_DIR / "whisper_server.log"
-    lh = open(lp, "w", encoding="utf-8", errors="replace")  # noqa: SIM115
+    lh = _open_rotating_log("whisper_server.log")
     lhs.append(lh)
     info(f"Device: {dev} | Compute: {comp} | Port: {cfg['whisper_port']}")
     info(f"Log: {lp}")
@@ -618,7 +639,7 @@ def _runtime_menu(cfg: dict, procs: list, lhs: list, bk: str) -> None:
                 style=C.GREEN,
             )
 
-            ch = ask_choice(
+            ch = ask_arrow(
                 "Runtime:",
                 [
                     ("Server Stats", "GPU usage, memory, how many chunks have been processed"),

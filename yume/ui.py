@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import re
 import shutil
@@ -338,3 +339,151 @@ def ask_choice(prompt: str, options: list, default: int = 0, allow_back: bool = 
                 return c
         except ValueError:
             pass
+
+
+def _read_byte_nonblock(fd: int) -> bytes:
+    """Read one byte from fd without blocking (Unix only). Returns b'' on timeout."""
+    import fcntl
+
+    old_fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, old_fl | os.O_NONBLOCK)
+    try:
+        return os.read(fd, 1)
+    except (BlockingIOError, InterruptedError, OSError):
+        return b""
+    finally:
+        fcntl.fcntl(fd, fcntl.F_SETFL, old_fl)
+
+
+def ask_arrow(prompt: str, options: list, default: int = 0, allow_back: bool = True) -> int:
+    """Arrow-key navigated selection menu.
+
+    ↑↓ navigate, Enter select, Esc go back (-1).
+    Falls back to ask_choice() when stdin is not a TTY or raw mode is unavailable.
+    """
+    if not options:
+        return -1
+
+    # Non-TTY fallback (piped input, CI, etc.)
+    if not sys.stdin.isatty():
+        return ask_choice(prompt, options, default, allow_back)
+
+    sel = max(0, min(default, len(options) - 1))
+
+    def _render() -> int:
+        """Render menu to stdout; return number of \\n chars written (for cursor rewind)."""
+        out = []
+        out.append(f"\n  {C.GOLD}?{C.RESET}  {prompt}\n\n")
+        for i, (label, desc) in enumerate(options):
+            if i == sel:
+                out.append(f"  {C.GREEN}\u25b6{C.RESET} {C.BOLD}{label}{C.RESET}\n")
+                if desc:
+                    out.append(f"      {C.DIM}{desc}{C.RESET}\n")
+            else:
+                out.append(f"    {label}\n")
+        hint = "\u2191\u2193 navigate  Enter select"
+        if allow_back:
+            hint += "  Esc back"
+        out.append(f"\n  {C.DIM}{hint}{C.RESET}")
+        text = "".join(out)
+        sys.stdout.write(text)
+        sys.stdout.flush()
+        return text.count("\n")
+
+    def _clear(n: int) -> None:
+        """Move cursor up n lines and clear to end of screen."""
+        sys.stdout.write(f"\r\033[{n}A\033[J")
+        sys.stdout.flush()
+
+    if IS_WIN:
+        try:
+            import msvcrt  # type: ignore[import]
+        except ImportError:
+            return ask_choice(prompt, options, default, allow_back)
+        try:
+            n = _render()
+            while True:
+                ch = msvcrt.getch()
+                if ch == b"\xe0":
+                    ch2 = msvcrt.getch()
+                    if ch2 == b"H":  # Up arrow
+                        sel = (sel - 1) % len(options)
+                        _clear(n)
+                        n = _render()
+                    elif ch2 == b"P":  # Down arrow
+                        sel = (sel + 1) % len(options)
+                        _clear(n)
+                        n = _render()
+                elif ch == b"\r":
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+                    return sel
+                elif ch == b"\x1b":
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+                    return -1 if allow_back else sel
+                elif ch == b"\x03":
+                    raise KeyboardInterrupt
+        except KeyboardInterrupt:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            raise
+        except Exception:
+            return ask_choice(prompt, options, default, allow_back)
+    else:
+        try:
+            import termios
+            import tty
+        except ImportError:
+            return ask_choice(prompt, options, default, allow_back)
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            n = _render()
+            tty.setraw(fd)
+            while True:
+                b = os.read(fd, 1)
+                if b == b"\x1b":
+                    b2 = _read_byte_nonblock(fd)
+                    if b2 == b"[":
+                        b3 = os.read(fd, 1)
+                        if b3 == b"A":  # Up arrow
+                            sel = (sel - 1) % len(options)
+                            termios.tcsetattr(fd, termios.TCSANOW, old)
+                            _clear(n)
+                            n = _render()
+                            tty.setraw(fd)
+                        elif b3 == b"B":  # Down arrow
+                            sel = (sel + 1) % len(options)
+                            termios.tcsetattr(fd, termios.TCSANOW, old)
+                            _clear(n)
+                            n = _render()
+                            tty.setraw(fd)
+                    else:
+                        # Plain Esc key
+                        termios.tcsetattr(fd, termios.TCSANOW, old)
+                        sys.stdout.write("\n")
+                        sys.stdout.flush()
+                        return -1 if allow_back else sel
+                elif b in (b"\r", b"\n"):
+                    termios.tcsetattr(fd, termios.TCSANOW, old)
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+                    return sel
+                elif b in (b"\x03", b"\x04"):  # Ctrl+C / Ctrl+D
+                    termios.tcsetattr(fd, termios.TCSANOW, old)
+                    raise KeyboardInterrupt
+        except KeyboardInterrupt:
+            try:
+                termios.tcsetattr(fd, termios.TCSANOW, old)
+            except Exception:
+                pass
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            raise
+        except Exception:
+            try:
+                termios.tcsetattr(fd, termios.TCSANOW, old)
+            except Exception:
+                pass
+            return ask_choice(prompt, options, default, allow_back)

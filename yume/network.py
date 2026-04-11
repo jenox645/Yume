@@ -28,6 +28,7 @@ def set_version(version: str) -> None:
     global _VERSION
     _VERSION = version
 
+
 # Global per-process API token cache
 _api_token: str | None = None
 

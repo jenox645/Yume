@@ -1,5 +1,5 @@
 // ============================================================================
-// BACKGROUND SERVICE WORKER (Manifest V3) - Yume v0.0.8
+// BACKGROUND SERVICE WORKER (Manifest V3) - Yume v0.0.9
 // Handles server health, transcription, translation, romanization proxy
 // Translation & romanization are SEPARATE calls (never combined)
 // ============================================================================
@@ -137,13 +137,13 @@ chrome.runtime.onInstalled.addListener((details) => {
   console.log('[Background] Extension installed/updated:', details.reason);
   if (details.reason === 'install') {
     // Fresh install — set all defaults
-    chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS }, installTime: Date.now(), version: '0.0.8' });
+    chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS }, installTime: Date.now(), version: '0.0.9' });
   } else if (details.reason === 'update') {
     // Update — merge new defaults into existing settings (preserves user changes)
     chrome.storage.local.get(['settings'], (result) => {
       const existing = result.settings || {};
       const merged = { ...DEFAULT_SETTINGS, ...existing };
-      chrome.storage.local.set({ settings: merged, version: '0.0.8' });
+      chrome.storage.local.set({ settings: merged, version: '0.0.9' });
       console.log('[Background] Settings preserved across update');
     });
   }

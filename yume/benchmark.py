@@ -95,9 +95,17 @@ def benchmark_whisper(cfg: dict) -> None:
         try:
             _run(
                 [
-                    ffmpeg, "-y", "-f", "lavfi", "-i",
+                    ffmpeg,
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
                     "sine=frequency=300:duration=5",
-                    "-ar", str(WHISPER_SAMPLE_RATE), "-ac", "1", str(test_wav),
+                    "-ar",
+                    str(WHISPER_SAMPLE_RATE),
+                    "-ac",
+                    "1",
+                    str(test_wav),
                 ],
                 timeout=10,
             )
@@ -241,7 +249,10 @@ def benchmark_whisper(cfg: dict) -> None:
             for _ in range(3):
                 t0 = time.time()
                 segs, _seg_info = model.transcribe(
-                    str(test_wav), language="ja", vad_filter=False, word_timestamps=False,
+                    str(test_wav),
+                    language="ja",
+                    vad_filter=False,
+                    word_timestamps=False,
                 )
                 seg_list = list(segs)
                 elapsed = time.time() - t0
@@ -252,19 +263,27 @@ def benchmark_whisper(cfg: dict) -> None:
             rtf = median_time / 5.0
             speed = 5.0 / median_time if median_time > 0 else 0
 
-            results.append({
-                "model": model_name, "load_s": round(load_time, 1),
-                "median_s": round(median_time, 3), "rtf": round(rtf, 3),
-                "speed_x": round(speed, 1), "segments": segments_count, "status": "OK",
-            })
+            results.append(
+                {
+                    "model": model_name,
+                    "load_s": round(load_time, 1),
+                    "median_s": round(median_time, 3),
+                    "rtf": round(rtf, 3),
+                    "speed_x": round(speed, 1),
+                    "segments": segments_count,
+                    "status": "OK",
+                }
+            )
             success(f"Median: {median_time:.3f}s for 5s audio ({speed:.1f}x realtime)")
 
             del model
             try:
                 import gc
+
                 gc.collect()
                 if device == "cuda":
                     import torch
+
                     torch.cuda.empty_cache()
             except Exception as e:
                 _log.debug("[benchmark_whisper] cuda-cleanup failed: %s", e)
@@ -277,8 +296,15 @@ def benchmark_whisper(cfg: dict) -> None:
             is_cuda_lib_error = any(
                 lib in err_msg.lower()
                 for lib in [
-                    "cublas", "cudnn", "cudart", "cufft", "cusolver", "cusparse",
-                    "nvcuda", "is not found or cannot be loaded", "cuda",
+                    "cublas",
+                    "cudnn",
+                    "cudart",
+                    "cufft",
+                    "cusolver",
+                    "cusparse",
+                    "nvcuda",
+                    "is not found or cannot be loaded",
+                    "cuda",
                 ]
             )
 
@@ -315,29 +341,56 @@ def benchmark_whisper(cfg: dict) -> None:
 
                         median_time = sorted(cpu_times)[len(cpu_times) // 2]
                         speed = 5.0 / median_time if median_time > 0 else 0
-                        results.append({
-                            "model": f"{model_name} (CPU)", "load_s": round(load_time, 1),
-                            "median_s": round(median_time, 3), "rtf": round(median_time / 5.0, 3),
-                            "speed_x": round(speed, 1), "segments": 0, "status": "OK",
-                        })
+                        results.append(
+                            {
+                                "model": f"{model_name} (CPU)",
+                                "load_s": round(load_time, 1),
+                                "median_s": round(median_time, 3),
+                                "rtf": round(median_time / 5.0, 3),
+                                "speed_x": round(speed, 1),
+                                "segments": 0,
+                                "status": "OK",
+                            }
+                        )
                         success(f"CPU median: {median_time:.3f}s for 5s audio ({speed:.1f}x realtime)")
                         del cpu_model
                     except Exception as e2:
                         error(f"CPU fallback also failed: {str(e2)[:60]}")
-                        results.append({
-                            "model": model_name, "load_s": 0, "median_s": 0, "rtf": 0,
-                            "speed_x": 0, "segments": 0, "status": f"FAIL: {short_err}",
-                        })
+                        results.append(
+                            {
+                                "model": model_name,
+                                "load_s": 0,
+                                "median_s": 0,
+                                "rtf": 0,
+                                "speed_x": 0,
+                                "segments": 0,
+                                "status": f"FAIL: {short_err}",
+                            }
+                        )
                 else:
-                    results.append({
-                        "model": model_name, "load_s": 0, "median_s": 0, "rtf": 0,
-                        "speed_x": 0, "segments": 0, "status": f"FAIL: {short_err}",
-                    })
+                    results.append(
+                        {
+                            "model": model_name,
+                            "load_s": 0,
+                            "median_s": 0,
+                            "rtf": 0,
+                            "speed_x": 0,
+                            "segments": 0,
+                            "status": f"FAIL: {short_err}",
+                        }
+                    )
             else:
-                results.append({
-                    "model": model_name, "load_s": 0, "median_s": 0, "rtf": 0,
-                    "speed_x": 0, "segments": 0, "status": f"FAIL: {short_err}",
-                })
+                results.append(
+                    {
+                        "model": model_name,
+                        "load_s": 0,
+                        "median_s": 0,
+                        "rtf": 0,
+                        "speed_x": 0,
+                        "segments": 0,
+                        "status": f"FAIL: {short_err}",
+                    }
+                )
 
     # Clean up test audio
     test_wav.unlink(missing_ok=True)
@@ -357,10 +410,15 @@ def benchmark_whisper(cfg: dict) -> None:
             bar_len = min(25, int(r["speed_x"] / max(best_speed, 1) * 25))
             speed_bar = f"{C.GREEN}{'█' * bar_len}{C.DIM}{'░' * (25 - bar_len)}{C.RESET}"
             is_best = f" {C.GOLD}★{C.RESET}" if r["speed_x"] == best_speed and len(results) > 1 else ""
-            rows.append([
-                r["model"], f"{r['load_s']}s", f"{r['median_s']:.3f}s",
-                f"{r['speed_x']}x{is_best}", speed_bar,
-            ])
+            rows.append(
+                [
+                    r["model"],
+                    f"{r['load_s']}s",
+                    f"{r['median_s']:.3f}s",
+                    f"{r['speed_x']}x{is_best}",
+                    speed_bar,
+                ]
+            )
         else:
             rows.append([r["model"], "-", "-", "-", f"{C.RED}{r['status']}{C.RESET}"])
 

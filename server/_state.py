@@ -67,7 +67,7 @@ cookies_browser = "chrome"
 translation_host = "127.0.0.1"
 translation_port = 5000
 translation_backend = "llamacpp"
-translation_prompt = ""   # Custom prompt forwarded to extension via /health
+translation_prompt = ""  # Custom prompt forwarded to extension via /health
 romanization_prompt = ""  # Custom romanization prompt forwarded via /health
 
 # ── Session statistics ────────────────────────────────────────────────────────

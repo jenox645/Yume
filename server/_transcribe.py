@@ -28,13 +28,13 @@ def transcribe_file(audio_path, language, start_offset=0.0):
     params = dict(
         language=language,
         beam_size=5,
-        vad_filter=False,              # MUST be False — Silero VAD drops singing
-        word_timestamps=False,         # v2.0.7: False (different decode path when True)
+        vad_filter=False,  # MUST be False — Silero VAD drops singing
+        word_timestamps=False,  # v2.0.7: False (different decode path when True)
         condition_on_previous_text=False,
         temperature=0.0,
         compression_ratio_threshold=2.4,  # v2.0.7 value
-        log_prob_threshold=-2.0,      # widened from -1.5: catch more speech at low confidence
-        no_speech_threshold=0.3,      # lowered from 0.45: catch speech after silence/intros
+        log_prob_threshold=-2.0,  # widened from -1.5: catch more speech at low confidence
+        no_speech_threshold=0.3,  # lowered from 0.45: catch speech after silence/intros
     )
 
     # CRITICAL: Serialise model access. CTranslate2 is NOT thread-safe.

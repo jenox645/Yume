@@ -21,7 +21,7 @@ _log = logging.getLogger("pocket_yume")
 _BACKEND_INFO: dict = {}
 _MODELS_DIR: Path = BASE_DIR / "models"
 _GGUF_DIR: Path = BASE_DIR / "models" / "translation"
-_VERSION: str = "0.0.8"
+_VERSION: str = "0.0.9"
 
 
 def set_setup_context(backend_info: dict, models_dir: Path, gguf_dir: Path, version: str) -> None:

@@ -27,6 +27,7 @@ _ytdlp_cache: dict = {"available": None, "checked_at": 0}
 
 # ── yt-dlp command selection ──────────────────────────────────────────────────
 
+
 def ytdlp_cmd():
     """Return the yt-dlp command prefix.
 
@@ -57,6 +58,7 @@ def check_ytdlp():
 
 # ── URL helpers ───────────────────────────────────────────────────────────────
 
+
 def is_youtube_url(url):
     """Return True if url points to YouTube (for YouTube-specific yt-dlp args)."""
     if not url:
@@ -79,6 +81,7 @@ def is_youtube_url(url):
 
 
 # ── Cookie / auth helpers ─────────────────────────────────────────────────────
+
 
 def resolve_browser_cookies():
     """Resolve the correct --cookies-from-browser string.
@@ -132,6 +135,7 @@ def build_auth_args(url):
 
 # ── Audio temp file cleanup ───────────────────────────────────────────────────
 
+
 def cleanup_audio_entry(entry):
     """Delete the temp directory for a cached audio file."""
     try:
@@ -151,6 +155,7 @@ def cleanup_all_audio():
 
 
 # ── Stream URL (single-chunk fallback) ───────────────────────────────────────
+
 
 def get_stream_url(url):
     """Get the direct audio stream URL, caching to avoid repeated yt-dlp calls."""
@@ -207,6 +212,7 @@ def get_stream_url(url):
 
 # ── Chunk download (fallback when no prepared full audio) ─────────────────────
 
+
 def download_audio_segment(url, start_time, duration):
     """Download a specific time segment using yt-dlp + ffmpeg (stream URL cached)."""
     valid, err = validate_url(url)
@@ -235,14 +241,22 @@ def download_audio_segment(url, start_time, duration):
         ffmpeg_result = subprocess.run(
             [
                 "ffmpeg",
-                "-protocol_whitelist", _state.FFMPEG_PROTOCOL_WHITELIST,
-                "-ss", str(start_time),
-                "-i", stream_url,
-                "-t", str(duration),
-                "-ar", "16000",
-                "-ac", "1",
-                "-f", "wav",
-                "-y", output_path,
+                "-protocol_whitelist",
+                _state.FFMPEG_PROTOCOL_WHITELIST,
+                "-ss",
+                str(start_time),
+                "-i",
+                stream_url,
+                "-t",
+                str(duration),
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-f",
+                "wav",
+                "-y",
+                output_path,
             ],
             capture_output=True,
             timeout=60,
@@ -279,14 +293,21 @@ def _download_audio_segment_fallback(url, start_time, duration, output_path):
         result = subprocess.run(
             [
                 *ytdlp_cmd(),
-                "--download-sections", f"*{start_time}-{start_time + duration}",
+                "--download-sections",
+                f"*{start_time}-{start_time + duration}",
                 "--force-keyframes-at-cuts",
-                "-x", "--audio-format", "wav",
-                "--postprocessor-args", _state.FFMPEG_AUDIO_OPTS,
-                "--no-playlist", "--no-exec",
+                "-x",
+                "--audio-format",
+                "wav",
+                "--postprocessor-args",
+                _state.FFMPEG_AUDIO_OPTS,
+                "--no-playlist",
+                "--no-exec",
                 *auth_args,
-                "-o", tmp_template,
-                "--", url,
+                "-o",
+                tmp_template,
+                "--",
+                url,
             ],
             capture_output=True,
             timeout=90,
@@ -305,6 +326,7 @@ def _download_audio_segment_fallback(url, start_time, duration, output_path):
 
 
 # ── Full audio download ───────────────────────────────────────────────────────
+
 
 def friendlify_ytdlp_error(raw_error):
     """Translate raw yt-dlp errors into actionable user-facing messages."""
@@ -389,12 +411,19 @@ def download_full_audio(url):
                     [
                         *ytdlp_cmd(),
                         *fmt_args,
-                        "-x", "--audio-format", "wav",
-                        "--postprocessor-args", _state.FFMPEG_AUDIO_OPTS,
-                        "--no-playlist", "--no-cache-dir", "--no-exec",
+                        "-x",
+                        "--audio-format",
+                        "wav",
+                        "--postprocessor-args",
+                        _state.FFMPEG_AUDIO_OPTS,
+                        "--no-playlist",
+                        "--no-cache-dir",
+                        "--no-exec",
                         *extra_args,
-                        "-o", output_template,
-                        "--", url,
+                        "-o",
+                        output_template,
+                        "--",
+                        url,
                     ],
                     capture_output=True,
                     text=True,
@@ -411,9 +440,7 @@ def download_full_audio(url):
                     continue  # skip to nofmt pass of same auth strategy
 
                 error_lines = [
-                    ln.strip()
-                    for ln in (result.stderr or "").split("\n")
-                    if ln.strip() and "ERROR" in ln.upper()
+                    ln.strip() for ln in (result.stderr or "").split("\n") if ln.strip() and "ERROR" in ln.upper()
                 ]
                 raw_err = error_lines[-1][:300] if error_lines else f"exit code {result.returncode}"
                 last_error = friendlify_ytdlp_error(raw_err)
@@ -443,10 +470,19 @@ def download_full_audio(url):
                 ffmpeg_output = os.path.join(tmp_dir, "full_audio_stream.wav")
                 result = subprocess.run(
                     [
-                        "ffmpeg", "-y",
-                        "-protocol_whitelist", _state.FFMPEG_PROTOCOL_WHITELIST,
-                        "-i", stream_url,
-                        "-vn", "-ar", "16000", "-ac", "1", "-f", "wav",
+                        "ffmpeg",
+                        "-y",
+                        "-protocol_whitelist",
+                        _state.FFMPEG_PROTOCOL_WHITELIST,
+                        "-i",
+                        stream_url,
+                        "-vn",
+                        "-ar",
+                        "16000",
+                        "-ac",
+                        "1",
+                        "-f",
+                        "wav",
                         ffmpeg_output,
                     ],
                     capture_output=True,
@@ -470,10 +506,19 @@ def download_full_audio(url):
             ffmpeg_output = os.path.join(tmp_dir, "full_audio_ffmpeg.wav")
             result = subprocess.run(
                 [
-                    "ffmpeg", "-y",
-                    "-protocol_whitelist", _state.FFMPEG_PROTOCOL_WHITELIST,
-                    "-i", url,
-                    "-vn", "-ar", "16000", "-ac", "1", "-f", "wav",
+                    "ffmpeg",
+                    "-y",
+                    "-protocol_whitelist",
+                    _state.FFMPEG_PROTOCOL_WHITELIST,
+                    "-i",
+                    url,
+                    "-vn",
+                    "-ar",
+                    "16000",
+                    "-ac",
+                    "1",
+                    "-f",
+                    "wav",
                     ffmpeg_output,
                 ],
                 capture_output=True,
@@ -511,12 +556,16 @@ def _build_download_strategies(url, is_yt):
             strategies.append(("deno+tv,web", ["--extractor-args", _state.YT_PLAYER_CLIENT_TV_WEB]))
             if cookie_args:
                 strategies.append(("cookies-fallback", [*cookie_args]))
-                strategies.append(("cookies+tv,web", ["--extractor-args", _state.YT_PLAYER_CLIENT_TV_WEB, *cookie_args]))
+                strategies.append(
+                    ("cookies+tv,web", ["--extractor-args", _state.YT_PLAYER_CLIENT_TV_WEB, *cookie_args])
+                )
             strategies.append(("no-auth", []))
         else:
             if cookie_args:
                 strategies.append(("cookies+default", [*cookie_args]))
-                strategies.append(("cookies+tv,web", ["--extractor-args", _state.YT_PLAYER_CLIENT_TV_WEB, *cookie_args]))
+                strategies.append(
+                    ("cookies+tv,web", ["--extractor-args", _state.YT_PLAYER_CLIENT_TV_WEB, *cookie_args])
+                )
                 strategies.append(("cookies+mweb", ["--extractor-args", "youtube:player_client=mweb", *cookie_args]))
             strategies.append(("no-auth", []))
     else:
@@ -527,14 +576,19 @@ def _build_download_strategies(url, is_yt):
 
 # ── Audio utility ─────────────────────────────────────────────────────────────
 
+
 def get_audio_duration(audio_path):
     """Get duration of audio file in seconds using ffprobe."""
     try:
         result = subprocess.run(
             [
-                "ffprobe", "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1",
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
                 audio_path,
             ],
             capture_output=True,
@@ -558,11 +612,20 @@ def slice_audio(full_audio_path, start_time, duration):
     try:
         result = subprocess.run(
             [
-                "ffmpeg", "-y",
-                "-ss", str(start_time),
-                "-i", full_audio_path,
-                "-t", str(duration),
-                "-ar", "16000", "-ac", "1", "-f", "wav",
+                "ffmpeg",
+                "-y",
+                "-ss",
+                str(start_time),
+                "-i",
+                full_audio_path,
+                "-t",
+                str(duration),
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-f",
+                "wav",
                 tmp.name,
             ],
             capture_output=True,

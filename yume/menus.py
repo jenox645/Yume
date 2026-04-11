@@ -20,7 +20,7 @@ from yume.network import server_get as _server_get, server_post as _server_post
 from yume.ports import find_free_port, get_port_process, is_port_free
 from yume.ui import (
     C,
-    ask_choice,
+    ask_arrow,
     ask_input,
     ask_yn,
     bullet,
@@ -73,8 +73,7 @@ def cli_server_stats(cfg: dict) -> None:
     print()
     section("Whisper Engine")
     info(
-        f"Model: {C.BOLD}{data.get('model', '?')}{C.RESET}  "
-        f"({data.get('device', '?')}/{data.get('compute_type', '?')})"
+        f"Model: {C.BOLD}{data.get('model', '?')}{C.RESET}  ({data.get('device', '?')}/{data.get('compute_type', '?')})"
     )
     info(f"Uptime: {data.get('uptime_human', '?')}")
     section("Session")
@@ -190,9 +189,15 @@ def cli_model(cfg: dict, args: list) -> None:
             save_config(cfg)
     elif subcmd == "list":
         models_info = [
-            ("tiny", "~1 GB"), ("base", "~1 GB"), ("small", "~2 GB"), ("medium", "~5 GB"),
-            ("large-v2", "~10 GB"), ("large-v3", "~10 GB"), ("large-v3-turbo", "~6 GB"),
-            ("distil-large-v2", "~4 GB"), ("distil-large-v3", "~4 GB"),
+            ("tiny", "~1 GB"),
+            ("base", "~1 GB"),
+            ("small", "~2 GB"),
+            ("medium", "~5 GB"),
+            ("large-v2", "~10 GB"),
+            ("large-v3", "~10 GB"),
+            ("large-v3-turbo", "~6 GB"),
+            ("distil-large-v2", "~4 GB"),
+            ("distil-large-v3", "~4 GB"),
         ]
         cur = cfg.get("whisper_model", "?")
         for name, vram in models_info:
@@ -228,7 +233,7 @@ def _menu_blacklist(cfg: dict) -> None:
                 bullet(item)
             if len(bl) > 15:
                 info(f"  ... and {len(bl) - 15} more")
-        ch = ask_choice(
+        ch = ask_arrow(
             "Options:",
             [
                 ("Add entry", "Block a phrase from subtitles"),
@@ -261,7 +266,7 @@ def _menu_blacklist(cfg: dict) -> None:
                 pause()
                 continue
             opts = [(item, None) for item in bl[:20]] + [("Back", None)]
-            rc = ask_choice("Remove which?", opts, default=len(opts) - 1)
+            rc = ask_arrow("Remove which?", opts, default=len(opts) - 1)
             if 0 <= rc < len(bl):
                 removed = bl[rc]
                 current = bl[:]
@@ -301,13 +306,26 @@ def _menu_whisper_model(cfg: dict) -> None:
         display = friendly_name or (Path(cur).name if is_custom else cur)
         warn(f"Server not running. Config: {display}")
     models = [
-        "tiny", "base", "small", "medium", "large-v2", "large-v3",
-        "large-v3-turbo", "distil-large-v2", "distil-large-v3",
+        "tiny",
+        "base",
+        "small",
+        "medium",
+        "large-v2",
+        "large-v3",
+        "large-v3-turbo",
+        "distil-large-v2",
+        "distil-large-v3",
     ]
     vram = {
-        "tiny": "~1GB", "base": "~1GB", "small": "~2GB", "medium": "~5GB",
-        "large-v2": "~10GB", "large-v3": "~10GB", "large-v3-turbo": "~4GB",
-        "distil-large-v2": "~4GB", "distil-large-v3": "~4GB",
+        "tiny": "~1GB",
+        "base": "~1GB",
+        "small": "~2GB",
+        "medium": "~5GB",
+        "large-v2": "~10GB",
+        "large-v3": "~10GB",
+        "large-v3-turbo": "~6 GB",
+        "distil-large-v2": "~4 GB",
+        "distil-large-v3": "~4 GB",
     }
     opts = []
     for m in models:
@@ -321,7 +339,7 @@ def _menu_whisper_model(cfg: dict) -> None:
     opts.append((f"Custom model (local path){custom_tag}", "active" if is_custom else None))
     opts.append(("Back", None))
     di = models.index(cur) if cur in models else (len(models) if is_custom else len(models) + 1)
-    ch = ask_choice("Switch to:", opts, default=di)
+    ch = ask_arrow("Switch to:", opts, default=di)
     if ch == -1 or ch == len(models) + 1:
         return
 
@@ -443,7 +461,7 @@ def browse_hf(cfg: dict) -> None:
             opts.append((f"{f['name']}  ({f['size']}){fit}", None))
         opts.append(("Back", None))
 
-        ch = ask_choice("Select file:", opts, default=len(opts) - 1)
+        ch = ask_arrow("Select file:", opts, default=len(opts) - 1)
         if ch == -1 or ch == len(files):
             continue
 
@@ -485,7 +503,7 @@ def tools_menu(cfg: dict) -> None:
         ff = find_tool("ffmpeg")
         dn = find_tool("deno")
         _cur_browser = _detect_extension_browser()
-        ch = ask_choice(
+        ch = ask_arrow(
             "Select a tool:",
             [
                 (f"yt-dlp          {'OK' if yt else 'MISSING'}", "Downloads audio from YouTube and 1000+ video sites"),
@@ -570,7 +588,7 @@ def _menu_browser_extension() -> None:
         pause()
         return
 
-    ch = ask_choice(
+    ch = ask_arrow(
         "Switch to:",
         [
             ("Chrome / Brave / Edge", "MV3 with service_worker (default)"),
@@ -655,7 +673,7 @@ def _menu_ytdlp(cfg: dict) -> None:
             info("yt-dlp supports 1000+ sites: YouTube, NicoNico, Bilibili, Twitch, etc.")
         else:
             warn("Not installed")
-        ch = ask_choice(
+        ch = ask_arrow(
             "Options:",
             [
                 ("Install / Update", "Download latest binary"),
@@ -696,7 +714,7 @@ def _menu_yt_auth(cfg: dict) -> None:
         cur = cfg.get("youtube_auth_method", "cookies")
         info(f"Current method: {C.BOLD}{cur}{C.RESET}")
         print()
-        ch = ask_choice(
+        ch = ask_arrow(
             "Select method:",
             [
                 ("Browser Cookies (recommended)", "Uses your browser's YouTube login. No extra software."),
@@ -711,7 +729,7 @@ def _menu_yt_auth(cfg: dict) -> None:
             cfg["youtube_auth_method"] = "cookies"
             save_config(cfg)
             browsers = ["chrome", "firefox", "edge", "brave", "opera", "chromium", "safari"]
-            bc = ask_choice(
+            bc = ask_arrow(
                 "Which browser are you logged into YouTube with?",
                 [(b.capitalize(), None) for b in browsers] + [("Back", None)],
                 default=0,
@@ -745,7 +763,7 @@ def _menu_ffmpeg() -> None:
         header("FFmpeg")
         p = find_tool("ffmpeg")
         (success if p else warn)(f"{'Installed: ' + p if p else 'Not installed'}")
-        ch = ask_choice("Options:", [("Install / Update", "Download latest static build"), ("Back", None)], default=1)
+        ch = ask_arrow("Options:", [("Install / Update", "Download latest static build"), ("Back", None)], default=1)
         if ch == -1 or ch == 1:
             return
         elif ch == 0:
@@ -786,7 +804,7 @@ def _menu_deno(cfg: dict) -> None:
             warn("Deno not installed — YouTube may block downloads")
 
         info(f"Current YouTube auth method: {C.BOLD}{cfg.get('youtube_auth_method', 'cookies')}{C.RESET}")
-        ch = ask_choice(
+        ch = ask_arrow(
             "Options:",
             [
                 ("Install Deno + PO token plugin", "Downloads Deno (~35 MB) and installs the YouTube auth plugin"),
@@ -807,8 +825,15 @@ def _menu_deno(cfg: dict) -> None:
             info("Installing PO token plugin...")
             try:
                 r = _run(
-                    [sys.executable, "-m", "pip", "install", "-q", "--no-warn-script-location",
-                     "bgutil-ytdlp-pot-provider"],
+                    [
+                        sys.executable,
+                        "-m",
+                        "pip",
+                        "install",
+                        "-q",
+                        "--no-warn-script-location",
+                        "bgutil-ytdlp-pot-provider",
+                    ],
                     timeout=120,
                 )
                 if r.returncode == 0:
@@ -847,7 +872,7 @@ def _menu_backend(cfg: dict) -> None:
         )
         (success if st["up"] else warn)(f"Status: {'RUNNING' if st['up'] else 'Not running'}")
 
-        ch = ask_choice(
+        ch = ask_arrow(
             "Options:",
             [
                 ("Change backend", "Switch between llama.cpp/Ollama/LM Studio/WebUI/Custom"),
@@ -866,7 +891,9 @@ def _menu_backend(cfg: dict) -> None:
             _change_addr(cfg, "translation")
         elif ch == 2:
             header(f"Install {bi.get('name', cur)}")
-            print(f"\n  {C.BOLD}{bi.get('name', cur)}{C.RESET}\n  {bi.get('desc', '')}\n\n  {C.WHITE}Installation:{C.RESET}")
+            print(
+                f"\n  {C.BOLD}{bi.get('name', cur)}{C.RESET}\n  {bi.get('desc', '')}\n\n  {C.BOLD}Installation:{C.RESET}"
+            )
             for line in bi.get("inst", "").split("\n"):
                 print(f"  {line}")
             if cur == "llamacpp":
@@ -890,7 +917,7 @@ def _select_backend(cfg: dict) -> None:
     opts = [(_BI[k]["name"], _BI[k]["desc"]) for k in keys] + [("Back", None)]
     cur = cfg.get("translation_backend", "llamacpp")
     di = keys.index(cur) if cur in keys else 0
-    ch = ask_choice("Choose:", opts, default=di)
+    ch = ask_arrow("Choose:", opts, default=di)
     if ch == -1 or ch == len(keys):
         return
     k = keys[ch]
@@ -900,7 +927,7 @@ def _select_backend(cfg: dict) -> None:
     cfg["translation_port"] = bi["dp"]
     save_config(cfg)
     success(f"Backend: {bi['name']}  ({bi['dh']}:{bi['dp']})")
-    print(f"\n  {C.WHITE}Installation:{C.RESET}")
+    print(f"\n  {C.BOLD}Installation:{C.RESET}")
     for line in bi["inst"].split("\n"):
         print(f"  {line}")
     pause()
@@ -985,7 +1012,7 @@ def _manage_model(cfg: dict) -> None:
                     )
                     bullet(f"{m}{act}")
 
-        ch = ask_choice(
+        ch = ask_arrow(
             "Options:",
             [
                 ("Change model name", "Enter model name manually"),
@@ -1020,6 +1047,7 @@ def _manage_model(cfg: dict) -> None:
                             ["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                         )
                         import time
+
                         time.sleep(3)
                     except Exception:
                         error("Could not start Ollama")
@@ -1037,7 +1065,7 @@ def _manage_model(cfg: dict) -> None:
                 pause()
                 continue
             fo = [(f"{f.name} ({f.stat().st_size / GiB:.2f} GB)", None) for f in gf] + [("Back", None)]
-            fc = ask_choice("Select:", fo, default=len(fo) - 1)
+            fc = ask_arrow("Select:", fo, default=len(fo) - 1)
             if 0 <= fc < len(gf):
                 cfg["gguf_model_path"] = str(gf[fc])
                 cfg["translation_model"] = gf[fc].stem
@@ -1104,9 +1132,16 @@ def _menu_pydeps() -> None:
         if ask_yn("Install romanization libraries? (recommended)"):
             _check_pip()
             r = _run(
-                [sys.executable, "-m", "pip", "install",
-                 "pykakasi==2.3.0", "pypinyin==0.55.0",
-                 "-q", "--no-warn-script-location"],
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "pykakasi==2.3.0",
+                    "pypinyin==0.55.0",
+                    "-q",
+                    "--no-warn-script-location",
+                ],
                 timeout=120,
             )
             if r.returncode == 0:
@@ -1234,14 +1269,20 @@ def settings_menu(cfg: dict) -> None:
                 [f"{C.MAGENTA}TL Address{C.RESET}", f"{cfg['translation_host']}:{cfg['translation_port']}"],
                 [f"{C.MAGENTA}TL Model{C.RESET}", cfg.get("translation_model", "—")],
                 ["", ""],
-                [f"{C.CYAN}Chunk Duration{C.RESET}",
-                 f"{cfg['chunk_duration']}s (audio processed in this many seconds at a time)"],
-                [f"{C.DIM}Word Timestamps{C.RESET}",
-                 f"{C.DIM}{'Yes' if cfg['word_timestamps'] else 'No'} "
-                 f"(no effect — server overrides for music optimization){C.RESET}"],
-                [f"{C.DIM}Pause Threshold{C.RESET}",
-                 f"{C.DIM}{cfg['pause_threshold']}s "
-                 f"(no effect — requires word_timestamps which is forced off){C.RESET}"],
+                [
+                    f"{C.CYAN}Chunk Duration{C.RESET}",
+                    f"{cfg['chunk_duration']}s (audio processed in this many seconds at a time)",
+                ],
+                [
+                    f"{C.DIM}Word Timestamps{C.RESET}",
+                    f"{C.DIM}{'Yes' if cfg['word_timestamps'] else 'No'} "
+                    f"(no effect — server overrides for music optimization){C.RESET}",
+                ],
+                [
+                    f"{C.DIM}Pause Threshold{C.RESET}",
+                    f"{C.DIM}{cfg['pause_threshold']}s "
+                    f"(no effect — requires word_timestamps which is forced off){C.RESET}",
+                ],
                 ["", ""],
                 [f"{C.YELLOW}YouTube Auth{C.RESET}", ym],
             ],
@@ -1249,7 +1290,7 @@ def settings_menu(cfg: dict) -> None:
             title="Current Settings",
         )
 
-        ch = ask_choice(
+        ch = ask_arrow(
             "Change:",
             [
                 ("Whisper settings", "Speech recognition model, device, precision"),
@@ -1331,7 +1372,7 @@ def _set_whisper(cfg: dict) -> None:
     info(f"Current model: {C.BOLD}{cfg['whisper_model']}{C.RESET}")
     info(f"Recommendation: {rec_model} ({rec_reason})")
 
-    ch = ask_choice(
+    ch = ask_arrow(
         "What to change:",
         [
             ("Whisper model", f"Currently: {cfg['whisper_model']} — the AI that converts speech to text"),
@@ -1346,7 +1387,7 @@ def _set_whisper(cfg: dict) -> None:
     elif ch == 0:
         _menu_whisper_model(cfg)
     elif ch == 1:
-        dc = ask_choice(
+        dc = ask_arrow(
             "Where should Whisper run?",
             [
                 ("Auto-detect", "Uses GPU if available, falls back to CPU"),
@@ -1362,7 +1403,7 @@ def _set_whisper(cfg: dict) -> None:
         success("Saved!")
         pause()
     elif ch == 2:
-        cc = ask_choice(
+        cc = ask_arrow(
             "Precision (lower = faster but slightly less accurate):",
             [
                 ("Auto", "Let Yume decide based on your hardware"),
@@ -1420,7 +1461,7 @@ def _menu_translation_prompt(cfg: dict) -> None:
         info(f"  {C.CYAN}{default_prompt}{C.RESET}")
 
     print()
-    ch = ask_choice(
+    ch = ask_arrow(
         "Options:",
         [
             ("Edit prompt", "Write your own translation instruction"),
@@ -1522,7 +1563,7 @@ def _menu_romanization_prompt(cfg: dict) -> None:
             info(f"  {C.DIM}{lang}: {prompt[:70]}...{C.RESET}")
 
     print()
-    ch = ask_choice(
+    ch = ask_arrow(
         "Options:",
         [
             ("Edit prompt", "Write your own romanization instruction"),
@@ -1584,9 +1625,7 @@ def _set_addrs(cfg: dict) -> None:
         header("Server Addresses")
         info(f"Whisper:     {C.CYAN}{cfg['whisper_host']}:{cfg['whisper_port']}{C.RESET}")
         info(f"Translation: {C.CYAN}{cfg['translation_host']}:{cfg['translation_port']}{C.RESET}")
-        ch = ask_choice(
-            "Change:", [("Whisper address", None), ("Translation address", None), ("Back", None)], default=2
-        )
+        ch = ask_arrow("Change:", [("Whisper address", None), ("Translation address", None), ("Back", None)], default=2)
         if ch == -1 or ch == 2:
             return
         elif ch == 0:

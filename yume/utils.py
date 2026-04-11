@@ -27,7 +27,7 @@ MiB = 1024**2
 GiB = 1024**3
 
 # Injected at runtime by pocket_yume.py — avoids importing VERSION from there
-VERSION = "0.0.8"
+VERSION = "0.0.9"
 
 
 def _run(cmd: list, timeout: int = 30, **kw) -> subprocess.CompletedProcess:

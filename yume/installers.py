@@ -468,9 +468,15 @@ def install_llamacpp_python() -> bool:
         if IS_WIN:
             installed = _pip_install_with_progress(
                 [
-                    sys.executable, "-m", "pip", "install", "llama-cpp-python",
-                    "--extra-index-url", "https://abetlen.github.io/llama-cpp-python/whl/cu124",
-                    "-q", "--no-warn-script-location",
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "llama-cpp-python",
+                    "--extra-index-url",
+                    "https://abetlen.github.io/llama-cpp-python/whl/cu124",
+                    "-q",
+                    "--no-warn-script-location",
                 ],
                 "Installing llama-cpp-python (CUDA prebuilt)",
             )
@@ -480,7 +486,16 @@ def install_llamacpp_python() -> bool:
             env = os.environ.copy()
             env["CMAKE_ARGS"] = "-DGGML_CUDA=on"
             installed = _pip_install_with_progress(
-                [sys.executable, "-m", "pip", "install", "llama-cpp-python", "--force-reinstall", "--no-cache-dir", "-q"],
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "llama-cpp-python",
+                    "--force-reinstall",
+                    "--no-cache-dir",
+                    "-q",
+                ],
                 "Building llama-cpp-python (CUDA from source)",
                 env=env,
             )
@@ -508,8 +523,14 @@ def install_llamacpp_python() -> bool:
     if not installed:
         installed = _pip_install_with_progress(
             [
-                sys.executable, "-m", "pip", "install", "llama-cpp-python",
-                "--extra-index-url", "https://abetlen.github.io/llama-cpp-python/whl/cpu",
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "llama-cpp-python",
+                "--extra-index-url",
+                "https://abetlen.github.io/llama-cpp-python/whl/cpu",
+                "-q",
                 "--no-warn-script-location",
             ],
             "Installing llama-cpp-python (prebuilt CPU)",
@@ -528,10 +549,17 @@ def install_llamacpp_python() -> bool:
         try:
             r = _run(
                 [
-                    sys.executable, "-m", "pip", "install",
-                    "uvicorn==0.42.0", "fastapi==0.135.1", "sse-starlette==3.3.3",
-                    "starlette-context==0.5.1", "pydantic-settings==2.13.1",
-                    "-q", "--no-warn-script-location",
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "uvicorn==0.42.0",
+                    "fastapi==0.135.1",
+                    "sse-starlette==3.3.3",
+                    "starlette-context==0.5.1",
+                    "pydantic-settings==2.13.1",
+                    "-q",
+                    "--no-warn-script-location",
                 ],
                 timeout=300,
             )

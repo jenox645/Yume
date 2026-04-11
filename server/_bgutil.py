@@ -29,6 +29,7 @@ def is_bgutil_server_ready():
     """Return True if the bgutil HTTP server is responding on port 4416."""
     try:
         import urllib.request
+
         resp = urllib.request.urlopen(f"http://127.0.0.1:{BGUTIL_PORT}/ping", timeout=3)
         return resp.status == 200
     except Exception:
@@ -55,6 +56,7 @@ def setup_bgutil_server():
     zip_path = repo_parent / "bgutil-ytdlp-pot-provider.zip"
     try:
         import urllib.request
+
         url = "https://github.com/Brainicism/bgutil-ytdlp-pot-provider/archive/refs/tags/1.3.1.zip"
         print("  bgutil server:    downloading from GitHub...")
         urllib.request.urlretrieve(url, str(zip_path))
@@ -64,6 +66,7 @@ def setup_bgutil_server():
 
     try:
         import zipfile
+
         with zipfile.ZipFile(str(zip_path), "r") as zf:
             # Guard against zip-slip path traversal
             repo_parent_resolved = repo_parent.resolve()
@@ -151,7 +154,8 @@ def start_bgutil_server():
     try:
         _bgutil_proc = subprocess.Popen(
             [
-                "deno", "run",
+                "deno",
+                "run",
                 "--no-prompt",
                 "--allow-env",
                 "--allow-net",
@@ -159,7 +163,8 @@ def start_bgutil_server():
                 "--allow-read=.",
                 "--allow-sys",
                 main_rel,
-                "--port", str(BGUTIL_PORT),
+                "--port",
+                str(BGUTIL_PORT),
             ],
             cwd=cwd,
             stdout=subprocess.PIPE,

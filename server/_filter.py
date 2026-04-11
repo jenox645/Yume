@@ -93,6 +93,7 @@ SINGLE_WORD_BLOCKLIST = ["music", "mm", "hmm"]  # vocal sounds (la/na/da/oh/ah a
 
 # ── Detection logic ───────────────────────────────────────────────────────────
 
+
 def is_hallucination(text):
     """Return True if text looks like a Whisper hallucination."""
     t = text.strip()

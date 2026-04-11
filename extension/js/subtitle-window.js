@@ -1,5 +1,5 @@
 // ============================================================================
-// SUBTITLE WINDOW v0.0.8 - Chunk counter, ready toast, per-line fonts
+// SUBTITLE WINDOW v0.0.9 - Chunk counter, ready toast, per-line fonts
 // ============================================================================
 
 // eslint-disable-next-line no-redeclare

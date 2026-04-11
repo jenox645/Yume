@@ -13,7 +13,7 @@ import threading
 
 
 # ── pykakasi (Japanese kanji → romaji) ───────────────────────────────────────
-_kakasi = None           # pykakasi.kakasi instance, or None
+_kakasi = None  # pykakasi.kakasi instance, or None
 _kakasi_checked = False  # True after the first load attempt
 _kakasi_lock = threading.Lock()
 
@@ -26,6 +26,7 @@ def get_kakasi():
             _kakasi_checked = True
             try:
                 import pykakasi
+
                 print(f"[Yume] pykakasi found at {pykakasi.__file__}")
                 _kakasi = pykakasi.kakasi()
                 print("[Yume] pykakasi loaded — deterministic Japanese romanization enabled")
@@ -60,6 +61,7 @@ def romanize_chinese(text):
     """Convert Chinese text to pinyin using pypinyin. ~1 ms."""
     try:
         from pypinyin import pinyin, Style
+
         result = pinyin(text, style=Style.TONE)
         return " ".join(p[0] for p in result).strip()
     except ImportError:
@@ -76,6 +78,7 @@ def romanize_korean(text):
     """
     try:
         from romanization import romanize as kr_romanize  # type: ignore[import-not-found]
+
         return kr_romanize(text)
     except ImportError:
         return None

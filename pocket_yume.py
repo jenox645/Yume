@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pocket Yume CLI v0.0.8 -- Cross-platform installer & launcher for Yume AI Subtitles
+Pocket Yume CLI v0.0.9 -- Cross-platform installer & launcher for Yume AI Subtitles
 Complete rewrite: smart port management, API token auth, Windows cp1252 fix
 Supports: Windows, Linux, macOS
 """
@@ -44,7 +44,7 @@ from config import (  # noqa: E402
 # Japanese text may appear in logs. Wrapping stdout here breaks ANSI
 # color rendering on Windows terminals.
 
-VERSION = "0.0.8"
+VERSION = "0.0.9"
 
 KiB = 1024
 MiB = 1024**2
@@ -260,9 +260,9 @@ def main_menu() -> None:
                 f"  {C.YELLOW}⬆{C.RESET}  Update available: v{_update_result[0]}  {C.DIM}{_update_result[1]}{C.RESET}"
             )
 
-        from yume.ui import ask_choice
+        from yume.ui import ask_arrow
 
-        ch = ask_choice(
+        ch = ask_arrow(
             "What would you like to do?",
             [
                 ("Launch Yume", "Start servers + runtime menu"),

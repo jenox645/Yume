@@ -8,7 +8,7 @@
 
 Transcription · Translation · Romanization
 
-[![Version](https://img.shields.io/badge/version-0.0.8-blue)]()
+![Version](https://img.shields.io/badge/version-0.0.9-blue)
 [![Python](https://img.shields.io/badge/python-3.10+-green)]()
 [![Chrome](https://img.shields.io/badge/chrome-MV3-yellow)]()
 [![Firefox](https://img.shields.io/badge/firefox-MV3-orange)]()
@@ -243,7 +243,7 @@ YouTube blocks automated downloads to prevent bots. Yume supports two methods:
 <details>
 <summary><strong>Changelog</strong></summary>
 
-### v0.0.8
+### v0.0.9
 
 - Fixed "Ready" before subtitles exist, URL blocking `&`, first 30s skipped, hallucination filter dropping real lyrics, chunk badge wrong count, pipeline stopping 1-2 chunks early.
 - Improved speech detection after silence (`no_speech_threshold` 0.3). Faster server startup (background thread). Parallel translate+romanize (`Promise.all`).

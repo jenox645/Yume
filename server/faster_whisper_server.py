@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Yume -- Faster-Whisper Server v0.0.8
+Yume -- Faster-Whisper Server v0.0.9
 Word-level timestamps + pause re-splitting + security hardening
 Parallel startup: Flask starts before model loads. Prewarm inference on load.
 All output is ASCII-safe for Windows cp932/cp1252 locales.
@@ -104,6 +104,7 @@ def _cleanup_request_temps(_exception):
 
 # ── Startup cleanup ───────────────────────────────────────────────────────────
 
+
 def _cleanup_stale_temps():
     """Clean orphaned yume_* temp dirs from previous crashed instances."""
     tmp = tempfile.gettempdir()
@@ -139,6 +140,7 @@ def _shutdown_handler(signum, frame):
 
 # ── GPU stats ─────────────────────────────────────────────────────────────────
 
+
 def _get_gpu_stats():
     """Get GPU VRAM and utilisation via nvidia-smi. Returns dict or None."""
     try:
@@ -169,20 +171,17 @@ def _get_gpu_stats():
 
 # ── Routes: health & status ───────────────────────────────────────────────────
 
+
 @app.route("/health", methods=["GET"])
 def health():
     """Minimal unauthenticated response for discovery; full info for token holders."""
     origin = request.headers.get("Origin", "")
-    safe_caller = (
-        (not origin)
-        or origin.startswith("chrome-extension://")
-        or origin.startswith("moz-extension://")
-    )
+    safe_caller = (not origin) or origin.startswith("chrome-extension://") or origin.startswith("moz-extension://")
 
     is_ready = _state.model is not None
     base = {
         "status": "ready" if is_ready else "loading",
-        "version": "0.0.8",
+        "version": "0.0.9",
         "prepare_supported": True,
         "ytdlp_available": _audio.check_ytdlp(),
     }
@@ -252,6 +251,7 @@ def get_config():
 
 # ── Route: model hot-swap ─────────────────────────────────────────────────────
 
+
 @app.route("/model/switch", methods=["POST"])
 def switch_model():
     """Hot-swap the Whisper model without restarting the server."""
@@ -261,9 +261,21 @@ def switch_model():
         return jsonify({"error": "Missing 'model' field"}), 400
 
     valid_models = [
-        "tiny", "tiny.en", "base", "base.en", "small", "small.en",
-        "medium", "medium.en", "large-v1", "large-v2", "large-v3",
-        "turbo", "large-v3-turbo", "distil-large-v2", "distil-large-v3",
+        "tiny",
+        "tiny.en",
+        "base",
+        "base.en",
+        "small",
+        "small.en",
+        "medium",
+        "medium.en",
+        "large-v1",
+        "large-v2",
+        "large-v3",
+        "turbo",
+        "large-v3-turbo",
+        "distil-large-v2",
+        "distil-large-v3",
     ]
 
     is_local_path = os.path.sep in new_model or "/" in new_model
@@ -310,6 +322,7 @@ def switch_model():
 
 # ── Route: translation model discovery ───────────────────────────────────────
 
+
 @app.route("/translation/models", methods=["GET"])
 def list_translation_models():
     """Query the translation backend for available models."""
@@ -319,6 +332,7 @@ def list_translation_models():
     try:
         if _state.translation_backend == "ollama":
             import urllib.request
+
             req = urllib.request.Request(f"http://{_state.translation_host}:{_state.translation_port}/api/tags")
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read())
@@ -326,6 +340,7 @@ def list_translation_models():
                     models.append({"id": m["name"], "name": m["name"], "size": m.get("size", 0)})
         else:
             import urllib.request
+
             req = urllib.request.Request(f"{url}/v1/models")
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read())
@@ -347,15 +362,14 @@ def list_translation_models():
             "models": models,
             "local_ggufs": ggufs,
             "note": (
-                "llama.cpp requires server restart to switch models"
-                if _state.translation_backend == "llamacpp"
-                else ""
+                "llama.cpp requires server restart to switch models" if _state.translation_backend == "llamacpp" else ""
             ),
         }
     )
 
 
 # ── Routes: prepare (download full audio) ────────────────────────────────────
+
 
 @app.route("/prepare", methods=["POST", "OPTIONS"])
 def prepare():
@@ -410,6 +424,7 @@ def prepare():
 
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
@@ -447,10 +462,19 @@ def prepare_direct():
 
         result = subprocess.run(
             [
-                "ffmpeg", "-y",
-                "-protocol_whitelist", _state.FFMPEG_PROTOCOL_WHITELIST,
-                "-i", stream_url,
-                "-vn", "-ar", "16000", "-ac", "1", "-f", "wav",
+                "ffmpeg",
+                "-y",
+                "-protocol_whitelist",
+                _state.FFMPEG_PROTOCOL_WHITELIST,
+                "-i",
+                stream_url,
+                "-vn",
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-f",
+                "wav",
                 output_path,
             ],
             capture_output=True,
@@ -464,11 +488,18 @@ def prepare_direct():
             result = subprocess.run(
                 [
                     *_audio.ytdlp_cmd(),
-                    "-x", "--audio-format", "wav",
-                    "--postprocessor-args", _state.FFMPEG_AUDIO_OPTS,
-                    "--no-playlist", "--no-cache-dir", "--no-exec",
-                    "-o", output_template,
-                    "--", stream_url,
+                    "-x",
+                    "--audio-format",
+                    "wav",
+                    "--postprocessor-args",
+                    _state.FFMPEG_AUDIO_OPTS,
+                    "--no-playlist",
+                    "--no-cache-dir",
+                    "--no-exec",
+                    "-o",
+                    output_template,
+                    "--",
+                    stream_url,
                 ],
                 capture_output=True,
                 text=True,
@@ -494,16 +525,21 @@ def prepare_direct():
 
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 
 # ── Routes: transcription ─────────────────────────────────────────────────────
 
+
 @app.route("/transcribe_url", methods=["POST", "OPTIONS"])
 def transcribe_url():
     if request.method == "OPTIONS":
         return "", 204
+
+    if _state.model is None:
+        return jsonify({"error": "Model is still loading. Retry shortly."}), 503
 
     try:
         data = request.get_json()
@@ -579,10 +615,7 @@ def transcribe_url():
                 pass
 
         raw_count = len(result.get("segments", []))
-        trimmed = [
-            seg for seg in result.get("segments", [])
-            if (owned_start - 0.3) <= seg["start"] < (owned_end + 0.5)
-        ]
+        trimmed = [seg for seg in result.get("segments", []) if (owned_start - 0.3) <= seg["start"] < (owned_end + 0.5)]
 
         result["segments"] = trimmed
         result["text"] = " ".join(s["text"] for s in trimmed)
@@ -606,6 +639,7 @@ def transcribe_url():
 
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
@@ -614,6 +648,9 @@ def transcribe_url():
 def transcribe():
     if request.method == "OPTIONS":
         return "", 204
+
+    if _state.model is None:
+        return jsonify({"error": "Model is still loading. Retry shortly."}), 503
 
     try:
         import base64
@@ -647,11 +684,13 @@ def transcribe():
 
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 
 # ── Routes: romanization ──────────────────────────────────────────────────────
+
 
 @app.route("/romanize", methods=["POST", "OPTIONS"])
 def romanize():
@@ -716,6 +755,7 @@ def romanize_batch():
 
 # ── Routes: hallucination filter ──────────────────────────────────────────────
 
+
 @app.route("/hallucination_patterns", methods=["GET"])
 def get_hallucination_patterns():
     """Server-authoritative hallucination patterns — client fetches at startup."""
@@ -755,6 +795,7 @@ def get_blacklist():
 
 # ── Routes: cache management ──────────────────────────────────────────────────
 
+
 @app.route("/cache/clear", methods=["POST"])
 def clear_cache():
     with _state.prefetch_lock:
@@ -778,6 +819,7 @@ def cache_status():
 
 # ── main() ────────────────────────────────────────────────────────────────────
 
+
 def main():
     _cleanup_stale_temps()
     signal.signal(signal.SIGTERM, _shutdown_handler)
@@ -799,14 +841,23 @@ def main():
 
     print("")
     print(f"  Listening on http://localhost:{args.port}  (status: loading)")
-    print("  Loading Whisper model...")
+    print("  Loading Whisper model in background thread...")
     print("")
 
     # Pre-load kakasi dictionary in background to hide its 30-120 s startup cost
     # (Windows Defender scans each file in the dictionary).
     threading.Thread(target=lambda: _romanize.get_kakasi(), daemon=True).start()
 
-    _load_model(args, server_thread)
+    # Load model in a background thread so the server is immediately responsive.
+    # /health returns {"status": "loading"} until the model is ready.
+    # Transcription endpoints return 503 while the model is loading.
+    threading.Thread(target=_load_model, args=(args, server_thread), daemon=True, name="model-loader").start()
+
+    # Block the main thread to keep the process alive (Flask runs in server_thread).
+    try:
+        server_thread.join()
+    except KeyboardInterrupt:
+        pass
 
 
 def _setup_windows_console_handler():
@@ -889,10 +940,12 @@ def _apply_config(args):
     if _state.device == "auto":
         try:
             import ctranslate2
+
             _state.device = "cuda" if "cuda" in ctranslate2.get_supported_compute_types("cuda") else "cpu"
         except Exception:
             try:
                 import torch
+
                 _state.device = "cuda" if torch.cuda.is_available() else "cpu"
             except ImportError:
                 try:
@@ -907,7 +960,7 @@ def _apply_config(args):
 
 def _print_startup_banner(args):
     print("=" * 70)
-    print("  YUME -- Whisper Server v0.0.8")
+    print("  YUME -- Whisper Server v0.0.9")
     print("=" * 70)
     print(f"  Model:            {_state.model_name}")
     print(f"  Device:           {_state.device}")
@@ -926,19 +979,23 @@ def _print_startup_banner(args):
     roma_parts = []
     try:
         import pykakasi  # noqa: F401
+
         roma_parts.append("ja(pykakasi)")
     except Exception as e:
         import site
+
         paths = site.getsitepackages() if hasattr(site, "getsitepackages") else ["(no site-packages)"]
         print(f"  [roma] pykakasi import failed: {type(e).__name__}: {e}")
         print(f"  [roma] site-packages: {paths[0] if paths else '?'}")
     try:
         from pypinyin import pinyin  # noqa: F401
+
         roma_parts.append("zh(pypinyin)")
     except ImportError:
         pass
     try:
         from romanization import romanize  # noqa: F401  # type: ignore[import-not-found]
+
         roma_parts.append("ko(romanization)")
     except ImportError:
         pass
@@ -962,10 +1019,14 @@ def _print_startup_banner(args):
         try:
             if not shutil.which("ffmpeg"):
                 results.append(
-                    ("ffmpeg", None, [
-                        "  WARNING: ffmpeg not found in PATH!",
-                        "  Audio slicing will fail. Run the setup wizard to install ffmpeg.",
-                    ])
+                    (
+                        "ffmpeg",
+                        None,
+                        [
+                            "  WARNING: ffmpeg not found in PATH!",
+                            "  Audio slicing will fail. Run the setup wizard to install ffmpeg.",
+                        ],
+                    )
                 )
             else:
                 v = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, timeout=10)
@@ -1091,9 +1152,11 @@ def _write_token_file(args):
 
 def _start_flask_thread(port):
     """Start the Flask/Waitress server in a daemon thread. Returns the thread."""
+
     def _start_server():
         try:
             from waitress import serve
+
             print("  Server:           Waitress (production)")
             print("")
             serve(app, host="127.0.0.1", port=port, threads=4, channel_timeout=300, recv_bytes=65536)
@@ -1116,6 +1179,7 @@ def _load_model(args, server_thread):
             print("  Prewarm:          skipped (use --prewarm to enable)")
         else:
             import numpy as np
+
             _dummy = np.zeros(16000, dtype=np.float32)
             try:
                 list(_state.model.transcribe(_dummy, language="en"))

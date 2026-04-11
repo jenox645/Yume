@@ -1,4 +1,4 @@
-"""Integration tests for Yume v0.0.8.
+"""Integration tests for Yume v0.0.9.
 
 These tests verify that config options actually affect behavior.
 They exist because of the deno incident: youtube_auth_method="deno"
