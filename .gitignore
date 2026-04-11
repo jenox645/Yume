@@ -81,3 +81,4 @@ extension/fonts/README.md
 
 # ── Claude Code session data (machine-specific, not project docs) ──
 .claude/
+CLAUDE.md

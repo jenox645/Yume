@@ -213,13 +213,7 @@ def enable_ansi() -> None:
 
 
 def clear() -> None:
-    import subprocess
-
-    if IS_WIN:
-        subprocess.run(["cmd", "/c", "cls"], capture_output=True)  # nosec B603
-    else:
-        sys.stdout.write("\033[2J\033[H")
-        sys.stdout.flush()
+    os.system("cls" if IS_WIN else "clear")
 
 
 def tw() -> int:
@@ -231,7 +225,7 @@ def center(t: str) -> str:
 
 
 def gold_hr() -> None:
-    print(f"{C.GOLD}{'=' * tw()}{C.RESET}")
+    print(f"{C.GOLD}{'─' * tw()}{C.RESET}")
 
 
 def header(sub: str | None = None, version: str = "") -> None:
@@ -258,7 +252,7 @@ def header(sub: str | None = None, version: str = "") -> None:
 
 def section(t: str) -> None:
     w = max(1, tw() - len(t) - 8)
-    print(f"\n  {C.GOLD}--- {C.BOLD}{t} {C.GOLD}{'-' * w}{C.RESET}\n")
+    print(f"\n  {C.GOLD}─── {C.BOLD}{t} {C.GOLD}{'─' * w}{C.RESET}\n")
 
 
 def info(m: str) -> None:
@@ -356,9 +350,9 @@ def _read_byte_nonblock(fd: int) -> bytes:
 
 
 def ask_arrow(prompt: str, options: list, default: int = 0, allow_back: bool = True) -> int:
-    """Arrow-key navigated selection menu.
+    """Arrow-key + number-key navigated selection menu.
 
-    ↑↓ navigate, Enter select, Esc go back (-1).
+    ↑↓ navigate, 1-9 jump to item, Enter select, Esc go back (-1).
     Falls back to ask_choice() when stdin is not a TTY or raw mode is unavailable.
     """
     if not options:
@@ -369,19 +363,26 @@ def ask_arrow(prompt: str, options: list, default: int = 0, allow_back: bool = T
         return ask_choice(prompt, options, default, allow_back)
 
     sel = max(0, min(default, len(options) - 1))
+    # Whether any option has a description — used to maintain constant menu height.
+    has_any_desc = any(desc for _, desc in options)
 
     def _render() -> int:
         """Render menu to stdout; return number of \\n chars written (for cursor rewind)."""
         out = []
         out.append(f"\n  {C.GOLD}?{C.RESET}  {prompt}\n\n")
         for i, (label, desc) in enumerate(options):
+            num = f"{C.DIM}{i + 1}.{C.RESET} " if i < 9 else "   "
             if i == sel:
-                out.append(f"  {C.GREEN}\u25b6{C.RESET} {C.BOLD}{label}{C.RESET}\n")
-                if desc:
-                    out.append(f"      {C.DIM}{desc}{C.RESET}\n")
+                out.append(f"  {C.GREEN}\u25b6{C.RESET} {num}{C.BOLD}{label}{C.RESET}\n")
             else:
-                out.append(f"    {label}\n")
-        hint = "\u2191\u2193 navigate  Enter select"
+                out.append(f"    {num}{label}\n")
+            # Always allocate a desc line to keep height constant; blank for non-selected.
+            if has_any_desc:
+                if i == sel and desc:
+                    out.append(f"      {C.DIM}{desc}{C.RESET}\n")
+                else:
+                    out.append("\n")
+        hint = "\u2191\u2193 navigate  1-9 jump  Enter select"
         if allow_back:
             hint += "  Esc back"
         out.append(f"\n  {C.DIM}{hint}{C.RESET}")
@@ -394,6 +395,18 @@ def ask_arrow(prompt: str, options: list, default: int = 0, allow_back: bool = T
         """Move cursor up n lines and clear to end of screen."""
         sys.stdout.write(f"\r\033[{n}A\033[J")
         sys.stdout.flush()
+
+    def _handle_digit(digit_byte: bytes) -> bool:
+        """Handle a numeric digit key press. Moves cursor to 1-indexed option. Returns True if redraw needed."""
+        nonlocal sel
+        try:
+            idx = int(digit_byte.decode()) - 1
+            if 0 <= idx < len(options):
+                sel = idx
+                return True
+        except (ValueError, UnicodeDecodeError):
+            pass
+        return False
 
     if IS_WIN:
         try:
@@ -424,6 +437,10 @@ def ask_arrow(prompt: str, options: list, default: int = 0, allow_back: bool = T
                     return -1 if allow_back else sel
                 elif ch == b"\x03":
                     raise KeyboardInterrupt
+                elif ch.isdigit():
+                    if _handle_digit(ch):
+                        _clear(n)
+                        n = _render()
         except KeyboardInterrupt:
             sys.stdout.write("\n")
             sys.stdout.flush()
@@ -473,6 +490,12 @@ def ask_arrow(prompt: str, options: list, default: int = 0, allow_back: bool = T
                 elif b in (b"\x03", b"\x04"):  # Ctrl+C / Ctrl+D
                     termios.tcsetattr(fd, termios.TCSANOW, old)
                     raise KeyboardInterrupt
+                elif b.isdigit():
+                    if _handle_digit(b):
+                        termios.tcsetattr(fd, termios.TCSANOW, old)
+                        _clear(n)
+                        n = _render()
+                        tty.setraw(fd)
         except KeyboardInterrupt:
             try:
                 termios.tcsetattr(fd, termios.TCSANOW, old)

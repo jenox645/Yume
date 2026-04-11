@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import os
 import platform
 import re
 import sys
+import time
 from pathlib import Path
 
 from yume.hardware import detect_gpu, detect_ram_gb, disk_free_gb, recommend_whisper_model
@@ -25,6 +27,11 @@ EXT_DIR = BASE_DIR / "extension"
 # Populated by pocket_yume at startup via set_backend_info()
 _BI: dict = {}
 
+# 30-second hardware info cache — avoids re-calling nvidia-smi on every status render
+_hw_cache: dict | None = None
+_hw_cache_ts: float = 0.0
+_HW_CACHE_TTL = 30.0
+
 
 def set_backend_info(bi: dict) -> None:
     """Inject the BACKEND_INFO dict from pocket_yume at startup."""
@@ -33,117 +40,150 @@ def set_backend_info(bi: dict) -> None:
 
 
 def health_check(cfg: dict) -> None:
-    """Comprehensive health check — tests every component end-to-end."""
+    """Comprehensive health check — all checks run in parallel for speed."""
     from config import DEFAULT_TRANSLATION_PORT, DEFAULT_WHISPER_PORT, load_config
     from yume.utils import _run
 
     header("Health Check")
-    results = []
+    info(f"{C.DIM}Running checks in parallel...{C.RESET}")
+    print()
 
-    # 1. System resources
-    gpu = detect_gpu()
-    ram = detect_ram_gb()
-    disk = disk_free_gb()
-    results.append(("GPU detection", True, gpu["name"] or "CPU mode"))
-    results.append(("RAM ≥ 4 GB", ram >= 4, f"{ram:.1f} GB"))
-    results.append(("Disk ≥ 5 GB", disk >= 5, f"{disk:.1f} GB free"))
+    # ── Define individual check functions (run concurrently) ──────────────────
 
-    # 2. Tools
-    for t in ["yt-dlp", "ffmpeg", "ffprobe"]:
+    def _chk_system():
+        gpu = detect_gpu()
+        ram = detect_ram_gb()
+        disk = disk_free_gb()
+        return [
+            ("GPU detection", True, gpu["name"] or "CPU mode"),
+            ("RAM ≥ 4 GB", ram >= 4, f"{ram:.1f} GB"),
+            ("Disk ≥ 5 GB", disk >= 5, f"{disk:.1f} GB free"),
+        ]
+
+    def _chk_tool(t):
         p = find_tool(t)
         if p:
             r = _run([p, "--version" if t == "yt-dlp" else "-version"], timeout=5)
-            if r.returncode == 0:
-                results.append((f"{t} installed", True, p))
-            else:
-                results.append((f"{t} installed", False, f"found at {p} but fails to run"))
-        else:
-            results.append((f"{t} installed", False, "not found"))
-    dn = find_tool("deno")
-    if cfg.get("youtube_auth_method") != "cookies":
-        results.append(("deno installed", dn is not None, dn or "not found (needed for YouTube)"))
+            ok = r.returncode == 0
+            return (f"{t} installed", ok, p if ok else f"found at {p} but fails to run")
+        return (f"{t} installed", False, "not found")
 
-    # 3. Python packages
-    pip_r = _run([sys.executable, "-m", "pip", "--version"], timeout=10)
-    results.append(
-        (
-            "pip available",
-            pip_r.returncode == 0,
-            pip_r.stdout.split()[1] if pip_r.returncode == 0 else "not found — install python3-pip",
-        )
-    )
-    for pkg, name in [
-        ("faster_whisper", "faster-whisper"),
-        ("flask", "Flask"),
-        ("flask_cors", "Flask-CORS"),
-        ("llama_cpp", "llama-cpp-python"),
-    ]:
+    def _chk_deno():
+        dn = find_tool("deno")
+        if cfg.get("youtube_auth_method") != "cookies":
+            return [("deno installed", dn is not None, dn or "not found (needed for YouTube)")]
+        return []
+
+    def _chk_pip():
+        r = _run([sys.executable, "-m", "pip", "--version"], timeout=10)
+        ver = r.stdout.split()[1] if r.returncode == 0 else "not found — install python3-pip"
+        return ("pip available", r.returncode == 0, ver)
+
+    def _chk_pkg(pkg, name):
         try:
             __import__(pkg)
-            results.append((f"{name}", True, "installed"))
+            return (name, True, "installed")
         except ImportError:
-            results.append((f"{name}", False, "not installed"))
+            return (name, False, "not installed")
 
-    # Romanization libraries (optional)
-    roma_libs = [
-        ("pykakasi", "Japanese romaji (kanji→reading)"),
-        ("pypinyin", "Chinese pinyin"),
-    ]
-    roma_installed = 0
-    for pkg, desc in roma_libs:
+    def _chk_roma(pkg, desc):
         try:
             __import__(pkg)
-            results.append((f"{pkg}", True, f"installed — {desc}"))
-            roma_installed += 1
+            return (pkg, True, f"installed — {desc}")
         except ImportError:
-            results.append((f"{pkg}", True, f"not installed (optional) — {desc}"))
-    if roma_installed == 0:
-        info(f"\n  {C.DIM}Tip: Install romanization libraries for instant romaji/pinyin:{C.RESET}")
-        info(f"  {C.CYAN}pip install pykakasi pypinyin{C.RESET}")
-        info(f"  {C.DIM}Without them, Yume uses the LLM for romanization (slower).{C.RESET}")
-        info(f"  {C.DIM}Japanese kana→romaji works without libraries (WanaKana, bundled).{C.RESET}")
-        info(f"  {C.DIM}Only kanji readings need pykakasi.{C.RESET}\n")
+            return (pkg, True, f"not installed (optional) — {desc}")
 
-    # 4. Config validity
-    c = load_config()
-    results.append(("Config loadable", bool(c), "OK" if c else "corrupted"))
-    wp = c.get("whisper_port", DEFAULT_WHISPER_PORT)
-    tp = c.get("translation_port", DEFAULT_TRANSLATION_PORT)
-    results.append(("Ports different", wp != tp, f"whisper:{wp} translation:{tp}"))
+    def _chk_config():
+        c = load_config()
+        wp = c.get("whisper_port", DEFAULT_WHISPER_PORT)
+        tp = c.get("translation_port", DEFAULT_TRANSLATION_PORT)
+        rows = [
+            ("Config loadable", bool(c), "OK" if c else "corrupted"),
+            ("Ports different", wp != tp, f"whisper:{wp} translation:{tp}"),
+            (f"Whisper port {wp} free", is_port_free(wp), "available" if is_port_free(wp) else "in use"),
+            (f"Translation port {tp} free", is_port_free(tp), "available" if is_port_free(tp) else "in use"),
+        ]
+        return rows, c, wp, tp
 
-    # 5. Port availability
-    results.append((f"Whisper port {wp} free", is_port_free(wp), "available" if is_port_free(wp) else "in use"))
-    results.append((f"Translation port {tp} free", is_port_free(tp), "available" if is_port_free(tp) else "in use"))
-
-    # 6. Live server connectivity
-    if not is_port_free(wp):
+    def _chk_whisper_srv(c, wp):
+        if is_port_free(wp):
+            return None
         ws = check_server(c.get("whisper_host", "127.0.0.1"), wp, "/health")
         if ws["up"]:
             status = ws.get("data", {}).get("status", "unknown")
-            results.append(("Whisper server responding", True, f"port {wp} — status: {status}"))
-        else:
-            results.append(
-                (
-                    "Whisper server responding",
-                    False,
-                    f"port {wp} in use but /health failed — restart with: python pocket_yume.py launch",
-                )
-            )
-    if not is_port_free(tp):
+            return ("Whisper server responding", True, f"port {wp} — status: {status}")
+        return (
+            "Whisper server responding",
+            False,
+            f"port {wp} in use but /health failed — restart with: python pocket_yume.py launch",
+        )
+
+    def _chk_translation_srv(c, tp):
+        if is_port_free(tp):
+            return None
         bi = _BI.get(c.get("translation_backend", "llamacpp"), _BI.get("custom", {"hp": "/health"}))
         ts = check_translation_server(c.get("translation_host", "127.0.0.1"), tp, bi)
         if ts["up"]:
-            results.append(("Translation server responding", True, f"port {tp} — OK"))
-        else:
-            results.append(
-                (
-                    "Translation server responding",
-                    False,
-                    f"port {tp} in use but not responding — check if your LLM backend is running",
-                )
-            )
+            return ("Translation server responding", True, f"port {tp} — OK")
+        return (
+            "Translation server responding",
+            False,
+            f"port {tp} in use but not responding — check if your LLM backend is running",
+        )
 
-    # 7. Server files
+    # ── Run all checks in parallel ─────────────────────────────────────────────
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+        f_system = ex.submit(_chk_system)
+        f_ytdlp = ex.submit(_chk_tool, "yt-dlp")
+        f_ffmpeg = ex.submit(_chk_tool, "ffmpeg")
+        f_ffprobe = ex.submit(_chk_tool, "ffprobe")
+        f_deno = ex.submit(_chk_deno)
+        f_pip = ex.submit(_chk_pip)
+        f_fw = ex.submit(_chk_pkg, "faster_whisper", "faster-whisper")
+        f_flask = ex.submit(_chk_pkg, "flask", "Flask")
+        f_cors = ex.submit(_chk_pkg, "flask_cors", "Flask-CORS")
+        f_llama = ex.submit(_chk_pkg, "llama_cpp", "llama-cpp-python")
+        f_kakasi = ex.submit(_chk_roma, "pykakasi", "Japanese romaji (kanji→reading)")
+        f_pinyin = ex.submit(_chk_roma, "pypinyin", "Chinese pinyin")
+        f_config = ex.submit(_chk_config)
+
+        # Collect config first (needed for server checks)
+        config_rows, c, wp, tp = f_config.result()
+
+        f_wsrv = ex.submit(_chk_whisper_srv, c, wp)
+        f_tsrv = ex.submit(_chk_translation_srv, c, tp)
+
+        # ── Assemble results in display order ──────────────────────────────────
+        results = []
+        results.extend(f_system.result())
+        results.append(f_ytdlp.result())
+        results.append(f_ffmpeg.result())
+        results.append(f_ffprobe.result())
+        results.extend(f_deno.result())
+        results.append(f_pip.result())
+        results.append(f_fw.result())
+        results.append(f_flask.result())
+        results.append(f_cors.result())
+        results.append(f_llama.result())
+
+        roma_results = [f_kakasi.result(), f_pinyin.result()]
+        roma_installed = sum(1 for _, ok, detail in roma_results if ok and "not installed" not in detail)
+        results.extend(roma_results)
+        if roma_installed == 0:
+            info(f"\n  {C.DIM}Tip: Install romanization libraries for instant romaji/pinyin:{C.RESET}")
+            info(f"  {C.CYAN}pip install pykakasi pypinyin{C.RESET}")
+            info(f"  {C.DIM}Without them, Yume uses the LLM for romanization (slower).{C.RESET}\n")
+
+        results.extend(config_rows)
+
+        ws_result = f_wsrv.result()
+        if ws_result:
+            results.append(ws_result)
+        ts_result = f_tsrv.result()
+        if ts_result:
+            results.append(ts_result)
+
+    # 7. Server files (fast, no need to parallelize)
     ss = SERVER_DIR / "faster_whisper_server.py"
     if not ss.exists():
         ss = BASE_DIR / "faster_whisper_server.py"
@@ -234,12 +274,27 @@ def health_check(cfg: dict) -> None:
 
 def show_status(cfg: dict) -> None:
     """Display system status overview."""
+    global _hw_cache, _hw_cache_ts
+
     from config import DEFAULT_TRANSLATION_PORT
     from yume.network import HEALTH_PATH_OPENAI
     from yume.benchmark import _is_whisper_model_cached
 
     header("System Status")
-    gpu = detect_gpu()
+
+    # Use cached hardware info (30 s TTL) to avoid slow re-detection on every render
+    now = time.monotonic()
+    if _hw_cache is None or (now - _hw_cache_ts) > _HW_CACHE_TTL:
+        _hw_cache = {
+            "gpu": detect_gpu(),
+            "ram": detect_ram_gb(),
+            "disk": disk_free_gb(),
+        }
+        _hw_cache_ts = now
+    gpu = _hw_cache["gpu"]
+    ram = _hw_cache["ram"]
+    disk = _hw_cache["disk"]
+
     if gpu["has_nvidia"]:
         gpu_txt = f"{C.GREEN}{gpu['name']} ({gpu['vram_mb']} MB){C.RESET}"
     elif gpu["has_amd"]:
@@ -247,8 +302,6 @@ def show_status(cfg: dict) -> None:
         gpu_txt = f"{C.CYAN}{gpu['name']}{vr}{C.RESET}"
     else:
         gpu_txt = f"{C.YELLOW}None (CPU mode){C.RESET}"
-    ram = detect_ram_gb()
-    disk = disk_free_gb()
     table(
         ["Component", "Status"],
         [

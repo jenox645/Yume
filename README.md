@@ -245,6 +245,16 @@ YouTube blocks automated downloads to prevent bots. Yume supports two methods:
 
 ### v0.0.9
 
+- CLI: arrow key navigation (`ask_arrow`) with simultaneous number-key jump support; full-screen clear on every menu transition; Unicode `─` separators.
+- Server: lazy Whisper model loading in background thread (server responds immediately, `/health` returns `loading` until ready); model-loading thread runs at reduced priority to prevent PC stutter; transcription returns 503 while loading.
+- Log rotation: pre-open 5 MB rotation (3 backups) for both server logs; removed broken RotatingFileHandler approach.
+- Health check: all checks run in parallel via `ThreadPoolExecutor`; system status hardware cache (30 s TTL).
+- Setup wizard: step indicators (`Step N/M`), retry/skip on install failure, no raw Python tracebacks.
+- Bug fixes: large-v3-turbo VRAM corrected to ~6 GB; `-q` flag consistency in installer; empty badge link removed.
+- Tests: 127 tests passing. SonarCloud: zip-slip guard, timing-safe token compare, URL validation.
+
+### v0.0.8
+
 - Fixed "Ready" before subtitles exist, URL blocking `&`, first 30s skipped, hallucination filter dropping real lyrics, chunk badge wrong count, pipeline stopping 1-2 chunks early.
 - Improved speech detection after silence (`no_speech_threshold` 0.3). Faster server startup (background thread). Parallel translate+romanize (`Promise.all`).
 - Security: removed `shell=True`/`os.system()`/`curl|sh`, XSS fixes, pinned deps. CI: 7 jobs, ESLint, Dependabot, pre-commit hooks. Full Ruff cleanup (470 violations).

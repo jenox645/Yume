@@ -12,7 +12,7 @@ from pathlib import Path
 
 from yume.hardware import IS_WIN, detect_gpu, detect_ram_gb, disk_free_gb, recommend_whisper_model
 from yume.network import HEALTH_PATH_OLLAMA, check_server
-from yume.ui import C, ask_choice, ask_yn, center, error, header, info, pause, section, success, warn
+from yume.ui import C, ask_arrow, ask_choice, ask_yn, center, error, header, info, pause, section, success, warn
 from yume.utils import BASE_DIR, EXE, LOGS_DIR, SERVER_DIR, TOOLS_DIR, _run, _try_import, find_gguf_models, find_tool
 
 _log = logging.getLogger("pocket_yume")
@@ -36,6 +36,45 @@ def set_setup_context(backend_info: dict, models_dir: Path, gguf_dir: Path, vers
 # ── Setup wizard ──────────────────────────────────────────────────────────────
 
 
+_TOTAL_STEPS = 5
+
+
+def _step(n: int, name: str) -> None:
+    """Print a step indicator: Step N/5: Name."""
+    info(f"\n{C.GOLD}Step {n}/{_TOTAL_STEPS}: {C.BOLD}{name}{C.RESET}")
+    print()
+
+
+def _install_with_retry(label: str, install_fn, manual_hint: str = "") -> bool:
+    """Run install_fn(); on failure offer Retry / Skip / Abort."""
+    for attempt in range(1, 4):
+        try:
+            result = install_fn()
+            if result is not False:
+                return True
+            raise RuntimeError("install returned False")
+        except Exception as exc:
+            error(f"{label} failed (attempt {attempt}/3): {exc}")
+        ch = ask_arrow(
+            f"{label} failed. What now?",
+            [
+                ("Retry", "Try installing again"),
+                ("Skip", "Continue without this component"),
+                ("Abort setup", "Exit the wizard now"),
+            ],
+            default=0,
+            allow_back=False,
+        )
+        if ch == 1:
+            if manual_hint:
+                info(manual_hint)
+            return False
+        if ch == 2:
+            info("Aborting setup.")
+            raise SystemExit(0)
+    return False
+
+
 def setup_wizard(cfg: dict) -> dict:
     from config import DEFAULT_OLLAMA_PORT, save_config
 
@@ -52,18 +91,20 @@ def setup_wizard(cfg: dict) -> dict:
 
     header("First-Time Setup")
     print(center(f"{C.BOLD}Welcome to Pocket Yume!{C.RESET}"))
-    print(center(f"{C.DIM}Let's set up everything for Yume AI subtitles.{C.RESET}"))
+    print(center(f"{C.DIM}Let's get Yume AI subtitles ready on your machine.{C.RESET}"))
     import platform
 
     plat = platform.system()
     arch = platform.machine().lower()
     print(center(f"{C.DIM}Platform: {plat} ({arch}){C.RESET}"))
     print()
-    info(f"{C.DIM}Note: First startup takes longer because the Whisper model needs to download (~1-3 GB).{C.RESET}")
-    info(f"{C.DIM}Subsequent launches will be much faster.{C.RESET}")
+    info(f"{C.DIM}Note: First startup downloads the Whisper model (~1-3 GB) — subsequent launches are fast.{C.RESET}")
     print()
 
-    section("System Scan")
+    # ── Step 1: System Scan ────────────────────────────────────────────────────
+    _step(1, "Detecting Hardware")
+    info(f"{C.DIM}Scanning GPU, RAM, and disk to recommend the best settings...{C.RESET}")
+    print()
     gpu = detect_gpu()
     ram = detect_ram_gb()
     disk = disk_free_gb()
@@ -124,6 +165,10 @@ def setup_wizard(cfg: dict) -> dict:
 
     pause()
 
+    # ── Step 2: Component Check ────────────────────────────────────────────────
+    _step(2, "Component Check")
+    info(f"{C.DIM}Checking which tools and packages are already installed...{C.RESET}")
+    print()
     header("Component Check")
     missing = []
     yt = find_tool("yt-dlp")
@@ -190,12 +235,12 @@ def setup_wizard(cfg: dict) -> dict:
 
     if missing:
         print(f"\n  Missing: {C.BOLD}{', '.join(missing)}{C.RESET}\n")
-        mode = ask_choice(
+        mode = ask_arrow(
             "Proceed?",
             [
-                ("Install all", "Download everything needed"),
-                ("Choose each", "Ask per component"),
-                ("Skip", "Set up later"),
+                ("Install all", "Download everything needed automatically"),
+                ("Choose each", "Ask before installing each component"),
+                ("Skip", "Set up later from the Tools menu"),
             ],
             default=0,
             allow_back=False,
@@ -208,27 +253,15 @@ def setup_wizard(cfg: dict) -> dict:
             return cfg
 
         ae = mode == 1  # ask-each
-        header("Installing")
 
-        if "yt-dlp" in missing:
-            if not ae or ask_yn("Install yt-dlp?"):
-                if not install_ytdlp():
-                    info(f"Manual download: {C.CYAN}https://github.com/yt-dlp/yt-dlp/releases/latest{C.RESET}")
-                    info(f"Place the binary in: {C.BOLD}{TOOLS_DIR}{C.RESET}")
-
-        if "ffmpeg" in missing:
-            if not ae or ask_yn("Install FFmpeg?"):
-                if not install_ffmpeg():
-                    info(f"Manual download: {C.CYAN}https://ffmpeg.org/download.html{C.RESET}")
-                    info(f"Place ffmpeg{EXE} in: {C.BOLD}{TOOLS_DIR}{C.RESET}")
-
-        # YouTube authentication — always ask during first run
-        print()
+        # ── Step 3: YouTube Authentication ────────────────────────────────────
+        _step(3, "YouTube Authentication")
         header("YouTube Authentication")
         info("YouTube blocks automated downloads to prevent bots.")
         info("Yume needs a way to prove you're a real person.")
+        info(f"\n{C.DIM}Browser Cookies is the easiest — just be logged into YouTube in your browser.{C.RESET}")
         print()
-        ch = ask_choice(
+        ch = ask_arrow(
             "How do you want to authenticate with YouTube?",
             [
                 (
@@ -237,8 +270,7 @@ def setup_wizard(cfg: dict) -> dict:
                 ),
                 (
                     "Deno (no account needed)",
-                    "Downloads Deno (~35 MB) + sets up a local server that solves YouTube's\n"
-                    "      bot challenge without any login. Requires internet connection.",
+                    "Downloads Deno (~35 MB) + sets up a local server that solves YouTube's bot challenge.",
                 ),
                 ("Skip for now", "You can set this up later in Settings."),
             ],
@@ -250,7 +282,7 @@ def setup_wizard(cfg: dict) -> dict:
             browsers = ["chrome", "firefox", "edge", "brave", "safari"]
             print()
             info("This only affects audio downloading — the extension itself works in any browser.")
-            bc = ask_choice(
+            bc = ask_arrow(
                 "Which browser are you logged into YouTube with?",
                 [(b.capitalize(), None) for b in browsers],
                 default=0,
@@ -259,22 +291,51 @@ def setup_wizard(cfg: dict) -> dict:
             cfg["cookies_browser"] = browsers[bc]
             success(f"Using cookies from: {browsers[bc]}")
         elif ch == 1:
-            install_deno()
+            _install_with_retry(
+                "Deno",
+                install_deno,
+                f"Download Deno manually: {C.CYAN}https://deno.land{C.RESET}",
+            )
             cfg["youtube_auth_method"] = "deno"
         save_config(cfg)
 
+        # ── Step 4: Install components ─────────────────────────────────────────
+        _step(4, "Installing Components")
+        header("Installing")
+
+        if "yt-dlp" in missing:
+            if not ae or ask_yn("Install yt-dlp?"):
+                _install_with_retry(
+                    "yt-dlp",
+                    install_ytdlp,
+                    f"Download manually: {C.CYAN}https://github.com/yt-dlp/yt-dlp/releases/latest{C.RESET}\n"
+                    f"Place the binary in: {C.BOLD}{TOOLS_DIR}{C.RESET}",
+                )
+
+        if "ffmpeg" in missing:
+            if not ae or ask_yn("Install FFmpeg?"):
+                _install_with_retry(
+                    "FFmpeg",
+                    install_ffmpeg,
+                    f"Download manually: {C.CYAN}https://ffmpeg.org/download.html{C.RESET}\n"
+                    f"Place ffmpeg{EXE} in: {C.BOLD}{TOOLS_DIR}{C.RESET}",
+                )
+
         if "python_deps" in missing:
             if not ae or ask_yn("Install Python packages?"):
-                install_python_deps()
+                _install_with_retry("Python packages", install_python_deps)
 
         if "llama_cpp" in missing:
             if not ae or ask_yn("Install llama-cpp-python (translation engine)?"):
-                install_llamacpp_python()
+                _install_with_retry(
+                    "llama-cpp-python",
+                    install_llamacpp_python,
+                    f"Install manually: {C.CYAN}pip install llama-cpp-python{C.RESET}",
+                )
 
         if "server_deps" in missing and "llama_cpp" not in missing:
             if not ae or ask_yn("Install server dependencies (uvicorn, fastapi)?"):
-                info("Installing server dependencies...")
-                try:
+                def _install_server_deps():
                     _run(
                         [
                             sys.executable,
@@ -291,23 +352,32 @@ def setup_wizard(cfg: dict) -> dict:
                         ],
                         timeout=300,
                     )
-                    success("Server dependencies installed!")
-                except Exception as e:
-                    error(f"Failed: {e}")
-                    info("Try running as administrator, or install manually:")
-                    info(f"  {C.CYAN}pip install uvicorn fastapi sse-starlette{C.RESET}")
 
+                info("Installing server dependencies...")
+                _install_with_retry(
+                    "Server dependencies",
+                    _install_server_deps,
+                    f"Install manually: {C.CYAN}pip install uvicorn fastapi sse-starlette{C.RESET}",
+                )
+
+        # ── Step 5: Translation Model ──────────────────────────────────────────
+        _step(5, "Translation Model")
+        if "gguf_model" not in missing:
+            gf = find_gguf_models()
+            gf_name = gf[0].name if gf else cfg.get("translation_model", "configured")
+            success(f"Translation model already configured: {C.BOLD}{gf_name}{C.RESET}")
         if "gguf_model" in missing:
+            _step(5, "Translation Model")
             section("Translation Model")
-            info("Yume needs a GGUF model file to translate Japanese -> English.")
-            info("Default: llama.cpp loads it directly. No external servers needed.")
+            info("Yume needs a GGUF model file to translate subtitles into English.")
+            info(f"{C.DIM}llama.cpp loads it directly — no external servers required.{C.RESET}")
             print()
-            ch = ask_choice(
+            ch = ask_arrow(
                 "How to get a model?",
                 [
-                    ("Download from HuggingFace", "Browse repos, pick quantization"),
-                    ("Use Ollama instead", "One-click, manages models for you"),
-                    ("Skip", "I'll add a .gguf file later"),
+                    ("Download from HuggingFace", "Browse model repos and pick a quantization"),
+                    ("Use Ollama instead", "One-click install with built-in model management"),
+                    ("Skip", "I'll add a .gguf file to models/translation/ later"),
                 ],
                 default=0,
                 allow_back=False,
@@ -321,7 +391,11 @@ def setup_wizard(cfg: dict) -> dict:
                 cfg["translation_port"] = bi["dp"]
                 cfg["translation_model"] = "qwen2.5:7b"
                 if ask_yn("Install Ollama?"):
-                    install_ollama()
+                    _install_with_retry(
+                        "Ollama",
+                        install_ollama,
+                        f"Install manually: {C.CYAN}https://ollama.com{C.RESET}",
+                    )
                     time.sleep(2)
                     if ask_yn(f"Download model ({cfg['translation_model']})?"):
                         if not check_server("127.0.0.1", DEFAULT_OLLAMA_PORT, HEALTH_PATH_OLLAMA)["up"]:

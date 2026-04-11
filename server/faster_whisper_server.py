@@ -897,6 +897,7 @@ def _parse_args():
     parser.add_argument("--pause-threshold", type=float, default=0.25)
     parser.add_argument("--config", type=str, default=None)
     parser.add_argument("--prewarm", action="store_true")
+    parser.add_argument("--low-vram", action="store_true", help="Force int8 compute type to reduce VRAM usage")
     parser.add_argument("--verbose", "-v", action="store_true")
     return parser.parse_args()
 
@@ -956,6 +957,11 @@ def _apply_config(args):
 
     if _state.compute_type == "auto":
         _state.compute_type = "float16" if _state.device == "cuda" else "int8"
+
+    # --low-vram forces int8 regardless of GPU — reduces VRAM by ~30-40%
+    if getattr(args, "low_vram", False):
+        _state.compute_type = "int8"
+        print("  [low-vram]        compute_type overridden to int8")
 
 
 def _print_startup_banner(args):
@@ -1170,8 +1176,23 @@ def _start_flask_thread(port):
     return t
 
 
+def _set_low_priority():
+    """Lower this thread's scheduling priority to avoid PC stutter during model load."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            THREAD_PRIORITY_BELOW_NORMAL = -1
+            ctypes.windll.kernel32.SetThreadPriority(ctypes.windll.kernel32.GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL)
+        else:
+            os.nice(10)
+    except Exception:
+        pass
+
+
 def _load_model(args, server_thread):
     """Load the Whisper model; handle errors with actionable messages."""
+    _set_low_priority()
     try:
         _state.model = WhisperModel(_state.model_name, device=_state.device, compute_type=_state.compute_type)
 
