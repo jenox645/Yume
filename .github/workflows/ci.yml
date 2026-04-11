@@ -86,7 +86,7 @@ jobs:
             --cov=. --cov-report=xml:reports/coverage.xml --cov-report=term-missing
 
       - name: Upload coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: coverage-report
@@ -160,7 +160,7 @@ jobs:
           pyan3 server/faster_whisper_server.py --dot --no-defines --grouped | dot -Tsvg -o reports/callgraph_server.svg || true
 
       - name: Upload call graphs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: call-graphs
