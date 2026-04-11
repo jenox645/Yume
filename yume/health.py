@@ -88,7 +88,6 @@ def health_check(cfg: dict) -> None:
     roma_libs = [
         ("pykakasi", "Japanese romaji (kanji→reading)"),
         ("pypinyin", "Chinese pinyin"),
-        ("romanization", "Korean romanization"),
     ]
     roma_installed = 0
     for pkg, desc in roma_libs:
@@ -100,7 +99,7 @@ def health_check(cfg: dict) -> None:
             results.append((f"{pkg}", True, f"not installed (optional) — {desc}"))
     if roma_installed == 0:
         info(f"\n  {C.DIM}Tip: Install romanization libraries for instant romaji/pinyin:{C.RESET}")
-        info(f"  {C.CYAN}pip install pykakasi pypinyin romanization{C.RESET}")
+        info(f"  {C.CYAN}pip install pykakasi pypinyin{C.RESET}")
         info(f"  {C.DIM}Without them, Yume uses the LLM for romanization (slower).{C.RESET}")
         info(f"  {C.DIM}Japanese kana→romaji works without libraries (WanaKana, bundled).{C.RESET}")
         info(f"  {C.DIM}Only kanji readings need pykakasi.{C.RESET}\n")

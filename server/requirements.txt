@@ -7,4 +7,3 @@ waitress==3.0.2
 numpy==2.4.3
 pykakasi==2.3.0
 pypinyin==0.55.0
-romanization==1.0.2

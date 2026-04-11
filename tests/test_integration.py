@@ -129,10 +129,20 @@ class TestDeadConfigDetection:
 # ---------------------------------------------------------------------------
 
 class TestYouTubeAuthConfig:
-    """Trace youtube_auth_method config to actual yt-dlp command construction."""
+    """Trace youtube_auth_method config to actual yt-dlp command construction.
+
+    The server was refactored into a package (server/_audio.py, _state.py, etc.).
+    These tests check all server/*.py files so moving logic between modules
+    doesn't silently break the invariants.
+    """
 
     def _get_server_source(self):
-        return (ROOT / "server" / "faster_whisper_server.py").read_text(encoding="utf-8")
+        """Concatenate all server Python source files for invariant checking."""
+        parts = []
+        for f in sorted((ROOT / "server").glob("*.py")):
+            if "__pycache__" not in str(f):
+                parts.append(f.read_text(encoding="utf-8", errors="replace"))
+        return "\n".join(parts)
 
     def test_deno_mode_uses_python_m_yt_dlp(self):
         """When youtube_auth_method='deno', yt-dlp must run as 'python -m yt_dlp'.
@@ -142,12 +152,12 @@ class TestYouTubeAuthConfig:
         """
         src = self._get_server_source()
 
-        # The _ytdlp_cmd function must exist and handle deno mode
-        assert "_ytdlp_cmd" in src, "_ytdlp_cmd function not found in server"
+        # The ytdlp_cmd function must exist and handle deno mode
+        assert "ytdlp_cmd" in src, "ytdlp_cmd function not found in server"
 
         # It must reference python -m yt_dlp for deno mode
         assert "python" in src and "yt_dlp" in src, (
-            "_ytdlp_cmd must route to 'python -m yt_dlp' for deno mode"
+            "ytdlp_cmd must route to 'python -m yt_dlp' for deno mode"
         )
 
     def test_deno_mode_has_strategy_entries(self):
@@ -170,8 +180,8 @@ class TestYouTubeAuthConfig:
     def test_cookies_mode_uses_configured_browser(self):
         """The cookies_browser config value must be passed to yt-dlp."""
         src = self._get_server_source()
-        # Must reference cookies_browser or _resolve_browser_cookies
-        assert "cookies_browser" in src or "_resolve_browser_cookies" in src, (
+        # Must reference cookies_browser or resolve_browser_cookies
+        assert "cookies_browser" in src or "resolve_browser_cookies" in src, (
             "cookies_browser config value is never used in the server"
         )
 

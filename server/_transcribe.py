@@ -1,0 +1,95 @@
+"""Whisper transcription — serialised through transcribe_lock (CTranslate2 is not thread-safe)."""
+
+import os
+import time
+
+import _state
+from _filter import is_hallucination, is_credits_line
+
+
+def transcribe_file(audio_path, language, start_offset=0.0):
+    """Transcribe audio file.  Uses v2.0.7 parameters proven to work for music.
+
+    Returns a dict with keys: text, segments, language, duration, start_offset.
+    """
+    if _state.model is None:
+        raise RuntimeError("Model is still loading — try again in a few seconds")
+
+    print(f"[Yume] Transcribing {audio_path} (offset: {start_offset}s)")
+    t_start = time.time()
+
+    file_size = os.path.getsize(audio_path)
+    if file_size < 10_000:
+        print(f"[Yume] Skipping tiny file ({file_size} bytes)")
+        return {"text": "", "segments": [], "language": language, "duration": 0, "start_offset": start_offset}
+
+    # v2.0.7 parameters — proven to work for Japanese music.
+    # DO NOT use word_timestamps — different decode path drops segments.
+    params = dict(
+        language=language,
+        beam_size=5,
+        vad_filter=False,              # MUST be False — Silero VAD drops singing
+        word_timestamps=False,         # v2.0.7: False (different decode path when True)
+        condition_on_previous_text=False,
+        temperature=0.0,
+        compression_ratio_threshold=2.4,  # v2.0.7 value
+        log_prob_threshold=-2.0,      # widened from -1.5: catch more speech at low confidence
+        no_speech_threshold=0.3,      # lowered from 0.45: catch speech after silence/intros
+    )
+
+    # CRITICAL: Serialise model access. CTranslate2 is NOT thread-safe.
+    with _state.transcribe_lock:
+        segments_iter, info = _state.model.transcribe(audio_path, **params)  # type: ignore[arg-type]
+        raw_segments = list(segments_iter)  # consume inside lock
+
+    segments = []
+    full_text_parts = []
+    dropped = 0
+
+    print(f"[Yume] Whisper returned {len(raw_segments)} raw segments")
+
+    for seg in raw_segments:
+        text = seg.text.strip()
+        if not text:
+            continue
+        if is_hallucination(text):
+            print(f"[Yume] Dropped hallucination: {text!r}")
+            dropped += 1
+            continue
+        if is_credits_line(text):
+            print(f"[Yume] Dropped credits: {text!r}")
+            dropped += 1
+            continue
+        # No secondary logprob filter here. Whisper's internal log_prob_threshold=-2.0
+        # handles truly low-confidence segments. A stricter server-side filter drops
+        # valid vocals mixed with background music (the primary use case for Yume).
+        # Hallucination patterns + user blacklist are the correct quality filter.
+        segments.append(
+            {
+                "start": round(seg.start + start_offset, 2),
+                "end": round(seg.end + start_offset, 2),
+                "text": text,
+                "confidence": round(seg.avg_logprob, 2) if hasattr(seg, "avg_logprob") else 0,
+            }
+        )
+        full_text_parts.append(text)
+
+    print(f"[Yume] Transcription done: {len(segments)} segments ({dropped} dropped)")
+
+    whisper_elapsed = time.time() - t_start
+    with _state.stats_lock:
+        _state.server_stats["chunks_transcribed"] += 1
+        _state.server_stats["segments_produced"] += len(segments)
+        _state.server_stats["hallucinations_filtered"] += dropped
+        _state.server_stats["total_audio_seconds"] += info.duration
+        _state.server_stats["total_whisper_time"] += whisper_elapsed
+        _state.server_stats["last_chunk_whisper_time"] = round(whisper_elapsed, 1)
+        _state.server_stats["last_chunk_segments"] = len(segments)
+
+    return {
+        "text": " ".join(full_text_parts),
+        "segments": segments,
+        "language": info.language,
+        "duration": info.duration,
+        "start_offset": start_offset,
+    }

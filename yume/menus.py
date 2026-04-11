@@ -1077,11 +1077,10 @@ def _menu_pydeps() -> None:
 
     print()
     section("Romanization (optional — faster romaji/pinyin)")
-    roma_deps: dict[str, bool] = {"pykakasi": False, "pypinyin": False, "romanization": False}
+    roma_deps: dict[str, bool] = {"pykakasi": False, "pypinyin": False}
     roma_desc = {
         "pykakasi": "Japanese kanji → romaji (instant, no LLM needed)",
         "pypinyin": "Chinese hanzi → pinyin (instant, no LLM needed)",
-        "romanization": "Korean hangul → romanization (instant, no LLM needed)",
     }
     for p in roma_deps:
         try:
@@ -1106,7 +1105,7 @@ def _menu_pydeps() -> None:
             _check_pip()
             r = _run(
                 [sys.executable, "-m", "pip", "install",
-                 "pykakasi==2.3.0", "pypinyin==0.55.0", "romanization==2.0.0",
+                 "pykakasi==2.3.0", "pypinyin==0.55.0",
                  "-q", "--no-warn-script-location"],
                 timeout=120,
             )
