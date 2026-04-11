@@ -1,6 +1,6 @@
 # Architecture
 
-> Yume v0.0.8 · Pocket Yume CLI · ~14,200 lines across 15 source files
+> Yume v0.0.8 · Pocket Yume CLI · ~13,600 lines across 21 source files
 
 ## Overview
 
@@ -29,9 +29,10 @@ Yume is a browser extension + local server system. The extension captures video 
 └──────────────────────────────────────────────────────┘
         │
         ▼
-┌─ CLI (pocket_yume.py) ───────────────────────────────┐
-│  Setup wizard · Server lifecycle · Port management   │
-│  GPU detection · Tool installer · Benchmark          │
+┌─ CLI (pocket_yume.py + yume/ package) ───────────────┐
+│  pocket_yume.py: thin entry point, arg dispatch      │
+│  yume/: launch, setup, menus, health, benchmark,     │
+│         network, ports, installers, hardware, ui     │
 │  config.py: load/save/validate/export/import         │
 └──────────────────────────────────────────────────────┘
 ```
@@ -63,20 +64,50 @@ Yume is a browser extension + local server system. The extension captures video 
 
 ## File Responsibilities
 
+### CLI — Entry Point
+
 | File | Lines | Role |
 |------|-------|------|
-| `pocket_yume.py` | 5,578 | CLI: installer, launcher, port management, benchmarks |
-| `config.py` | 162 | Config: load, save, validate, export, import. All port constants defined here. |
-| `faster_whisper_server.py` | 2,275 | Flask server: Whisper STT, hallucination filter, audio download, cache |
-| `audio-capture.js` | 1,215 | Pipeline engine: chunking, parallel transcribe+translate+romanize, subtitle timing |
-| `popup.js` | 1,216 | Extension popup: settings, diagnostics, stats, model switching |
-| `background.js` | 959 | Service worker: server proxy, translation cache (LRU-500 + TTL), token management |
-| `content.js` | 388 | Content script: lifecycle, URL change detection, subtitle event dispatch |
-| `subtitle-window.js` | 361 | Overlay: DOM creation, drag/resize, dynamic font injection, RTL, alignment |
+| `pocket_yume.py` | 414 | Thin entry point: arg parsing, module wiring, top-level menu dispatch |
+| `config.py` | 163 | Config: load, save, validate, export, import. All port constants defined here. |
+
+### CLI — `yume/` Package
+
+| File | Lines | Role |
+|------|-------|------|
+| `yume/__init__.py` | 14 | Package marker |
+| `yume/launch.py` | 656 | Server lifecycle: start llama.cpp / Ollama / Whisper, runtime menu |
+| `yume/menus.py` | 1,636 | Interactive menus: main menu, settings, model selection, blacklist, stats |
+| `yume/setup.py` | 483 | Setup wizard, first-run detection, uninstall |
+| `yume/installers.py` | 560 | Tool download/install: yt-dlp, ffmpeg, Deno, llama.cpp, pip packages |
+| `yume/health.py` | 442 | Health check, status display, font detection |
+| `yume/benchmark.py` | 396 | Whisper speed benchmark across models |
+| `yume/hardware.py` | 205 | GPU/CPU detection (NVIDIA, AMD, Apple Silicon) |
+| `yume/network.py` | 310 | HTTP helpers (`server_get`, `server_post`), translation server check |
+| `yume/ports.py` | 215 | Port availability checks, ports status display |
+| `yume/ui.py` | 340 | ANSI colour helpers, `header()`, `panel()`, `pause()`, `error()` |
+| `yume/utils.py` | 120 | `find_tool()`, update checker, shared path constants |
+
+### Whisper Server
+
+| File | Lines | Role |
+|------|-------|------|
+| `server/faster_whisper_server.py` | 2,646 | Flask server: Whisper STT, hallucination filter, audio download, romanization, cache |
+
+### Browser Extension
+
+| File | Lines | Role |
+|------|-------|------|
+| `extension/js/audio-capture.js` | 1,640 | Pipeline engine: chunking, parallel transcribe+translate+romanize, subtitle timing |
+| `extension/popup.js` | 1,224 | Extension popup: settings, diagnostics, stats, model switching |
+| `extension/js/background.js` | 1,078 | Service worker: server proxy, translation cache (LRU-500 + TTL), token management |
+| `extension/js/content.js` | 388 | Content script: lifecycle, URL change detection, subtitle event dispatch |
+| `extension/js/subtitle-window.js` | 415 | Overlay: DOM creation, drag/resize, dynamic font injection, RTL, alignment |
+| `extension/js/debug-system.js` | 225 | Debug overlay: frame counter, pipeline state, network timing |
 
 ## Key Design Decisions
 
-**Single-file CLI** — `pocket_yume.py` is large (~5,578 lines) by design. It's a self-contained installer that users run with `python pocket_yume.py`. Config management was extracted to `config.py` as the first modular step.
+**CLI package layout** — `pocket_yume.py` is the single user-facing entry point (`python pocket_yume.py`). All logic lives in the `yume/` package: `launch`, `setup`, `menus`, `health`, `benchmark`, `hardware`, `network`, `ports`, `installers`, `ui`, `utils`. Shared state (GPU info, version, download URLs) is injected via `set_*()` setters called from `_init_modules()` in `pocket_yume.py` — this avoids circular imports while keeping modules testable in isolation. `config.py` is a separate extract handling load/save/validate.
 
 **No build tools** — The extension is plain JS loaded directly by the manifest. No React, no webpack, no TypeScript. Zero build step. Users edit files and reload.
 

@@ -12,6 +12,7 @@ Thanks for your interest in contributing! Yume is a local AI subtitle system —
 ## Development Setup
 
 **Python** (server + CLI):
+
 ```bash
 pip install -r server/requirements.txt
 pip install pytest                       # for running tests
@@ -19,6 +20,7 @@ python pocket_yume.py --verbose launch   # debug logging
 ```
 
 **Code analysis & pre-commit hooks** (recommended):
+
 ```bash
 pip install pre-commit && pre-commit install
 pip install -r tools/analyze-requirements.txt
@@ -32,6 +34,7 @@ python tools/analyze.py all  # full analysis report
 
 **Testing without a GPU:**
 You can develop and test most of Yume without an NVIDIA or AMD GPU:
+
 ```bash
 # In your config, set:
 #   whisper_device: cpu

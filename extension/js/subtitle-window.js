@@ -22,6 +22,14 @@ class SubtitleWindow {
 
   _loadAndApplySettings() {
     chrome.storage.local.get(['settings', 'windowPosition'], (result) => {
+      if (chrome.runtime.lastError) {
+        console.warn('[Yume] Failed to load settings:', chrome.runtime.lastError);
+        this.settings = {};
+        this.element.style.left   = '20px';
+        this.element.style.bottom = '80px';
+        this.applyCustomStyles();
+        return;
+      }
       this.settings = result.settings || {};
       const p = result.windowPosition;
       if (p) {
@@ -124,13 +132,16 @@ class SubtitleWindow {
       this.element.style.border = '';
     }
 
+    // Strip characters that could malform CSS font-family strings
+    const sanitizeFontName = (name) => name ? name.replace(/["'\\;]/g, '') : '';
+
     // Per-line: Original text — uses originalFont if set
     const origEl = this.element.querySelector('.subtitle-original');
     if (origEl) {
       origEl.style.fontSize = `${s.originalFontSize || 19}px`;
       origEl.style.color = s.originalColor || '#ffffff';
       origEl.style.fontFamily = s.originalFont
-        ? `"${s.originalFont}", -apple-system, sans-serif`
+        ? `"${sanitizeFontName(s.originalFont)}", -apple-system, sans-serif`
         : '';
     }
 
@@ -140,7 +151,7 @@ class SubtitleWindow {
       rmEl.style.fontSize = `${s.romajiFontSize || 13}px`;
       rmEl.style.color = s.romajiColor || '#ffc88c';
       rmEl.style.fontFamily = s.romajiFont
-        ? `"${s.romajiFont}", -apple-system, sans-serif`
+        ? `"${sanitizeFontName(s.romajiFont)}", -apple-system, sans-serif`
         : '';
     }
 
@@ -150,7 +161,7 @@ class SubtitleWindow {
       enEl.style.fontSize = `${s.translationFontSize || 14}px`;
       enEl.style.color = s.translationColor || '#b4beff';
       enEl.style.fontFamily = s.translationFont
-        ? `"${s.translationFont}", -apple-system, sans-serif`
+        ? `"${sanitizeFontName(s.translationFont)}", -apple-system, sans-serif`
         : '';
     }
 

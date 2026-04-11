@@ -15,7 +15,7 @@ echo ""
 # Check Python 3
 if command -v python3 &>/dev/null; then
     PY=python3
-elif command -v python &>/dev/null; then
+elif command -v python &>/dev/null && python -c "import sys; sys.exit(0 if sys.version_info >= (3, 0) else 1)" 2>/dev/null; then
     PY=python
 else
     echo "ERROR: Python 3 not found!"
