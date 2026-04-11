@@ -46,7 +46,7 @@ def test_validate_port_valid():
     assert validate_port(65535) == 65535
 
 
-def test_validate_port_invalid(capsys):
+def test_validate_port_invalid():
     assert validate_port(0, "test") is None
     assert validate_port(-1, "test") is None
     assert validate_port(70000, "test") is None
@@ -59,7 +59,7 @@ def test_validate_host_valid():
     assert validate_host("my-server.local") == "my-server.local"
 
 
-def test_validate_host_invalid(capsys):
+def test_validate_host_invalid():
     assert validate_host(None) is None
     assert validate_host("") is None
     assert validate_host("evil host; rm -rf /") is None
@@ -97,6 +97,6 @@ def test_config_export_import_roundtrip():
         assert "gguf_model_path" not in exported
 
 
-def test_config_import_nonexistent(capsys):
+def test_config_import_nonexistent():
     result = config_import("/nonexistent/path.json")
     assert result is None

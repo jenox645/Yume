@@ -21,7 +21,7 @@
         <div class="control-card">
           <div class="control-row">
             <span class="control-label">AI Subtitles</span>
-            <button id="toggleSubtitles" class="yume-button primary" aria-label="Toggle subtitles on or off" role="switch" aria-checked="false">
+            <button type="button" id="toggleSubtitles" class="yume-button primary" aria-label="Toggle subtitles on or off" role="switch" aria-checked="false">
               <span id="toggleText">Enable</span>
             </button>
           </div>
@@ -52,7 +52,7 @@
             </div>
           </div>
         </div>
-        <button id="refreshStatus" class="yume-button secondary" aria-label="Refresh server status">Refresh</button>
+        <button type="button" id="refreshStatus" class="yume-button secondary" aria-label="Refresh server status">Refresh</button>
       </div>
     </div>
 
@@ -169,7 +169,7 @@
             Items are filtered instantly from display. Click <b>Update Server</b> to also filter at transcription time.
           </div>
         </div>
-        <button id="reportHallucination" class="yume-button danger" aria-label="Report current subtitle as hallucination" style="margin-bottom:8px">
+        <button type="button" id="reportHallucination" class="yume-button danger" aria-label="Report current subtitle as hallucination" style="margin-bottom:8px">
           &#9888; Report Current Subtitle
         </button>
         <div id="hallucinationPreview" class="hallucination-preview" style="display:none"></div>
@@ -178,16 +178,16 @@
             <span class="setting-label">Blacklist</span>
             <div style="display:flex;align-items:center;gap:8px">
               <span id="blacklistCount" class="setting-hint">0 items</span>
-              <button id="toggleBlacklistView" class="yume-button-mini" title="Show/Hide list">&#9660;</button>
+              <button type="button" id="toggleBlacklistView" class="yume-button-mini" title="Show/Hide list">&#9660;</button>
             </div>
           </div>
         </div>
         <div id="blacklistContainer" class="blacklist-container" style="display:none"></div>
         <div style="display:flex;gap:8px;margin-top:8px">
-          <button id="updateBlacklist" class="yume-button primary" style="flex:1;margin-top:0">
+          <button type="button" id="updateBlacklist" class="yume-button primary" style="flex:1;margin-top:0">
             &#8635; Update Server
           </button>
-          <button id="clearBlacklist" class="yume-button secondary" style="flex:1;margin-top:0">
+          <button type="button" id="clearBlacklist" class="yume-button secondary" style="flex:1;margin-top:0">
             Clear All
           </button>
         </div>
@@ -340,7 +340,7 @@
             <span class="model-label">Click to load...</span>
           </div>
         </div>
-        <button id="refreshModels" class="yume-button secondary">Refresh Models</button>
+        <button type="button" id="refreshModels" class="yume-button secondary">Refresh Models</button>
       </div>
     </div>
 
@@ -372,7 +372,7 @@
             </select>
           </div>
         </div>
-        <button id="switchWhisperModel" class="yume-button primary" style="margin-top:8px">
+        <button type="button" id="switchWhisperModel" class="yume-button primary" style="margin-top:8px">
           Switch Model
         </button>
         <div id="modelSwitchStatus" class="status-message" style="margin-top:4px"></div>
@@ -393,7 +393,7 @@
             Click to load...
           </div>
         </div>
-        <button id="refreshStats" class="yume-button secondary">Refresh</button>
+        <button type="button" id="refreshStats" class="yume-button secondary">Refresh</button>
       </div>
     </div>
 
@@ -420,8 +420,8 @@
           </div>
         </div>
         <div style="display:flex;gap:8px;margin-top:8px">
-          <button id="savePorts" class="yume-button primary" style="flex:1;margin-top:0">Save Ports</button>
-          <button id="autoFreePorts" class="yume-button secondary" style="flex:1;margin-top:0">Auto Free Ports</button>
+          <button type="button" id="savePorts" class="yume-button primary" style="flex:1;margin-top:0">Save Ports</button>
+          <button type="button" id="autoFreePorts" class="yume-button secondary" style="flex:1;margin-top:0">Auto Free Ports</button>
         </div>
         <div id="portsStatus" class="status-message" style="margin-top:4px"></div>
         <!-- Custom Stream URL for m3u8 / direct media -->
@@ -433,8 +433,8 @@
           </div>
           <input type="text" id="customStreamUrl" placeholder="https://...m3u8 or direct media URL" class="yume-input wide" style="margin-bottom:6px">
           <div style="display:flex;gap:8px">
-            <button id="setStreamUrl" class="yume-button primary" style="flex:1;margin-top:0">Set &amp; Enable</button>
-            <button id="clearStreamUrl" class="yume-button secondary" style="flex:1;margin-top:0">Clear</button>
+            <button type="button" id="setStreamUrl" class="yume-button primary" style="flex:1;margin-top:0">Set &amp; Enable</button>
+            <button type="button" id="clearStreamUrl" class="yume-button secondary" style="flex:1;margin-top:0">Clear</button>
           </div>
           <div id="streamUrlStatus" class="status-message" style="margin-top:4px"></div>
         </div>
@@ -452,12 +452,12 @@
           <div id="diagLog" class="diag-log"></div>
         </div>
         <div style="display:flex;gap:8px;margin-top:8px">
-          <button id="refreshDiag" class="yume-button secondary" style="flex:1;margin-top:0">Refresh Log</button>
-          <button id="downloadDiag" class="yume-button secondary" style="flex:1;margin-top:0">Download Log</button>
+          <button type="button" id="refreshDiag" class="yume-button secondary" style="flex:1;margin-top:0">Refresh Log</button>
+          <button type="button" id="downloadDiag" class="yume-button secondary" style="flex:1;margin-top:0">Download Log</button>
         </div>
         <div style="display:flex;gap:8px;margin-top:8px">
-          <button id="exportSrt" class="yume-button primary" style="flex:1;margin-top:0">Export SRT</button>
-          <button id="clearCache" class="yume-button danger" style="flex:1;margin-top:0">Clear Cache</button>
+          <button type="button" id="exportSrt" class="yume-button primary" style="flex:1;margin-top:0">Export SRT</button>
+          <button type="button" id="clearCache" class="yume-button danger" style="flex:1;margin-top:0">Clear Cache</button>
         </div>
         <div id="exportStatus" class="status-message" style="margin-top:4px"></div>
       </div>

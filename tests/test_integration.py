@@ -29,7 +29,7 @@ from config import DEFAULT_CONFIG
 def _load_all_source_code():
     """Load all Python and JS source into a dict of {path: content}."""
     sources = {}
-    for pattern in ["*.py", "server/*.py", "extension/js/*.js", "extension/*.js"]:
+    for pattern in ["*.py", "yume/*.py", "server/*.py", "extension/js/*.js", "extension/*.js"]:
         for f in ROOT.glob(pattern):
             if "wanakana" in f.name or "__pycache__" in str(f):
                 continue

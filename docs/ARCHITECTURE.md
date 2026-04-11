@@ -6,7 +6,7 @@
 
 Yume is a browser extension + local server system. The extension captures video URLs, the servers process audio, and the extension renders subtitles.
 
-```
+```text
 ┌─ Browser Extension ──────────────────────────────────┐
 │  popup.js           Settings UI, diagnostics         │
 │  background.js      Service worker, server proxy     │
@@ -65,7 +65,7 @@ Yume is a browser extension + local server system. The extension captures video 
 
 | File | Lines | Role |
 |------|-------|------|
-| `pocket_yume.py` | 4,718 | CLI: installer, launcher, port management, benchmarks |
+| `pocket_yume.py` | 5,578 | CLI: installer, launcher, port management, benchmarks |
 | `config.py` | 162 | Config: load, save, validate, export, import. All port constants defined here. |
 | `faster_whisper_server.py` | 2,275 | Flask server: Whisper STT, hallucination filter, audio download, cache |
 | `audio-capture.js` | 1,215 | Pipeline engine: chunking, parallel transcribe+translate+romanize, subtitle timing |
@@ -76,7 +76,7 @@ Yume is a browser extension + local server system. The extension captures video 
 
 ## Key Design Decisions
 
-**Single-file CLI** — `pocket_yume.py` is large (~4,718 lines) by design. It's a self-contained installer that users run with `python pocket_yume.py`. Config management was extracted to `config.py` as the first modular step.
+**Single-file CLI** — `pocket_yume.py` is large (~5,578 lines) by design. It's a self-contained installer that users run with `python pocket_yume.py`. Config management was extracted to `config.py` as the first modular step.
 
 **No build tools** — The extension is plain JS loaded directly by the manifest. No React, no webpack, no TypeScript. Zero build step. Users edit files and reload.
 

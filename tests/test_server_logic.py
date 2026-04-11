@@ -7,14 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "server"))
 
 # Import individual functions without triggering Flask app or Whisper model
 # We need to be selective — import just the module and call functions directly
-import importlib.util
-
-spec = importlib.util.spec_from_file_location(
-    "server", str(Path(__file__).parent.parent / "server" / "faster_whisper_server.py")
-)
-
-# We can't import the whole module (it starts Flask), so we test via exec extraction
-# Instead, test the logic patterns directly
+# Can't import the whole module (it starts Flask), so we test via local copies of functions
 
 
 class TestURLValidation:
@@ -124,7 +117,7 @@ class TestYouTubeURLDetection:
         try:
             from urllib.parse import urlparse
             parsed = urlparse(url)
-            host = (parsed.hostname or '').lower()
+            host = (parsed.hostname or "").lower()
             yt_domains = {"youtube.com", "www.youtube.com", "youtu.be",
                           "youtube-nocookie.com", "www.youtube-nocookie.com",
                           "music.youtube.com", "m.youtube.com"}

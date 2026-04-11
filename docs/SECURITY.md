@@ -18,7 +18,7 @@ Yume runs entirely on your machine. No data leaves your computer — no cloud AP
 
 If you find a security issue, please **do not open a public GitHub issue**.
 
-Instead, email the maintainer directly: [open a private security advisory](https://github.com/jenox645/Yume/security/advisories/new) on GitHub.
+Instead, [open a private security advisory](https://github.com/jenox645/Yume/security/advisories/new) on GitHub.
 
 Include:
 - Description of the vulnerability
