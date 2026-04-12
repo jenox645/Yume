@@ -577,7 +577,14 @@ def transcribe_url():
                     del _state.subtitle_cache[cache_key]
 
         whisper_start = chunk_index * step_size
-        whisper_duration = chunk_duration
+        is_first_chunk = chunk_index == 0
+
+        # Chunk 0 has no pre-roll audio: chunks 1+ start 5 s before their owned
+        # region (the last 5 s of the previous chunk's window), giving Whisper
+        # warm-up context.  Chunk 0 starts cold at t=0.  Extending its window by
+        # 5 s gives Whisper proportionally more vocal content to work with when
+        # a song opens with an instrumental intro, reducing false no-speech drops.
+        whisper_duration = chunk_duration + (5 if is_first_chunk else 0)
         owned_start = whisper_start
         owned_end = whisper_start + step_size
 
@@ -604,7 +611,7 @@ def transcribe_url():
             return jsonify({"error": "Audio extraction failed"}), 500
 
         try:
-            result = _transcribe.transcribe_file(audio_path, language, whisper_start)
+            result = _transcribe.transcribe_file(audio_path, language, whisper_start, is_first_chunk=is_first_chunk)
         finally:
             try:
                 os.unlink(audio_path)

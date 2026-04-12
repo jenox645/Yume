@@ -7,15 +7,23 @@ import _state
 from _filter import is_hallucination, is_credits_line
 
 
-def transcribe_file(audio_path, language, start_offset=0.0):
+def transcribe_file(audio_path, language, start_offset=0.0, is_first_chunk=False):
     """Transcribe audio file.  Uses v2.0.7 parameters proven to work for music.
+
+    Args:
+        audio_path:      Path to the audio file to transcribe.
+        language:        Language code ("ja", "zh", …) or None for auto-detect.
+        start_offset:    Seconds to add to all segment timestamps (chunk start time).
+        is_first_chunk:  True for chunk 0 — relaxes no_speech_threshold to compensate
+                         for the absence of pre-roll audio (chunks 1+ overlap the previous
+                         chunk by 5 s, giving Whisper warm-up context; chunk 0 starts cold).
 
     Returns a dict with keys: text, segments, language, duration, start_offset.
     """
     if _state.model is None:
         raise RuntimeError("Model is still loading — try again in a few seconds")
 
-    print(f"[Yume] Transcribing {audio_path} (offset: {start_offset}s)")
+    print(f"[Yume] Transcribing {audio_path} (offset: {start_offset}s, first={is_first_chunk})")
     t_start = time.time()
 
     file_size = os.path.getsize(audio_path)
@@ -25,6 +33,23 @@ def transcribe_file(audio_path, language, start_offset=0.0):
 
     # v2.0.7 parameters — proven to work for Japanese music.
     # DO NOT use word_timestamps — different decode path drops segments.
+    #
+    # no_speech_threshold semantics (faster-whisper):
+    #   A segment is dropped when BOTH of these are true:
+    #     1. no_speech_prob > no_speech_threshold   (sounds like non-speech)
+    #     2. avg_logprob    < log_prob_threshold     (model is uncertain)
+    #   Default is 0.6.  Using 0.6 here is intentional — lower values were
+    #   previously tried (0.45, 0.3) and caused the first chunk to be silently
+    #   dropped when an instrumental intro pushed no_speech_prob to ~0.35 while
+    #   the cold-start (no pre-roll) depressed avg_logprob enough to trigger
+    #   condition 2 simultaneously.  The hallucination filter + user blacklist
+    #   are the correct quality gate for non-speech content, not this threshold.
+    #
+    # is_first_chunk uses a slightly higher threshold (0.7) because chunk 0 has
+    # no pre-roll audio (chunks 1+ overlap the previous chunk by 5 s), making
+    # Whisper's initial no_speech estimate less reliable on cold audio.
+    no_speech_thresh = 0.7 if is_first_chunk else 0.6
+
     params = dict(
         language=language,
         beam_size=5,
@@ -34,7 +59,7 @@ def transcribe_file(audio_path, language, start_offset=0.0):
         temperature=0.0,
         compression_ratio_threshold=2.4,  # v2.0.7 value
         log_prob_threshold=-2.0,  # widened from -1.5: catch more speech at low confidence
-        no_speech_threshold=0.3,  # lowered from 0.45: catch speech after silence/intros
+        no_speech_threshold=no_speech_thresh,
     )
 
     # CRITICAL: Serialise model access. CTranslate2 is NOT thread-safe.
