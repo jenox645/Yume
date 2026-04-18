@@ -1544,7 +1544,7 @@ class TestWriteTokenFile(unittest.TestCase):
             token_path = os.path.join(d, ".yume_token")
             _state.API_TOKEN = "test-token-abc123"
             import argparse
-            args = argparse.Namespace(port=5001)
+            _args = argparse.Namespace(port=5001)
 
             # Patch _state.TOKEN_FILE so we know where it writes
             with patch("faster_whisper_server.Path") as mock_path_cls:
