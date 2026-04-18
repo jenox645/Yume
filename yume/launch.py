@@ -42,12 +42,157 @@ _log = logging.getLogger("pocket_yume")
 _BACKEND_INFO: dict = {}
 _VERSION: str = "0.0.9"
 
+# Estimated VRAM requirements in MB per Whisper model (float16 on GPU)
+_WHISPER_VRAM_MB: dict[str, int] = {
+    "tiny": 1_000,
+    "tiny.en": 1_000,
+    "base": 1_500,
+    "base.en": 1_500,
+    "small": 2_500,
+    "small.en": 2_500,
+    "medium": 5_000,
+    "medium.en": 5_000,
+    "large": 10_000,
+    "large-v1": 10_000,
+    "large-v2": 10_000,
+    "large-v3": 10_000,
+    "large-v3-turbo": 6_000,
+    "distil-large-v3": 6_000,
+    "distil-medium.en": 3_000,
+    "distil-small.en": 1_500,
+}
+
 
 def set_launch_context(backend_info: dict, version: str) -> None:
     """Called by pocket_yume at startup to inject BACKEND_INFO and VERSION."""
     global _BACKEND_INFO, _VERSION
     _BACKEND_INFO = backend_info
     _VERSION = version
+
+
+# ── Resource detection helpers ────────────────────────────────────────────────
+
+
+def _get_available_ram_mb() -> int:
+    """Return available RAM in MB. Returns 0 if detection fails."""
+    try:
+        import psutil  # type: ignore[import]
+
+        return int(psutil.virtual_memory().available / (1024 * 1024))
+    except ImportError:
+        pass
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) // 1024
+    except Exception:
+        pass
+    return 0
+
+
+def _get_available_vram_mb() -> int:
+    """Return free VRAM in MB for the primary NVIDIA GPU. Returns 0 if detection fails."""
+    try:
+        import pynvml  # type: ignore[import]
+
+        pynvml.nvmlInit()
+        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        pynvml.nvmlShutdown()
+        return int(mem.free / (1024 * 1024))
+    except Exception:
+        pass
+    try:
+        out = _run(["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"], timeout=10)
+        if out.returncode == 0 and out.stdout.strip():
+            return int(out.stdout.strip().split("\n")[0].strip())
+    except Exception:
+        pass
+    return 0
+
+
+def _check_resources(cfg: dict) -> bool:
+    """Pre-launch RAM/VRAM check. Returns True to proceed, False to cancel.
+
+    Never hard-blocks — the user can always choose 'Launch anyway'.
+    """
+    issues: list[tuple[str, str]] = []  # (kind, human-readable message)
+
+    bk = cfg.get("translation_backend", "llamacpp")
+    gpu = detect_gpu()
+
+    # ── VRAM check for Whisper (NVIDIA GPU path only) ─────────────────────────
+    whisper_dev = cfg.get("whisper_device", "auto")
+    using_nvidia = gpu.get("has_nvidia", False) if whisper_dev in ("auto", "cuda") else False
+
+    if using_nvidia:
+        model_name = cfg.get("whisper_model", "large-v3")
+        required_vram = _WHISPER_VRAM_MB.get(model_name, 10_000)
+        avail_vram = _get_available_vram_mb()
+        if avail_vram > 0 and avail_vram < required_vram:
+            issues.append((
+                "vram",
+                f"Whisper '{model_name}' needs ~{required_vram / 1024:.1f} GB VRAM, "
+                f"but only {avail_vram / 1024:.1f} GB is free.",
+            ))
+
+    # ── RAM check for GGUF translation model (file size × 1.2) ───────────────
+    if bk == "llamacpp":
+        gp = cfg.get("gguf_model_path", "")
+        if gp and Path(gp).exists():
+            model_size_mb = Path(gp).stat().st_size / (1024 * 1024)
+            required_ram_mb = int(model_size_mb * 1.2)
+            avail_ram_mb = _get_available_ram_mb()
+            if avail_ram_mb > 0 and avail_ram_mb < required_ram_mb:
+                issues.append((
+                    "ram",
+                    f"Translation model ({Path(gp).name}) needs ~{required_ram_mb / 1024:.1f} GB RAM, "
+                    f"but only {avail_ram_mb / 1024:.1f} GB is available.",
+                ))
+
+    if not issues:
+        return True
+
+    # ── Show warning panel ────────────────────────────────────────────────────
+    print()
+    panel(
+        "\n".join(f"  • {msg}" for _, msg in issues),
+        title=f"{C.YELLOW}Low Resources Warning{C.RESET}",
+        style=C.YELLOW,
+    )
+    print()
+    info("Launching with low resources may cause crashes or heavy swap usage.")
+    print()
+
+    ch = ask_arrow(
+        "How would you like to proceed?",
+        [
+            ("Launch anyway", "Override — proceed despite the warning"),
+            ("Retry check", "Close other apps to free resources, then re-check"),
+            ("Switch Whisper model", "Pick a smaller Whisper model that fits available VRAM/RAM"),
+            ("Cancel", "Return to main menu without launching"),
+        ],
+        default=0,
+        allow_back=False,
+    )
+
+    if ch == 0:
+        warn("Launching with low resources — watch logs if servers crash.")
+        return True
+    if ch == 1:
+        info("Re-checking resources — close unused apps first, then press Enter.")
+        try:
+            input(f"  {C.DIM}Press Enter when ready...{C.RESET}")
+        except (EOFError, KeyboardInterrupt):
+            print()
+        return _check_resources(cfg)
+    if ch == 2:
+        from yume.menus import _menu_whisper_model
+
+        _menu_whisper_model(cfg)
+        return _check_resources(cfg)
+    return False
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -173,6 +318,10 @@ def _launch_inner(cfg: dict, procs: list, lhs: list) -> None:
             pause()
             return
 
+    # Pre-flight resource check
+    if not _check_resources(cfg):
+        return
+
     # Build PATH with our tools
     env = os.environ.copy()
     tp = str(TOOLS_DIR)
@@ -219,8 +368,8 @@ def _launch_inner(cfg: dict, procs: list, lhs: list) -> None:
     print()
     success(f"Yume is running!  {C.DIM}v{_VERSION}{C.RESET}")
     tn = _BACKEND_INFO.get(bk, {}).get("name", bk)
-    print(f"  {C.CYAN}Whisper{C.RESET}      http://{cfg['whisper_host']}:{cfg['whisper_port']}")
-    print(f"  {C.MAGENTA}Translation{C.RESET}  http://{cfg['translation_host']}:{cfg['translation_port']}  ({tn})")
+    print(f"  {C.CYAN}Whisper{C.RESET}      http://{cfg['whisper_host']}:{cfg['whisper_port']}")  # noqa: S5332 — display only, local server
+    print(f"  {C.MAGENTA}Translation{C.RESET}  http://{cfg['translation_host']}:{cfg['translation_port']}  ({tn})")  # noqa: S5332 — display only, local server
     print()
     info(f"{C.DIM}Chrome -> Japanese video -> Yume extension -> Enable{C.RESET}")
     print()

@@ -9,9 +9,9 @@
 Transcription · Translation · Romanization
 
 ![Version](https://img.shields.io/badge/version-0.0.9-blue)
-[![Python](https://img.shields.io/badge/python-3.10+-green)]()
-[![Chrome](https://img.shields.io/badge/chrome-MV3-yellow)]()
-[![Firefox](https://img.shields.io/badge/firefox-MV3-orange)]()
+![Python](https://img.shields.io/badge/python-3.10+-green)
+![Chrome](https://img.shields.io/badge/chrome-MV3-yellow)
+![Firefox](https://img.shields.io/badge/firefox-MV3-orange)
 [![Stars](https://img.shields.io/github/stars/jenox645/Yume?style=flat-square)](https://github.com/jenox645/Yume/stargazers)
 [![Last Commit](https://img.shields.io/github/last-commit/jenox645/Yume?style=flat-square)](https://github.com/jenox645/Yume/commits/main)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)

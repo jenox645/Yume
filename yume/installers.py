@@ -29,6 +29,20 @@ _pip_venv_warned = False
 _DOWNLOAD_URLS: dict = {}
 
 
+def _safe_extractall(zf: zipfile.ZipFile, target_dir: "os.PathLike[str]") -> None:
+    """Extract zip archive with zip-slip path-traversal protection."""
+    from pathlib import Path as _Path
+
+    target_resolved = _Path(target_dir).resolve()
+    for member in zf.namelist():
+        member_resolved = (target_resolved / member).resolve()
+        try:
+            member_resolved.relative_to(target_resolved)
+        except ValueError as exc:
+            raise ValueError(f"Unsafe path in archive member: {member!r}") from exc
+    zf.extractall(target_dir)
+
+
 def set_download_urls(urls: dict) -> None:
     """Called by pocket_yume to inject platform-specific URLs."""
     global _DOWNLOAD_URLS
@@ -199,9 +213,9 @@ def install_ffmpeg() -> bool:
             return False
         try:
             with zipfile.ZipFile(zp) as zf:
-                zf.extractall(TOOLS_DIR)
+                _safe_extractall(zf, TOOLS_DIR)
             zp.unlink(missing_ok=True)
-            for b in (TOOLS_DIR / "ffmpeg",):
+            for b in (TOOLS_DIR / "ffmpeg", TOOLS_DIR / "ffprobe"):
                 if b.exists():
                     os.chmod(b, UNIX_EXEC_MODE)
             return True
@@ -219,7 +233,7 @@ def install_deno() -> bool:
         return False
     try:
         with zipfile.ZipFile(zp) as zf:
-            zf.extractall(TOOLS_DIR)
+            _safe_extractall(zf, TOOLS_DIR)
         zp.unlink(missing_ok=True)
         de = TOOLS_DIR / f"deno{EXE}"
         if de.exists() and not IS_WIN:
@@ -256,7 +270,7 @@ def install_deno() -> bool:
         if download_file(zip_url, zip_path, "bgutil server"):
             try:
                 with zipfile.ZipFile(zip_path) as zf:
-                    zf.extractall(TOOLS_DIR)
+                    _safe_extractall(zf, TOOLS_DIR)
                 zip_path.unlink(missing_ok=True)
                 extracted = TOOLS_DIR / "bgutil-ytdlp-pot-provider-1.3.1"
                 if extracted.exists():

@@ -30,7 +30,7 @@ def is_bgutil_server_ready():
     try:
         import urllib.request
 
-        resp = urllib.request.urlopen(f"http://127.0.0.1:{BGUTIL_PORT}/ping", timeout=3)
+        resp = urllib.request.urlopen(f"http://127.0.0.1:{BGUTIL_PORT}/ping", timeout=3)  # noqa: S5332 — loopback only, no TLS needed
         return resp.status == 200
     except Exception:
         return False

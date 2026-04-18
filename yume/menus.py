@@ -1195,7 +1195,7 @@ def _test_translation(cfg: dict) -> None:
             body["model"] = m
         data = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(
-            f"http://{h}:{p}{bi.get('ap', '/v1/chat/completions')}",
+            f"http://{h}:{p}{bi.get('ap', '/v1/chat/completions')}",  # noqa: S5332 — local LLM backend
             data=data,
             headers={"Content-Type": "application/json", "User-Agent": "Yume"},
             method="POST",

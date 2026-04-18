@@ -130,7 +130,7 @@ HEALTH_PATH_OLLAMA = "/api/tags"
 def check_server(host: str, port: int, path: str = "/health") -> dict:
     """Check if a server is responding."""
     try:
-        url = f"http://{host}:{port}{path}"
+        url = f"http://{host}:{port}{path}"  # noqa: S5332 — local server health check, no TLS on loopback
         req = urllib.request.Request(url, headers={"User-Agent": "Yume"})
         with urllib.request.urlopen(req, timeout=3) as resp:  # nosec B310
             body = resp.read()
@@ -171,7 +171,7 @@ def check_translation_server(host: str, port: int, backend_info: dict | None = N
 
 def check_ollama_models(host: str = "127.0.0.1", port: int = 11434) -> list[str]:
     try:
-        req = urllib.request.Request(f"http://{host}:{port}/api/tags", headers={"User-Agent": "Yume"})
+        req = urllib.request.Request(f"http://{host}:{port}/api/tags", headers={"User-Agent": "Yume"})  # noqa: S5332 — local Ollama server
         with urllib.request.urlopen(req, timeout=3) as resp:  # nosec B310
             return [m["name"] for m in json.loads(resp.read()).get("models", [])]
     except Exception:
@@ -225,6 +225,11 @@ def hf_download(repo: str, filename: str) -> bool:
 # ── API token discovery ────────────────────────────────────────────────────────
 
 
+def _is_localhost(host: str) -> bool:
+    """Return True only for loopback addresses — guards token transmission over plain HTTP."""
+    return host in ("localhost", "127.0.0.1", "::1")
+
+
 def discover_api_token(host: str, port: int) -> str | None:
     """Discover API token from .yume_token file or server /health endpoint."""
     global _api_token
@@ -243,7 +248,7 @@ def discover_api_token(host: str, port: int) -> str | None:
             _log.debug("[discover_api_token] token-file-read failed: %s", e)
 
     try:
-        req = urllib.request.Request(f"http://{host}:{port}/health", headers={"User-Agent": "Yume"})
+        req = urllib.request.Request(f"http://{host}:{port}/health", headers={"User-Agent": "Yume"})  # noqa: S5332 — local server
         with urllib.request.urlopen(req, timeout=3) as resp:  # nosec B310
             data = json.loads(resp.read())
             token = data.get("api_token") or data.get("token")
@@ -260,10 +265,10 @@ def server_get(host: str, port: int, path: str, timeout: int = 5) -> dict | None
     """GET request with API token auth."""
     try:
         headers = {"User-Agent": "Yume"}
-        token = discover_api_token(host, port)
+        token = discover_api_token(host, port) if _is_localhost(host) else None
         if token:
             headers["X-API-Token"] = token
-        req = urllib.request.Request(f"http://{host}:{port}{path}", headers=headers)
+        req = urllib.request.Request(f"http://{host}:{port}{path}", headers=headers)  # noqa: S5332 — local server
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
             return json.loads(resp.read())
     except Exception:
@@ -275,10 +280,10 @@ def server_post(host: str, port: int, path: str, data: dict | None = None, timeo
     try:
         body = json.dumps(data or {}).encode("utf-8")
         headers = {"Content-Type": "application/json", "User-Agent": "Yume"}
-        token = discover_api_token(host, port)
+        token = discover_api_token(host, port) if _is_localhost(host) else None
         if token:
             headers["X-API-Token"] = token
-        req = urllib.request.Request(f"http://{host}:{port}{path}", data=body, headers=headers, method="POST")
+        req = urllib.request.Request(f"http://{host}:{port}{path}", data=body, headers=headers, method="POST")  # noqa: S5332 — local server
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
             return json.loads(resp.read())
     except Exception as e:

@@ -55,7 +55,7 @@ CORS(
     app,
     resources={
         r"/*": {
-            "origins": ["chrome-extension://*", "http://localhost:*", "http://127.0.0.1:*"],
+            "origins": ["chrome-extension://*", "http://localhost:*", "http://127.0.0.1:*"],  # noqa: S5332 — CORS for local servers only
             "methods": ["GET", "POST", "OPTIONS"],
             "allow_headers": ["Content-Type", "X-API-Token"],
         }
@@ -199,7 +199,7 @@ def health():
                 "translation_host": _state.translation_host,
                 "translation_port": _state.translation_port,
                 "translation_backend": _state.translation_backend,
-                "translation_url": f"http://{_state.translation_host}:{_state.translation_port}",
+                "translation_url": f"http://{_state.translation_host}:{_state.translation_port}",  # noqa: S5332 — local LLM backend, no TLS
                 "translation_prompt": _state.translation_prompt,
                 "romanization_prompt": _state.romanization_prompt,
             }
@@ -326,14 +326,14 @@ def switch_model():
 @app.route("/translation/models", methods=["GET"])
 def list_translation_models():
     """Query the translation backend for available models."""
-    url = f"http://{_state.translation_host}:{_state.translation_port}"
+    url = f"http://{_state.translation_host}:{_state.translation_port}"  # noqa: S5332 — local LLM backend
     models = []
 
     try:
         if _state.translation_backend == "ollama":
             import urllib.request
 
-            req = urllib.request.Request(f"http://{_state.translation_host}:{_state.translation_port}/api/tags")
+            req = urllib.request.Request(f"http://{_state.translation_host}:{_state.translation_port}/api/tags")  # noqa: S5332 — local LLM backend
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read())
                 for m in data.get("models", []):
@@ -847,7 +847,7 @@ def main():
     server_thread = _start_flask_thread(args.port)
 
     print("")
-    print(f"  Listening on http://localhost:{args.port}  (status: loading)")
+    print(f"  Listening on http://localhost:{args.port}  (status: loading)")  # noqa: S5332 — display only, loopback
     print("  Loading Whisper model in background thread...")
     print("")
 
@@ -1239,7 +1239,7 @@ def _load_model(args, server_thread):
 
         print("=" * 70)
         print("  MODEL LOADED -- Server ready")
-        print(f"  Listening on http://localhost:{args.port}")
+        print(f"  Listening on http://localhost:{args.port}")  # noqa: S5332 — display only, loopback
         print("=" * 70)
         print("")
 

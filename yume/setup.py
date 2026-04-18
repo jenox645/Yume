@@ -336,7 +336,7 @@ def setup_wizard(cfg: dict) -> dict:
         if "server_deps" in missing and "llama_cpp" not in missing:
             if not ae or ask_yn("Install server dependencies (uvicorn, fastapi)?"):
                 def _install_server_deps():
-                    _run(
+                    r = _run(
                         [
                             sys.executable,
                             "-m",
@@ -352,6 +352,7 @@ def setup_wizard(cfg: dict) -> dict:
                         ],
                         timeout=300,
                     )
+                    return r.returncode == 0
 
                 info("Installing server dependencies...")
                 _install_with_retry(
@@ -405,7 +406,7 @@ def setup_wizard(cfg: dict) -> dict:
                                 )
                                 time.sleep(3)
                             except Exception as e:
-                                _log.debug("[setup_wizard] post-setup-backup failed: %s", e)
+                                _log.debug("[setup_wizard] failed to start ollama serve: %s", e)
                         pull_ollama_model(cfg["translation_model"])
             save_config(cfg)
 

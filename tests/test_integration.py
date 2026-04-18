@@ -197,6 +197,7 @@ class TestHealthCheckConsistency:
     def test_llamacpp_health_path(self):
         """llama.cpp health must use /v1/models (not /health which returns 404)."""
         cli_src = (ROOT / "pocket_yume.py").read_text(encoding="utf-8")
+        assert len(cli_src) < 500_000, "Source file unexpectedly large — refusing regex to prevent ReDoS"
 
         # Find BACKEND_INFO llamacpp hp value (may be a literal or constant reference)
         match = re.search(r'"llamacpp".*?"hp":\s*("([^"]+)"|HEALTH_PATH_OPENAI)', cli_src, re.DOTALL)
@@ -213,6 +214,7 @@ class TestHealthCheckConsistency:
     def test_ollama_health_path(self):
         """Ollama health must use /api/tags."""
         cli_src = (ROOT / "pocket_yume.py").read_text(encoding="utf-8")
+        assert len(cli_src) < 500_000, "Source file unexpectedly large — refusing regex to prevent ReDoS"
 
         # Find the ollama block — hp may be a literal or constant reference
         ollama_block = re.search(
@@ -490,6 +492,8 @@ class TestPythonCompatibility:
             for line in content.splitlines():
                 stripped = line.strip()
                 if stripped.startswith("#") or stripped.startswith("//"):
+                    continue
+                if len(line) > 500:  # skip pathologically long lines to prevent ReDoS
                     continue
                 if re.match(r"def \w+\(.*:\s*\w+\s*\|\s*\w+", line):
                     has_union_hints = True

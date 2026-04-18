@@ -3,7 +3,7 @@
 
 # ── Python ──
 __pycache__/
-*.py[codz]
+*.py[cod]
 *.egg-info/
 *.egg
 dist/
