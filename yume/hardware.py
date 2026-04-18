@@ -155,6 +155,11 @@ def detect_ram_gb() -> float:
             s.dwLength = ctypes.sizeof(s)
             ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(s))
             return s.ullTotalPhys / GiB
+        elif IS_MAC:
+            import subprocess as _sp
+            r = _sp.run(["sysctl", "hw.memsize"], capture_output=True, text=True, timeout=5)
+            if r.returncode == 0 and r.stdout.strip():
+                return int(r.stdout.split(":")[1].strip()) / GiB
         else:
             with open("/proc/meminfo", encoding="utf-8") as f:
                 for line in f:

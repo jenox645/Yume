@@ -359,7 +359,7 @@ def _menu_whisper_model(cfg: dict) -> None:
             error(f"Directory not found: {custom_path}")
             pause()
             return
-        required = ["model.bin", "config.json"]
+        required = ["model.bin", "config.json", "tokenizer.json", "vocabulary.txt"]
         missing = [f for f in required if not (Path(custom_path) / f).exists()]
         if missing:
             error(f"Not a valid CTranslate2 model — missing: {', '.join(missing)}")

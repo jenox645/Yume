@@ -47,7 +47,7 @@ def check_ytdlp():
     if _ytdlp_cache["available"] is not None and now - _ytdlp_cache["checked_at"] < 60:
         return _ytdlp_cache["available"]
     try:
-        result = subprocess.run(ytdlp_cmd() + ["--version"], capture_output=True, timeout=10)
+        result = subprocess.run(ytdlp_cmd() + ["--version"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
         available = result.returncode == 0
     except Exception:
         available = False
@@ -227,14 +227,20 @@ def download_audio_segment(url, start_time, duration):
         stream_url = get_stream_url(url)
 
         if stream_url is None:
-            return _download_audio_segment_fallback(url, start_time, duration, output_path)
+            result = _download_audio_segment_fallback(url, start_time, duration, output_path)
+            if result is None:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            return result
 
         stream_valid, _stream_err = validate_url(stream_url)
         if not stream_valid:
             print("[Yume] Invalid stream URL from yt-dlp, using fallback")
             with _state.cache_lock:
                 _state.stream_url_cache.pop(url, None)
-            return _download_audio_segment_fallback(url, start_time, duration, output_path)
+            result = _download_audio_segment_fallback(url, start_time, duration, output_path)
+            if result is None:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            return result
 
         print(f"[Yume] Extracting {duration}s from {start_time}s via ffmpeg...")
 
@@ -271,6 +277,7 @@ def download_audio_segment(url, start_time, duration):
             print(f"[Yume] ffmpeg failed: {err_msg.decode('utf-8', errors='ignore')}")
             with _state.cache_lock:
                 _state.stream_url_cache.pop(url, None)
+            shutil.rmtree(tmp_dir, ignore_errors=True)
             return None
 
     except subprocess.TimeoutExpired:

@@ -294,20 +294,22 @@ def discover_servers(cfg: dict, backend_info: dict) -> dict:
     """Check if servers are already running."""
     results: dict = {}
 
-    ws = check_server(cfg["whisper_host"], cfg["whisper_port"], "/health")
+    ws = check_server(cfg.get("whisper_host", "127.0.0.1"), cfg.get("whisper_port", 5001), "/health")
     results["whisper"] = ws["up"]
 
     bk = cfg.get("translation_backend", "llamacpp")
     bi = backend_info.get(bk, backend_info.get("custom", {"hp": HEALTH_PATH_OPENAI}))
-    ts = check_server(cfg["translation_host"], cfg["translation_port"], bi["hp"])
+    t_host = cfg.get("translation_host", "127.0.0.1")
+    t_port = cfg.get("translation_port", 5000)
+    ts = check_server(t_host, t_port, bi["hp"])
     if not ts["up"]:
-        ts = check_server(cfg["translation_host"], cfg["translation_port"], HEALTH_PATH_OPENAI)
+        ts = check_server(t_host, t_port, HEALTH_PATH_OPENAI)
     results["translation"] = ts["up"]
 
     default_ollama_port = 11434
     if not results["translation"] and bk == "ollama":
         for port in [default_ollama_port, 5000, 8080]:
-            if port != cfg["translation_port"]:
+            if port != cfg.get("translation_port", 5000):
                 ts2 = check_server("127.0.0.1", port, HEALTH_PATH_OLLAMA)
                 if ts2["up"]:
                     results["ollama_found"] = port

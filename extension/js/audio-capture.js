@@ -3,16 +3,15 @@
 // Translation and romanization are SEPARATE API calls
 // ============================================================================
 
-const _DEFAULT_WHISPER_URL = 'http://localhost:5001';
-
 // Languages with instant deterministic romanization (no LLM needed).
 // ja: WanaKana (client-side), ko: hangul decomposition (client-side),
 // ru: cyrillic transliteration (client-side), zh: pypinyin (server-side).
 const DETERMINISTIC_ROMA_LANGS = new Set(['ja', 'zh', 'ko', 'ru']);
 
-// Cached result of deterministic romanization probe (null = not yet checked)
-let _deterministicRomaAvailable = null;
-let _deterministicRomaProbeTime = 0;  // timestamp of last probe (for re-probe on failure)
+// Probe result cache keyed by sourceLanguage — prevents a ja probe result
+// from masking a later zh probe (each language must probe independently).
+const _deterministicRomaAvailable = {};  // { lang: true|false|null }
+const _deterministicRomaProbeTime = {};  // { lang: timestamp }
 
 // eslint-disable-next-line no-redeclare
 class AudioCapture {
@@ -135,7 +134,7 @@ class AudioCapture {
       try {
         const healthResp = await this._sendMessage({ type: 'CHECK_SERVER', isWhisper: true,
           url: ((await new Promise(r => chrome.storage.local.get(['settings'], r)))?.settings?.whisperUrl
-            || _DEFAULT_WHISPER_URL) + '/health'
+            || 'http://localhost:5001') + '/health'
         });
         if (healthResp?.healthy) break;  // Server ready
         if (healthResp?.loading) {
@@ -561,7 +560,7 @@ class AudioCapture {
         // Romanization strategy depends on whether deterministic (instant) is available:
         // - Deterministic (pykakasi/pypinyin): parallel with translation (free, <100ms)
         // - LLM-only: AFTER translation (they share the same LLM, can't parallelize)
-        const canParallelRoma = shouldRomanize && _deterministicRomaAvailable === true;
+        const canParallelRoma = shouldRomanize && _deterministicRomaAvailable[this.sourceLanguage || 'ja'] === true;
 
         if (canParallelRoma) {
           // Parallel: translation + romanization fire simultaneously
@@ -655,7 +654,7 @@ class AudioCapture {
       if (pSettings?.showEnglish === false) {
         translated = placeholders;  // Already in correct format
       } else {
-        const canParallelRoma = shouldRomanize && _deterministicRomaAvailable === true;
+        const canParallelRoma = shouldRomanize && _deterministicRomaAvailable[this.sourceLanguage || 'ja'] === true;
 
         if (canParallelRoma) {
           const origTexts = cleanSegments.map(seg => seg.text);
@@ -1032,13 +1031,13 @@ class AudioCapture {
   async _probeDeterministicRoma() {
     // If probe succeeded, keep result forever. If it failed, re-probe after 30s
     // (server may have finished loading since the initial probe).
-    if (_deterministicRomaAvailable === true) return;
-    if (_deterministicRomaAvailable === false && Date.now() - _deterministicRomaProbeTime < 30000) return;
     const srcLang = this.sourceLanguage || 'ja';
+    if (_deterministicRomaAvailable[srcLang] === true) return;
+    if (_deterministicRomaAvailable[srcLang] === false && Date.now() - (_deterministicRomaProbeTime[srcLang] || 0) < 30000) return;
 
     // Korean, Russian: always client-side
     if (srcLang === 'ko' || srcLang === 'ru') {
-      _deterministicRomaAvailable = true;
+      _deterministicRomaAvailable[srcLang] = true;
       const engines = { ko: 'Hangul decomposition', ru: 'Cyrillic table' };
       DEBUG.info('AudioCapture', `Romanization: ${engines[srcLang]} (client-side, instant)`);
       return;
@@ -1053,15 +1052,15 @@ class AudioCapture {
         });
         if (response?.success && response.romanizations?.[0] &&
             !this._hasKanji(response.romanizations[0])) {
-          _deterministicRomaAvailable = true;
+          _deterministicRomaAvailable[srcLang] = true;
           DEBUG.info('AudioCapture', 'Romanization: WanaKana + pykakasi (instant, full kanji support)');
         } else {
           // Server can't handle kanji — need LLM for kanji parts (sequential after translation)
-          _deterministicRomaAvailable = false; _deterministicRomaProbeTime = Date.now();
+          _deterministicRomaAvailable[srcLang] = false; _deterministicRomaProbeTime[srcLang] = Date.now();
           DEBUG.info('AudioCapture', 'Romanization: WanaKana (kana only) + LLM for kanji (after translation)');
         }
       } catch (e) {
-        _deterministicRomaAvailable = false; _deterministicRomaProbeTime = Date.now();
+        _deterministicRomaAvailable[srcLang] = false; _deterministicRomaProbeTime[srcLang] = Date.now();
         DEBUG.info('AudioCapture', 'Romanization: WanaKana (kana only) + LLM for kanji (after translation)');
       }
       return;
@@ -1073,17 +1072,17 @@ class AudioCapture {
         const response = await this._sendMessage({
           type: 'ROMANIZE_BATCH', texts: ['测试'], sourceLang: 'zh'
         });
-        _deterministicRomaAvailable = !!(response?.success &&
+        _deterministicRomaAvailable[srcLang] = !!(response?.success &&
           response.romanizations?.[0]?.length > 0);
-        DEBUG.info('AudioCapture', `Pinyin: ${_deterministicRomaAvailable ? 'available (pypinyin)' : 'LLM fallback'}`);
+        DEBUG.info('AudioCapture', `Pinyin: ${_deterministicRomaAvailable[srcLang] ? 'available (pypinyin)' : 'LLM fallback'}`);
       } catch (e) {
-        _deterministicRomaAvailable = false; _deterministicRomaProbeTime = Date.now();
+        _deterministicRomaAvailable[srcLang] = false; _deterministicRomaProbeTime[srcLang] = Date.now();
       }
       return;
     }
 
     // Arabic or other: LLM only
-    _deterministicRomaAvailable = false; _deterministicRomaProbeTime = Date.now();
+    _deterministicRomaAvailable[srcLang] = false; _deterministicRomaProbeTime[srcLang] = Date.now();
   }
 
   // Check if text contains CJK kanji characters (U+4E00-U+9FFF, U+3400-U+4DBF)

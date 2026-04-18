@@ -50,10 +50,7 @@ class TestDeadConfigDetection:
     # Keys that are KNOWN dead — they exist in config but nothing uses them.
     # If a key appears here, it's a known debt item, not a forgotten no-op.
     # The test will FAIL if a new dead key appears that isn't listed here.
-    KNOWN_DEAD = {
-        "word_timestamps",   # Server hardcodes False at line 1568 regardless of config
-        "pause_threshold",   # Only matters when word_timestamps=True, which is forced off
-    }
+    KNOWN_DEAD: set = set()  # No currently known-dead keys
 
     def test_no_unknown_dead_keys(self):
         """Every DEFAULT_CONFIG key must appear in source code beyond config.py itself.
@@ -120,7 +117,10 @@ class TestDeadConfigDetection:
             # If the key IS now used in real code, it should be removed from KNOWN_DEAD
             # We allow loading the value (e.g. into a global) — that's not "using" it
             # in a way that changes behavior if word_timestamps is forced False.
-            # This is a soft check — human review needed for edge cases.
+            assert not uses_in_app, (
+                f"KNOWN_DEAD key '{key}' is now used in app code — remove it from KNOWN_DEAD:\n"
+                + "\n".join(uses_in_app)
+            )
 
 
 # ---------------------------------------------------------------------------

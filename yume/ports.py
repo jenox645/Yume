@@ -63,7 +63,7 @@ def get_port_process(port: int) -> tuple[int | None, str | None]:
             if r.returncode != 0 or not r.stdout:
                 return None, None
             for line in r.stdout.splitlines():
-                if f":{port}" in line and "LISTENING" in line:
+                if re.search(rf":{port}(?:\s|$)", line) and "LISTENING" in line:
                     parts = line.split()
                     pid_str = parts[-1] if parts else ""
                     if pid_str.isdigit() and int(pid_str) != 0:
@@ -88,7 +88,7 @@ def get_port_process(port: int) -> tuple[int | None, str | None]:
             r2 = _run(["ss", "-tlnp"], timeout=10)
             if r2.returncode == 0 and r2.stdout:
                 for sline in r2.stdout.splitlines():
-                    if f":{port}" in sline:
+                    if re.search(rf":{port}(?:\s|$)", sline):
                         m = re.search(r"pid=(\d+)", sline)
                         if m:
                             pid = int(m.group(1))
@@ -156,7 +156,7 @@ def ensure_port_free(port: int, cfg: dict, key_prefix: str, exclude: set | None 
     ch = ask_choice(
         "How to resolve?",
         [
-            ("Kill the process", f"Terminate {name or 'PID ' + str(pid)}"),
+            ("Kill the process", f"Terminate {name or ('PID ' + str(pid) if pid else 'unknown process')}"),
             ("Use a different port", "Auto-find a free port"),
             ("Enter port manually", None),
             ("Cancel", None),
@@ -182,6 +182,9 @@ def ensure_port_free(port: int, cfg: dict, key_prefix: str, exclude: set | None 
         np = ask_input("Port number", str(port + 1))
         try:
             np = int(np)
+            if np < 1 or np > 65535:
+                error("Port must be between 1 and 65535")
+                return None
             if is_port_free(np):
                 cfg[f"{key_prefix}_port"] = np
                 save_config(cfg)

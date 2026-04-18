@@ -88,6 +88,9 @@ def setup_bgutil_server():
     except Exception as e:
         print(f"  bgutil server:    extract failed: {e}")
         zip_path.unlink(missing_ok=True)
+        for _leftover in (repo_parent / "bgutil-ytdlp-pot-provider-1.3.1", repo_parent / "bgutil-ytdlp-pot-provider"):
+            if _leftover.exists():
+                shutil.rmtree(str(_leftover), ignore_errors=True)
         return False
 
     if not main_ts.exists():
@@ -101,6 +104,8 @@ def setup_bgutil_server():
             cwd=str(server_dir),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=180,
         )
         if r.returncode == 0:
@@ -111,6 +116,8 @@ def setup_bgutil_server():
                 cwd=str(server_dir),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=180,
             )
             if r2.returncode == 0:

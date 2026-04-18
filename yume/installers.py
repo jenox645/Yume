@@ -371,8 +371,8 @@ def install_python_deps() -> bool:
     if not req.exists():
         SERVER_DIR.mkdir(parents=True, exist_ok=True)
         req.write_text(
-            "faster-whisper==1.2.1\nflask==3.1.3\nflask-cors==6.0.2\nwaitress==3.0.2\nnumpy==2.4.3\n"
-            "pykakasi==2.3.0\npypinyin==0.55.0\n"
+            "faster-whisper==1.2.1\nflask==3.1.3\nwaitress==3.0.2\nnumpy==2.4.3\n"
+            "pykakasi==2.3.0\npypinyin==0.55.0\nuvicorn==0.34.3\nfastapi==0.115.12\n"
         )
 
     if IS_WIN and not _has_build_tools():

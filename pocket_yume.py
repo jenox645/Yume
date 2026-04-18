@@ -350,6 +350,7 @@ def main() -> None:
             imported = config_import(sys.argv[2])
             if imported:
                 cfg.update(imported)
+                save_config(cfg)
         elif cmd == "recommend":
             from yume.hardware import recommend_whisper_model
 

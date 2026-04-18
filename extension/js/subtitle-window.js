@@ -248,7 +248,7 @@ class SubtitleWindow {
         }, 3000);
       }
     } else {
-      badge.textContent = `${fetched}/${total}`;
+      badge.textContent = `${_mainCount}/${total}`;
       badge.className = 'chunk-badge active';
       badge.style.display = hidden ? 'none' : '';
     }

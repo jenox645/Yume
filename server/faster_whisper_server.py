@@ -332,9 +332,11 @@ def switch_model():
     print(f"[Yume] Switching model: {old_model} -> {new_model}")
 
     try:
+        # Load outside the lock so /transcribe can still return 503 while loading
+        new_whisper = WhisperModel(new_model, device=_state.device, compute_type=_state.compute_type)
         with _state.transcribe_lock:
             _state.model_name = new_model
-            _state.model = WhisperModel(_state.model_name, device=_state.device, compute_type=_state.compute_type)
+            _state.model = new_whisper
         with _state.prefetch_lock:
             _state.subtitle_cache.clear()
         print(f"[Yume] Model switched to {_state.model_name}")
@@ -343,9 +345,10 @@ def switch_model():
     except Exception as e:
         print(f"[Yume] Model switch failed: {e}")
         try:
+            rollback_whisper = WhisperModel(old_model, device=_state.device, compute_type=_state.compute_type)
             with _state.transcribe_lock:
                 _state.model_name = old_model
-                _state.model = WhisperModel(_state.model_name, device=_state.device, compute_type=_state.compute_type)
+                _state.model = rollback_whisper
         except Exception as rollback_err:
             print(f"[Yume] Model rollback also failed: {rollback_err}")
             _state.model = None
@@ -556,6 +559,9 @@ def prepare_direct():
         import traceback
 
         traceback.print_exc()
+        _tmp = locals().get("tmp_dir")
+        if _tmp and os.path.isdir(_tmp):
+            shutil.rmtree(_tmp, ignore_errors=True)
         return jsonify({"error": str(e)}), 500
 
 
@@ -643,7 +649,7 @@ def transcribe_url():
             try:
                 os.unlink(audio_path)
                 parent = os.path.dirname(audio_path)
-                if parent and os.path.isdir(parent) and os.path.basename(parent).startswith(("yume_", "tmp")):
+                if parent and os.path.isdir(parent) and os.path.basename(parent).startswith("yume_") and parent != tempfile.gettempdir():
                     shutil.rmtree(parent, ignore_errors=True)
             except Exception:
                 pass
@@ -1286,9 +1292,9 @@ def _print_model_load_error(e):
         print("")
         print("  SOLUTIONS (pick one):")
         print("    1. Use a smaller model:")
-        print("       python pocket_yume.py settings  → change Whisper model to 'small' or 'base'")
+        print("       python pocket_yume.py setup      → change Whisper model to 'small' or 'base'")
         print("    2. Use CPU instead (slower but works):")
-        print("       python pocket_yume.py settings  → set device to 'cpu'")
+        print("       python pocket_yume.py setup      → set device to 'cpu'")
         print("    3. Or restart with: --device cpu --compute-type int8")
     elif "cublas" in err_msg or "cudnn" in err_msg or "cudart" in err_msg:
         print("")
@@ -1297,7 +1303,7 @@ def _print_model_load_error(e):
         print("  SOLUTIONS (pick one):")
         print("    1. Install CUDA Toolkit: https://developer.nvidia.com/cuda-toolkit")
         print("    2. Or switch to CPU mode (no CUDA needed):")
-        print("       python pocket_yume.py settings  → set device to 'cpu'")
+        print("       python pocket_yume.py setup      → set device to 'cpu'")
         print("    3. Or restart with: --device cpu --compute-type int8")
     elif "no module" in err_msg or "modulenotfound" in err_msg:
         missing = str(e).split("'")[1] if "'" in str(e) else "unknown"
