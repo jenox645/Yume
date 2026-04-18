@@ -103,11 +103,6 @@ import _transcribe  # noqa: E402
 import faster_whisper_server as _fws  # noqa: E402
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# _security.py
-# ═════════════════════════════════════════════════════════════════════════════
-
-
 class TestValidateUrl(unittest.TestCase):
     """Tests for _security.validate_url — every branch."""
 
@@ -167,7 +162,7 @@ class TestValidateUrl(unittest.TestCase):
         self.assertIn("'-'", err)
 
     def test_double_dash_rejected(self):
-        valid, err = _security.validate_url("--help")
+        valid, _ = _security.validate_url("--help")
         self.assertFalse(valid)
 
     # ── Shell metacharacters ──────────────────────────────────────────────────
@@ -225,11 +220,6 @@ class TestValidateUrl(unittest.TestCase):
         self.assertGreater(len(err), 0)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# _state.py
-# ═════════════════════════════════════════════════════════════════════════════
-
-
 class TestState(unittest.TestCase):
 
     def test_model_initially_none(self):
@@ -246,10 +236,11 @@ class TestState(unittest.TestCase):
         self.assertIsInstance(_state.stream_url_cache, dict)
 
     def test_locks_are_lock_instances(self):
-        self.assertIsInstance(_state.transcribe_lock, type(threading.Lock()))
-        self.assertIsInstance(_state.prefetch_lock, type(threading.Lock()))
-        self.assertIsInstance(_state.cache_lock, type(threading.Lock()))
-        self.assertIsInstance(_state.stats_lock, type(threading.Lock()))
+        lock_type = type(threading.Lock())
+        self.assertIsInstance(_state.transcribe_lock, lock_type)
+        self.assertIsInstance(_state.prefetch_lock, lock_type)
+        self.assertIsInstance(_state.cache_lock, lock_type)
+        self.assertIsInstance(_state.stats_lock, lock_type)
 
     def test_cache_max_constants_positive(self):
         self.assertGreater(_state.SUBTITLE_CACHE_MAX, 0)
@@ -287,11 +278,6 @@ class TestState(unittest.TestCase):
 
     def test_use_word_timestamps_is_bool(self):
         self.assertIsInstance(_state.use_word_timestamps, bool)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# _filter.py
-# ═════════════════════════════════════════════════════════════════════════════
 
 
 class TestIsHallucination(unittest.TestCase):
@@ -506,11 +492,6 @@ class TestIsCreditsLine(unittest.TestCase):
             self.assertGreater(len(p), 0)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# _romanize.py
-# ═════════════════════════════════════════════════════════════════════════════
-
-
 class TestRomanize(unittest.TestCase):
     """These libs are not installed in CI; verify graceful None fallback."""
 
@@ -537,7 +518,7 @@ class TestRomanize(unittest.TestCase):
         def _call():
             try:
                 results.append(_romanize.get_kakasi())
-            except Exception as e:
+            except (RuntimeError, ImportError, ValueError) as e:
                 errors.append(e)
 
         threads = [threading.Thread(target=_call) for _ in range(5)]
@@ -591,11 +572,6 @@ class TestRomanize(unittest.TestCase):
             result = _romanize.romanize_chinese("测试")
         self.assertIsNotNone(result)
         fake_pinyin.assert_called_once()
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# _transcribe.py
-# ═════════════════════════════════════════════════════════════════════════════
 
 
 class _FakeSegment:
@@ -871,11 +847,6 @@ class TestTranscribeFile(unittest.TestCase):
             acquired = _state.transcribe_lock.acquire(blocking=False)
             self.assertTrue(acquired, "transcribe_lock was not released")
             _state.transcribe_lock.release()
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# _audio.py
-# ═════════════════════════════════════════════════════════════════════════════
 
 
 class TestYtdlpCmd(unittest.TestCase):
@@ -1233,11 +1204,6 @@ class TestGetStreamUrl(unittest.TestCase):
         self.assertIn("https://youtube.com/watch?v=newvid", _state.stream_url_cache)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# _bgutil.py
-# ═════════════════════════════════════════════════════════════════════════════
-
-
 class TestBgutil(unittest.TestCase):
 
     def test_bgutil_server_dir_returns_path(self):
@@ -1536,7 +1502,7 @@ class TestPrintModelLoadError(unittest.TestCase):
         import io
         buf = io.StringIO()
         with patch("sys.stdout", buf):
-            _fws._print_model_load_error(Exception(msg))
+            _fws._print_model_load_error(RuntimeError(msg))
         return buf.getvalue()
 
     def test_oom_error_suggests_smaller_model(self):
@@ -1568,10 +1534,7 @@ class TestSetLowPriority(unittest.TestCase):
 
     def test_does_not_raise(self):
         """Lowering thread priority is best-effort — must not raise in tests."""
-        try:
-            _fws._set_low_priority()
-        except Exception as e:
-            self.fail(f"_set_low_priority() raised: {e}")
+        _fws._set_low_priority()
 
 
 class TestWriteTokenFile(unittest.TestCase):
