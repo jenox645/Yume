@@ -96,7 +96,7 @@ async function _whisperFetch(url, options = {}, timeoutMs = 30000) {
     console.warn('[Background] 403 — stale API token, re-discovering...');
     // Clear cached token so _getApiToken re-fetches from /health
     apiToken = null;
-    try { await chrome.storage.session.remove(['apiToken']); } catch (e) { /* ok */ }
+    try { await chrome.storage.session.remove(['apiToken']); } catch (_e) { /* ok */ }
     const newToken = await _getApiToken(whisperUrl);
     if (newToken && newToken !== token) {
       console.log('[Background] New API token acquired, retrying request');
@@ -163,7 +163,7 @@ async function discoverSettingsFromWhisper() {
     // Health returns 503 during loading but still includes api_token
     const response = await fetch(`${whisperUrl}/health`, { signal: controller.signal });
     let data;
-    try { data = await response.json(); } catch (e) { return; }
+    try { data = await response.json(); } catch (_e) { return; }
     // Discover API token (available even during model loading)
     if (data.api_token) {
       apiToken = data.api_token;
@@ -195,7 +195,7 @@ async function discoverSettingsFromWhisper() {
         } catch (e) { console.warn('[Yume]', e.message || e); }
       }
     }
-  } catch (e) {
+  } catch (_e) {
     console.log('[Background] Auto-discover skipped (whisper not up yet)');
   }
 }
@@ -288,7 +288,7 @@ async function handleCheckServer(url, sendResponse, isWhisperServer = false) {
     try {
       const text = await response.text();
       // Try JSON parse — fall back to treating any 200 response as healthy
-      try { data = JSON.parse(text); } catch (e) { data = { raw: text.substring(0, 200) }; }
+      try { data = JSON.parse(text); } catch (_e) { data = { raw: text.substring(0, 200) }; }
       // Discover API token from Whisper health response
       if (data.api_token && !apiToken) {
         apiToken = data.api_token;
@@ -639,7 +639,7 @@ async function handleRomanize(text, sourceLang, sendResponse) {
             romanization = detData.romanization;
           }
         }
-      } catch (e) {
+      } catch (_e) {
         // Deterministic endpoint unavailable — fall through to LLM
       }
     }
@@ -840,7 +840,7 @@ async function handleRomanizeBatch(texts, sourceLang, sendResponse) {
               romanizationCache.set(cacheKey, { value: roma, ts: Date.now() });
             }
           }
-        } catch (e2) { /* skip */ }
+        } catch (_e2) { /* skip */ }
       }
     }
 

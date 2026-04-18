@@ -9,7 +9,7 @@ async function _getApiToken() {
   try {
     const data = await chrome.storage.session.get(['apiToken']);
     return data.apiToken || null;
-  } catch (e) {
+  } catch (_e) {
     return null;
   }
 }
@@ -299,7 +299,7 @@ async function checkServers() {
     const infoEl = document.getElementById('whisperInfo');
     if (infoEl && w.data) infoEl.textContent = `${w.data.device || '?'} | ${w.data.model || '?'}`;
     else if (infoEl) infoEl.textContent = `localhost:${wPort}`;
-  } catch (e) { whisperEl.className = 'status-indicator disconnected'; }
+  } catch (_e) { whisperEl.className = 'status-indicator disconnected'; }
 
   try {
     // Only try the endpoint that matches the backend — avoids 404 spam in translation logs.
@@ -330,7 +330,7 @@ async function checkServers() {
     }
     const portEl = document.getElementById('translationInfo');
     if (portEl) portEl.textContent = `localhost:${tPort}`;
-  } catch (e) {
+  } catch (_e) {
     // Network error (timeout, connection refused) — use same 3-strike logic
     // The translation LLM may be busy with a 10-20s inference, causing timeouts
     translationEl._failCount = (translationEl._failCount || 0) + 1;
@@ -678,7 +678,7 @@ async function loadModels() {
     }
     if (note) html += `<div style="margin-top:6px;font-size:10px;color:var(--border-gold);font-style:italic">${_escapeHtml(note)}</div>`;
     infoEl.innerHTML = html;
-  } catch (e) {
+  } catch (_e) {
     infoEl.innerHTML = '<span class="model-label" style="color:var(--text-dim)">Could not load models</span>';
   }
 }
@@ -708,7 +708,7 @@ async function clearCache() {
     }
     const count = serverResult?.cleared || 0;
     showToast(`Cache cleared (${count} server chunks)`, 'success');
-  } catch (e) { showToast('Failed to clear cache', 'error'); }
+  } catch (_e) { showToast('Failed to clear cache', 'error'); }
 }
 
 // ============================================================================
@@ -849,7 +849,7 @@ async function fetchDiagnostics() {
       return `<div class="diag-entry"><span class="diag-time">${_escapeHtml(entry.time)}</span><span class="diag-chunk">${chunkLabel}</span>${badge}${segs}<span class="diag-detail">${_escapeHtml(elapsed + ' ' + (entry.details || ''))}</span></div>`;
     }).join('');
     logEl.scrollTop = logEl.scrollHeight;
-  } catch (e) { statusEl.textContent = 'Content script not loaded'; logEl.innerHTML = ''; }
+  } catch (_e) { statusEl.textContent = 'Content script not loaded'; logEl.innerHTML = ''; }
 }
 
 async function downloadDiagnostics() {
@@ -905,7 +905,7 @@ async function reportHallucination() {
     `;
     previewEl.querySelector('.preview-confirm').addEventListener('click', () => { addToBlacklist(text); previewEl.style.display = 'none'; });
     previewEl.querySelector('.preview-cancel').addEventListener('click', () => { previewEl.style.display = 'none'; });
-  } catch (e) { statusEl.textContent = 'Content script not loaded'; statusEl.className = 'status-message error'; setTimeout(() => { statusEl.textContent = ''; }, 3000); }
+  } catch (_e) { statusEl.textContent = 'Content script not loaded'; statusEl.className = 'status-message error'; setTimeout(() => { statusEl.textContent = ''; }, 3000); }
 }
 
 function addToBlacklist(text) {
@@ -1011,7 +1011,7 @@ async function fetchStats() {
             try { await chrome.storage.session.set({ apiToken: token }); } catch (e) { console.warn('[Yume]', e.message); }
           }
         }
-      } catch (e) { /* health check failed, proceed anyway */ }
+      } catch (_e) { /* health check failed, proceed anyway */ }
     }
 
     const controller = new AbortController();

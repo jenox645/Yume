@@ -77,7 +77,7 @@ class DebugSystem {
   sanitizeData(data) {
     try {
       return JSON.parse(JSON.stringify(data));
-    } catch (e) {
+    } catch (_e) {
       return { _error: 'Could not serialize data' };
     }
   }

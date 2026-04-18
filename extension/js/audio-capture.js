@@ -92,7 +92,7 @@ class AudioCapture {
       chrome.storage.local.get(['hallucinationBlacklist'], (result) => {
         this.userBlacklist = result.hallucinationBlacklist || [];
       });
-    } catch (e) { this.userBlacklist = []; }
+    } catch (_e) { this.userBlacklist = []; }
   }
 
   // =========================================================================
@@ -117,7 +117,7 @@ class AudioCapture {
       this.sourceLanguage = settings?.sourceLanguage || 'ja';
       this.showRomaji = settings?.showRomaji || false;
       this.timingOffset = (settings?.timingOffset || 0) / 10;  // stored as ticks, convert to seconds
-    } catch (e) { this.sourceLanguage = 'ja'; this.showRomaji = false; this.timingOffset = 0; }
+    } catch (_e) { this.sourceLanguage = 'ja'; this.showRomaji = false; this.timingOffset = 0; }
 
     // Reload user blacklist
     this._loadUserBlacklist();
@@ -581,7 +581,7 @@ class AudioCapture {
           if (shouldRomanize) {
             try {
               await this._romanizeBatch(translated);
-            } catch (e) { /* romanization is optional */ }
+            } catch (_e) { /* romanization is optional */ }
           }
         }
       }
@@ -673,7 +673,7 @@ class AudioCapture {
           if (shouldRomanize) {
             try {
               await this._romanizeBatch(translated);
-            } catch (e) { /* romanization is optional */ }
+            } catch (_e) { /* romanization is optional */ }
           }
         }
       }
@@ -686,7 +686,7 @@ class AudioCapture {
       if (pSettings?.showEnglish === false && shouldRomanize) {
         try {
           await this._romanizeBatch(translated);
-        } catch (e) { /* optional */ }
+        } catch (_e) { /* optional */ }
       }
 
       // Final generation check before storing
@@ -842,7 +842,7 @@ class AudioCapture {
         await chrome.storage.session.remove(yumeKeys[0]);
       }
       await chrome.storage.session.set({ [sessionKey]: data });
-    } catch (e) {
+    } catch (_e) {
       // Session storage can fail (quota, etc) — non-critical
     }
   }
@@ -890,7 +890,7 @@ class AudioCapture {
         `Restored ${this.fetchedChunks.size}/${this.totalChunks} chunks from session`);
       this._dispatchProgress();
       return true;
-    } catch (e) {
+    } catch (_e) {
       return false;
     }
   }
@@ -1011,7 +1011,7 @@ class AudioCapture {
             if (response?.success && response.translation) {
               if (!translations[i]) translations[i] = response.translation.trim();
             }
-          } catch (e) { /* keep original */ }
+          } catch (_e) { /* keep original */ }
         }
       }
     }
@@ -1059,7 +1059,7 @@ class AudioCapture {
           _deterministicRomaAvailable[srcLang] = false; _deterministicRomaProbeTime[srcLang] = Date.now();
           DEBUG.info('AudioCapture', 'Romanization: WanaKana (kana only) + LLM for kanji (after translation)');
         }
-      } catch (e) {
+      } catch (_e) {
         _deterministicRomaAvailable[srcLang] = false; _deterministicRomaProbeTime[srcLang] = Date.now();
         DEBUG.info('AudioCapture', 'Romanization: WanaKana (kana only) + LLM for kanji (after translation)');
       }
@@ -1075,7 +1075,7 @@ class AudioCapture {
         _deterministicRomaAvailable[srcLang] = !!(response?.success &&
           response.romanizations?.[0]?.length > 0);
         DEBUG.info('AudioCapture', `Pinyin: ${_deterministicRomaAvailable[srcLang] ? 'available (pypinyin)' : 'LLM fallback'}`);
-      } catch (e) {
+      } catch (_e) {
         _deterministicRomaAvailable[srcLang] = false; _deterministicRomaProbeTime[srcLang] = Date.now();
       }
       return;
@@ -1102,7 +1102,7 @@ class AudioCapture {
       try {
         const result = wanakana.toRomaji(text);
         return { romaji: result, complete: !this._hasKanji(result) };
-      } catch (e) {
+      } catch (_e) {
         return { romaji: '', complete: false };
       }
     });
@@ -1192,7 +1192,7 @@ class AudioCapture {
             }
           }
         }
-      } catch (e) {
+      } catch (_e) {
         // Server unavailable (no pykakasi) — WanaKana partials remain
         // _romanizeBatch after translation will do LLM refinement for these
       }
@@ -1305,7 +1305,7 @@ class AudioCapture {
         }
         return;
       }
-    } catch (err) {
+    } catch (_err) {
       DEBUG.warn('AudioCapture', 'Batch romanization failed, falling back to sequential');
     }
 
@@ -1320,7 +1320,7 @@ class AudioCapture {
         if (response?.success && response.romanization) {
           seg.romaji = response.romanization.trim();
         }
-      } catch (err) {
+      } catch (_err) {
         DEBUG.warn('AudioCapture', 'Romanization failed', { text: seg.original });
       }
     }
@@ -1373,7 +1373,7 @@ class AudioCapture {
                 }
               }
             }
-          } catch (e) { /* server unavailable */ }
+          } catch (_e) { /* server unavailable */ }
         }
         continue;
       }
@@ -1454,7 +1454,7 @@ class AudioCapture {
         const total = this.serverPatterns.builtin.length + this.serverPatterns.credits.length;
         DEBUG.info('AudioCapture', `Loaded ${total} patterns from server`);
       }
-    } catch (e) {
+    } catch (_e) {
       DEBUG.warn('AudioCapture', 'Could not fetch server patterns, using fallback');
     }
   }
@@ -1576,7 +1576,7 @@ class AudioCapture {
       if (this.videoId) {
         chrome.storage.session.remove(`yume_${this.videoId}`);
       }
-    } catch (e) { /* session storage may not be available */ }
+    } catch (_e) { /* session storage may not be available */ }
     // Clear displayed subtitle
     window.dispatchEvent(new CustomEvent('display-subtitle', {
       detail: { original: '', english: '', romaji: '' }

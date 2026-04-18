@@ -57,7 +57,7 @@ export default [
         },
         rules: {
             "no-undef": "error",
-            "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+            "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" }],
             "eqeqeq": ["warn", "smart"],
             "no-debugger": "warn",
             "no-empty": ["warn", { allowEmptyCatch: true }],

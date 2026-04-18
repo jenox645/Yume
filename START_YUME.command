@@ -28,7 +28,7 @@ else
     exit 1
 fi
 
-echo "Python: $($PY --version)"
+echo "Python: $("$PY" --version)"
 echo ""
 
 if [ ! -f "pocket_yume.py" ]; then
@@ -38,7 +38,7 @@ if [ ! -f "pocket_yume.py" ]; then
     exit 1
 fi
 
-$PY pocket_yume.py "$@"
+"$PY" pocket_yume.py "$@"
 
 echo ""
 read -rp "Press Enter to close..."
