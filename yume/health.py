@@ -76,7 +76,11 @@ def health_check(cfg: dict) -> None:
 
     def _chk_pip():
         r = _run([sys.executable, "-m", "pip", "--version"], timeout=10)
-        ver = r.stdout.split()[1] if r.returncode == 0 else "not found — install python3-pip"
+        if r.returncode == 0:
+            parts = r.stdout.strip().split()
+            ver = parts[1] if len(parts) >= 2 else "unknown"
+        else:
+            ver = "not found — install python3-pip"
         return ("pip available", r.returncode == 0, ver)
 
     def _chk_pkg(pkg, name):

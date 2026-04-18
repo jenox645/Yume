@@ -477,15 +477,27 @@ function _buildTranslationPrompt(srcLang, targetLang, customPrompt) {
 
 const _CLEAN_TEXT_MAX_LENGTH = 2000;
 
+// Context snippet: last translated sentence carried into the next batch prompt.
+// NOTE: module-level — cleared on service worker unload (acceptable; next batch cold-starts
+// gracefully). Not keyed per-tab: concurrent multi-tab use may see cross-tab context bleed,
+// which is a minor coherence issue. A chrome.storage.session[tabId] fix would resolve both
+// but requires making _buildBatchPrompt async — deferred.
+let _lastTranslatedSentence = '';
+
 function _cleanTranslation(text) {
   if (text.length > _CLEAN_TEXT_MAX_LENGTH) return text.trim();
   let c = text.trim();
-  c = c.replace(/^.{1,40}\s+translates?\s+to\s+/i, '');
-  c = c.replace(/^translation:\s*/i, '');
-  c = c.replace(/^line\s*\d+:\s*/i, '');
-  c = c.replace(/^(Romanization|Romaji|English)\s*[:：]\s*/i, '');
-  c = c.replace(/^["'「」『』]+|["'「」『』]+$/g, '');
-  c = c.replace(/^.{1,30}\s+means?\s+["']?/i, '');
+  const matched = [];
+  let t;
+  t = c; c = c.replace(/^.{1,40}\s+translates?\s+to\s+/i, '');            if (c !== t) matched.push('translates-to');
+  t = c; c = c.replace(/^translation:\s*/i, '');                            if (c !== t) matched.push('translation-prefix');
+  t = c; c = c.replace(/^line\s*\d+:\s*/i, '');                             if (c !== t) matched.push('line-prefix');
+  t = c; c = c.replace(/^(Romanization|Romaji|English)\s*[:：]\s*/i, '');   if (c !== t) matched.push('lang-label');
+  t = c; c = c.replace(/^["'「」『』]+|["'「」『』]+$/g, '');                  if (c !== t) matched.push('strip-quotes');
+  t = c; c = c.replace(/^.{1,30}\s+means?\s+["']?/i, '');                  if (c !== t) matched.push('means');
+  if (matched.length > 0) {
+    console.warn(`[CleanTranslation] patterns=[${matched.join(',')}] in="${text.substring(0, 80)}"`);
+  }
   return c.trim();
 }
 
@@ -840,19 +852,15 @@ async function handleRomanizeBatch(texts, sourceLang, sendResponse) {
 // BATCH TRANSLATION
 // ============================================================================
 
-function _buildBatchPrompt(srcLang, targetLang, customPrompt) {
+function _buildBatchPrompt(srcLang, targetLang, customPrompt, priorContext) {
   const src = LANG_NAMES[srcLang] || LANG_NAMES['ja'];
   const tgt = targetLang || 'English';
-  // For batch mode, always append the numbering rules even with custom prompts
-  const basePrompt = customPrompt
+  const base = customPrompt
     ? customPrompt.replace(/\{src\}/g, src).replace(/\{tgt\}/g, tgt)
-    : `You are a ${src}-to-${tgt} subtitle translator.`;
-  return `${basePrompt} You receive numbered ${src} lines and output ONLY the ${tgt} translations with matching numbers. Rules:
-- Translate EVERY line, one translation per line
-- Keep the [N] numbering exactly
-- Do NOT skip, merge, or reorder lines
-- Do NOT add explanations or notes
-- Output ONLY translations, nothing else`;
+    : `Translate ${src} to ${tgt}.`;
+  // ~320 chars ≈ 80 tokens — skip oversized context snippets
+  const ctx = (priorContext && priorContext.length <= 320) ? `Prior context: ${priorContext}\n` : '';
+  return `${ctx}${base} Output ONLY numbered lines matching [N] input. Nothing else.`;
 }
 
 async function handleTranslateBatch(batchText, count, sendResponse) {
@@ -890,14 +898,18 @@ async function handleTranslateBatch(batchText, count, sendResponse) {
     }
 
     // Send only uncached lines to LLM
+    const batchMessages = [
+      { role: "system", content: _buildBatchPrompt(srcLang, tgtLang, settings?.translationPrompt, _lastTranslatedSentence) },
+      { role: "user", content: uncachedLines.join('\n') },
+      // Forced assistant prefix: steers model to continue from [1] instead of generating preamble.
+      // Remove this message if the backend rejects partial assistant turns.
+      { role: "assistant", content: "[1]" }
+    ];
     const response = await _fetchWithTimeout(`${translationUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        messages: [
-          { role: "system", content: _buildBatchPrompt(srcLang, tgtLang, settings?.translationPrompt) },
-          { role: "user", content: uncachedLines.join('\n') }
-        ],
+        messages: batchMessages,
         max_tokens: Math.min(2048, Math.max(500, 150 * uncachedLines.length)),
         temperature: 0.1,
         stream: false
@@ -905,7 +917,8 @@ async function handleTranslateBatch(batchText, count, sendResponse) {
     }, 120000);  // 120s for consumer LLM batch
     if (!response.ok) throw new Error(`Translation error: ${response.status}`);
     const result = await response.json();
-    let raw = result.choices?.[0]?.message?.content || '';
+    // Restore the forced [1] prefix the model continued from
+    let raw = '[1]' + (result.choices?.[0]?.message?.content || '');
     const newTranslations = _parseBatchResponse(raw.trim(), uncachedLines.length);
 
     // Map results back and populate cache
@@ -916,6 +929,14 @@ async function handleTranslateBatch(batchText, count, sendResponse) {
       if (translation) {
         _setCachedTranslation(`${srcLang}||${tgtLang}||${translationUrl}||${text}`, translation);
       }
+    }
+
+    // Save last translated sentence for next batch's prior-context snippet
+    const lastNonEmpty = results.filter(Boolean).pop();
+    if (lastNonEmpty) {
+      // Extract the last sentence fragment (split on . ! ? or use full string if short)
+      const sentences = lastNonEmpty.split(/(?<=[.!?])\s+/);
+      _lastTranslatedSentence = sentences[sentences.length - 1].trim();
     }
 
     sendResponse({ success: true, translations: results });
