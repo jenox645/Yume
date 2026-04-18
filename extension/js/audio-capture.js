@@ -84,6 +84,9 @@ class AudioCapture {
     this.diagLog = [];
     this.maxDiagEntries = 50;
 
+    // Per-chunk pipeline timing (whisper → translate → romanize → render)
+    this._timings = {};
+
     DEBUG.functionEnd('AudioCapture', 'constructor');
   }
 
@@ -431,6 +434,10 @@ class AudioCapture {
           }
           if (seg._blocked) continue;
           this.lastShownSegment = seg;
+          if (this._timings[idx] && !this._timings[idx].renderFirst) {
+            this._timings[idx].renderFirst = performance.now();
+            this._logChunkTiming(idx);
+          }
           window.dispatchEvent(new CustomEvent('display-subtitle', {
             detail: {
               original: seg.original, english: seg.english, romaji: seg.romaji || '',
@@ -465,6 +472,7 @@ class AudioCapture {
     const chunkStart = chunkIndex * this.stepSize;
     const chunkEnd = chunkStart + this.chunkDuration;
     const t0 = performance.now();
+    this._timings[chunkIndex] = { chunk: chunkIndex, t0 };
 
     this._addDiag(chunkIndex, 'fetching', 0, 0, `${chunkStart}s-${chunkEnd}s`);
 
@@ -473,6 +481,7 @@ class AudioCapture {
       const transcription = await this._retryAsync(() => this._requestTranscription(chunkIndex), 2);
       const whisperTime = ((performance.now() - tWhisper) / 1000).toFixed(1);
       const wasCached = transcription?.cached === true;
+      if (this._timings[chunkIndex]) this._timings[chunkIndex].whisperEnd = performance.now();
 
       const cleanSegments = (transcription?.segments || [])
         .filter(seg => !this._isHallucination(seg.text));
@@ -544,6 +553,7 @@ class AudioCapture {
     try {
       // 2. Translate (skip entirely if translation is disabled)
       const tTrans = performance.now();
+      if (this._timings[chunkIndex]) this._timings[chunkIndex].translateStart = tTrans;
       const { settings: transSettings } = await new Promise(r => chrome.storage.local.get(['settings'], r));
       const srcLang = transSettings?.sourceLanguage || this.sourceLanguage || 'ja';
       const isDeterministic = DETERMINISTIC_ROMA_LANGS.has(srcLang);
@@ -566,10 +576,11 @@ class AudioCapture {
           // Parallel: translation + romanization fire simultaneously
           const origTexts = cleanSegments.map(seg => seg.text);
           const [batchResult, romaResult] = await Promise.all([
-            this._translateBatch(cleanSegments),
+            this._translateBatch(cleanSegments, chunkIndex),
             this._romanizeTexts(origTexts, srcLang)
           ]);
           translated = batchResult;
+          if (this._timings[chunkIndex]) this._timings[chunkIndex].batchEnd = performance.now();
           if (romaResult) {
             for (let i = 0; i < translated.length && i < romaResult.length; i++) {
               if (romaResult[i]) translated[i].romaji = romaResult[i];
@@ -577,7 +588,8 @@ class AudioCapture {
           }
         } else {
           // Sequential: translate first, then romanize (LLM-only or no romaji)
-          translated = await this._translateBatch(cleanSegments);
+          translated = await this._translateBatch(cleanSegments, chunkIndex);
+          if (this._timings[chunkIndex]) this._timings[chunkIndex].batchEnd = performance.now();
           if (shouldRomanize) {
             try {
               await this._romanizeBatch(translated);
@@ -585,6 +597,7 @@ class AudioCapture {
           }
         }
       }
+      if (this._timings[chunkIndex]) this._timings[chunkIndex].translateEnd = performance.now();
       const transTime = ((performance.now() - tTrans) / 1000).toFixed(1);
 
       // 4. Store fully translated segments (replaces source-only placeholders)
@@ -645,6 +658,7 @@ class AudioCapture {
 
       // Skip translation entirely if disabled — saves full LLM inference per chunk
       const tTrans = performance.now();
+      if (this._timings[chunkIndex]) this._timings[chunkIndex].translateStart = tTrans;
       const { settings: pSettings } = await new Promise(r => chrome.storage.local.get(['settings'], r));
       const srcLang = pSettings?.sourceLanguage || this.sourceLanguage || 'ja';
       const isDeterministic = DETERMINISTIC_ROMA_LANGS.has(srcLang);
@@ -659,17 +673,19 @@ class AudioCapture {
         if (canParallelRoma) {
           const origTexts = cleanSegments.map(seg => seg.text);
           const [batchResult, romaResult] = await Promise.all([
-            this._translateBatch(cleanSegments),
+            this._translateBatch(cleanSegments, chunkIndex),
             this._romanizeTexts(origTexts, srcLang)
           ]);
           translated = batchResult;
+          if (this._timings[chunkIndex]) this._timings[chunkIndex].batchEnd = performance.now();
           if (romaResult) {
             for (let i = 0; i < translated.length && i < romaResult.length; i++) {
               if (romaResult[i]) translated[i].romaji = romaResult[i];
             }
           }
         } else {
-          translated = await this._translateBatch(cleanSegments);
+          translated = await this._translateBatch(cleanSegments, chunkIndex);
+          if (this._timings[chunkIndex]) this._timings[chunkIndex].batchEnd = performance.now();
           if (shouldRomanize) {
             try {
               await this._romanizeBatch(translated);
@@ -677,6 +693,7 @@ class AudioCapture {
           }
         }
       }
+      if (this._timings[chunkIndex]) this._timings[chunkIndex].translateEnd = performance.now();
       const transTime = ((performance.now() - tTrans) / 1000).toFixed(1);
 
       // Re-check generation after async translation
@@ -968,24 +985,35 @@ class AudioCapture {
   }
 
   // Translation — batch mode: all segments in a single LLM call
-  async _translateBatch(segments) {
+  async _translateBatch(segments, chunkIndex = -1) {
     if (segments.length === 0) return [];
 
     // Build numbered batch for single API call
     const batchText = segments.map((seg, i) => `[${i + 1}] ${seg.text}`).join('\n');
+
+    // Listen for streaming partial translations sent back from background.js
+    const onPartial = (msg) => {
+      if (msg.type === 'TRANSLATE_BATCH_PARTIAL' && msg.chunkIndex === chunkIndex) {
+        this._applyPartialTranslation(chunkIndex, msg.lineIndex, msg.translation);
+      }
+    };
+    if (chunkIndex >= 0) chrome.runtime.onMessage.addListener(onPartial);
 
     let translations = [];
     try {
       const response = await this._sendMessage({
         type: 'TRANSLATE_BATCH',
         text: batchText,
-        count: segments.length
+        count: segments.length,
+        chunkIndex
       });
       if (response?.success && response.translations) {
         translations = response.translations;
       }
     } catch (err) {
       DEBUG.warn('AudioCapture', 'Batch translation failed, falling back', { error: err.message });
+    } finally {
+      if (chunkIndex >= 0) chrome.runtime.onMessage.removeListener(onPartial);
     }
 
     // If batch returned too few OR has empty slots, fill gaps
@@ -1514,6 +1542,37 @@ class AudioCapture {
     if (singleWords.includes(t)) return true;
 
     return false;
+  }
+
+  // Apply a streaming partial translation immediately (before the full batch returns).
+  // If the segment happens to be on-screen right now, refresh the display instantly.
+  _applyPartialTranslation(chunkIndex, lineIndex, translation) {
+    const segments = this.subtitleChunks[chunkIndex];
+    if (!segments || !segments[lineIndex]) return;
+    segments[lineIndex].english = translation;
+    if (this.lastShownSegment === segments[lineIndex]) {
+      window.dispatchEvent(new CustomEvent('display-subtitle', {
+        detail: {
+          original: segments[lineIndex].original,
+          english: translation,
+          romaji: segments[lineIndex].romaji || '',
+          confidence: segments[lineIndex].confidence || 0
+        }
+      }));
+    }
+  }
+
+  // Log per-chunk pipeline timing once all 4 timestamps are present.
+  _logChunkTiming(chunkIndex) {
+    const t = this._timings[chunkIndex];
+    if (!t || !t.whisperEnd || !t.translateEnd || !t.renderFirst) return;
+    const whisperMs   = Math.round(t.whisperEnd - t.t0);
+    const translateMs = t.batchEnd ? Math.round(t.batchEnd - t.translateStart) : 0;
+    const romanizeMs  = (t.batchEnd && t.translateEnd > t.batchEnd)
+      ? Math.round(t.translateEnd - t.batchEnd) : 0;
+    const renderMs    = Math.round(t.renderFirst - t.t0);
+    console.table({ chunk: chunkIndex, whisperMs, translateMs, romanizeMs, renderMs });
+    delete this._timings[chunkIndex];
   }
 
   // =========================================================================

@@ -237,7 +237,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       handleRomanizeBatch(message.texts, message.sourceLang, sendResponse);
       return true;
     case 'TRANSLATE_BATCH':
-      handleTranslateBatch(message.text, message.count, sendResponse);
+      handleTranslateBatch(message.text, message.count, sendResponse, sender, message.chunkIndex);
       return true;
     case 'LIST_MODELS':
       handleListModels(sendResponse);
@@ -863,7 +863,7 @@ function _buildBatchPrompt(srcLang, targetLang, customPrompt, priorContext) {
   return `${ctx}${base} Output ONLY numbered lines matching [N] input. Nothing else.`;
 }
 
-async function handleTranslateBatch(batchText, count, sendResponse) {
+async function handleTranslateBatch(batchText, count, sendResponse, sender, chunkIndex) {
   try {
     const { settings } = await chrome.storage.local.get(['settings']);
     const translationUrl = _translationUrl(settings);
@@ -897,20 +897,132 @@ async function handleTranslateBatch(batchText, count, sendResponse) {
       return;
     }
 
-    // Send only uncached lines to LLM
+    // Build messages (shared by streaming and non-streaming paths)
     const batchMessages = [
       { role: "system", content: _buildBatchPrompt(srcLang, tgtLang, settings?.translationPrompt, _lastTranslatedSentence) },
       { role: "user", content: uncachedLines.join('\n') },
       // Forced assistant prefix: steers model to continue from [1] instead of generating preamble.
-      // Remove this message if the backend rejects partial assistant turns.
       { role: "assistant", content: "[1]" }
     ];
+    const maxTokens = Math.min(2048, Math.max(500, 150 * uncachedLines.length));
+    const tabId = sender?.tab?.id;
+
+    // -----------------------------------------------------------------------
+    // STREAMING PATH — only when >2 uncached lines (streaming a single line
+    // saves nothing and adds latency overhead).
+    // -----------------------------------------------------------------------
+    if (uncachedLines.length > 2) {
+      let streamFailed = false;
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 120000);
+        const streamResp = await fetch(`${translationUrl}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messages: batchMessages,
+            max_tokens: maxTokens,
+            temperature: 0.1,
+            stream: true
+          }),
+          signal: ctrl.signal
+        });
+        clearTimeout(timer);
+
+        if (!streamResp.ok) throw new Error(`Translation error: ${streamResp.status}`);
+
+        const reader = streamResp.body.getReader();
+        const decoder = new TextDecoder();
+        let sseBuffer = '';
+        let accumulated = '[1]'; // restore the forced [1] prefix the model continued from
+        let processedUpTo = 0;  // char offset into accumulated already scanned for complete lines
+
+        const emitParsedLine = (zeroIdx, rawText) => {
+          if (zeroIdx < 0 || zeroIdx >= uncachedLines.length) return;
+          const cleaned = _cleanTranslation(rawText);
+          if (!cleaned) return;
+          const { originalIdx, text } = uncachedIndices[zeroIdx];
+          results[originalIdx] = cleaned;
+          _setCachedTranslation(`${srcLang}||${tgtLang}||${translationUrl}||${text}`, cleaned);
+          // Push partial to content script so it can display immediately
+          if (tabId != null && chunkIndex != null) {
+            chrome.tabs.sendMessage(tabId, {
+              type: 'TRANSLATE_BATCH_PARTIAL',
+              chunkIndex,
+              lineIndex: originalIdx,
+              translation: cleaned
+            }).catch(() => {});
+          }
+        };
+
+        outer: while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          sseBuffer += decoder.decode(value, { stream: true });
+          const sseLines = sseBuffer.split('\n');
+          sseBuffer = sseLines.pop(); // keep incomplete line
+          for (const sseLine of sseLines) {
+            if (!sseLine.startsWith('data: ')) continue;
+            const chunk = sseLine.slice(6).trim();
+            if (chunk === '[DONE]') break outer;
+            try {
+              const parsed = JSON.parse(chunk);
+              const token = parsed.choices?.[0]?.delta?.content || '';
+              accumulated += token;
+              // Scan for complete [N] lines (terminated by \n)
+              while (true) {
+                const nlIdx = accumulated.indexOf('\n', processedUpTo);
+                if (nlIdx === -1) break;
+                const line = accumulated.slice(processedUpTo, nlIdx).trim();
+                processedUpTo = nlIdx + 1;
+                const lm = line.match(/^\[(\d+)\]\s*(.+)/);
+                if (lm) emitParsedLine(parseInt(lm[1]) - 1, lm[2].trim());
+              }
+            } catch (_e) { /* skip malformed SSE frame */ }
+          }
+        }
+
+        // Handle last line which may lack a trailing newline
+        const finalParsed = _parseBatchResponse(accumulated.trim(), uncachedLines.length);
+        for (let i = 0; i < uncachedIndices.length; i++) {
+          if (!results[uncachedIndices[i].originalIdx]) {
+            const t = (finalParsed[i] || '').trim();
+            if (t) {
+              results[uncachedIndices[i].originalIdx] = t;
+              const { text } = uncachedIndices[i];
+              _setCachedTranslation(`${srcLang}||${tgtLang}||${translationUrl}||${text}`, t);
+            }
+          }
+        }
+
+        const lastNonEmpty = results.filter(Boolean).pop();
+        if (lastNonEmpty) {
+          const sentences = lastNonEmpty.split(/(?<=[.!?])\s+/);
+          _lastTranslatedSentence = sentences[sentences.length - 1].trim();
+        }
+        sendResponse({ success: true, translations: results });
+        return;
+
+      } catch (e) {
+        console.warn('[Background] Streaming translation failed, retrying without stream:', e.message);
+        streamFailed = true;
+      }
+
+      if (streamFailed) {
+        // Clear any partial results so the non-streaming path fills them cleanly
+        for (const { originalIdx } of uncachedIndices) results[originalIdx] = '';
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // NON-STREAMING PATH (fallback, or when uncachedLines.length <= 2)
+    // -----------------------------------------------------------------------
     const response = await _fetchWithTimeout(`${translationUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         messages: batchMessages,
-        max_tokens: Math.min(2048, Math.max(500, 150 * uncachedLines.length)),
+        max_tokens: maxTokens,
         temperature: 0.1,
         stream: false
       })

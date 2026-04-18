@@ -45,6 +45,8 @@ export default [
                 // Chrome extension APIs
                 chrome: "readonly",
                 URLSearchParams: "readonly",
+                TextDecoder: "readonly",
+                ReadableStream: "readonly",
                 history: "readonly",
                 CSS: "readonly",
                 // Extension script globals (injected via manifest)
