@@ -308,12 +308,17 @@ def switch_model():
 
     is_local_path = os.path.sep in new_model or "/" in new_model
     if is_local_path:
-        if not os.path.isdir(new_model):
-            return jsonify({"error": f"Directory not found: {new_model}"}), 400
+        raw_path = Path(new_model)
+        if not raw_path.is_absolute() or ".." in raw_path.parts:
+            return jsonify({"error": "Model path must be absolute and must not contain '..'"}), 400
+        model_path = raw_path.resolve()
+        if not model_path.is_dir():
+            return jsonify({"error": f"Directory not found: {model_path}"}), 400
         required = ["model.bin", "config.json"]
-        missing = [f for f in required if not os.path.exists(os.path.join(new_model, f))]
+        missing = [f for f in required if not (model_path / f).exists()]
         if missing:
             return jsonify({"error": f"Not a valid CTranslate2 model — missing: {', '.join(missing)}"}), 400
+        new_model = str(model_path)
     elif new_model not in valid_models:
         return jsonify({"error": f"Unknown model: {new_model}", "valid": valid_models}), 400
 

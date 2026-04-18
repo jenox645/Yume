@@ -82,8 +82,8 @@ class SubtitleWindow {
   _injectBundledFonts() {
     // Inject @font-face for any .ttf/.otf files placed in extension/fonts/
     // Users can add custom fonts by placing files there and listing them in popup.js BUNDLED_FONTS
-    try {
-      chrome.storage.local.get(['bundledFonts'], (result) => {
+    chrome.storage.local.get(['bundledFonts'], (result) => {
+      try {
         const fonts = result.bundledFonts || [];
         if (!fonts.length) return;
         let css = '';
@@ -96,8 +96,8 @@ class SubtitleWindow {
           style.textContent = css;
           document.head.appendChild(style);
         }
-      });
-    } catch (e) { console.warn('[Yume] Font injection failed:', e.message); }
+      } catch (e) { console.warn('[Yume] Font injection failed:', e.message); }
+    });
   }
 
   applyCustomStyles() {
@@ -324,8 +324,11 @@ class SubtitleWindow {
       originalEl.style.display = (original && showJp) ? 'block' : 'none';
       // Confidence indicator: subtle opacity on translation line (opt-in)
       // avg_logprob: > -0.3 high, -0.3 to -0.7 medium, < -0.7 low
-      if (englishEl && this.settings.showConfidence && confidence && confidence < 0) {
-        const opacity = confidence > -0.3 ? 1.0 : confidence > -0.7 ? 0.85 : 0.65;
+      if (englishEl && this.settings.showConfidence && confidence != null && confidence < 0) {
+        let opacity;
+        if (confidence > -0.3) opacity = 1.0;
+        else if (confidence > -0.7) opacity = 0.85;
+        else opacity = 0.65;
         englishEl.style.opacity = opacity;
       } else if (englishEl) {
         englishEl.style.opacity = 1.0;
@@ -359,7 +362,7 @@ class SubtitleWindow {
       toast.classList.remove('fade-out');
       setTimeout(() => {
         toast.classList.add('fade-out');
-        setTimeout(() => { if (toast) toast.style.display = 'none'; }, 600);
+        setTimeout(() => { toast.style.display = 'none'; }, 600);
       }, 2000);
     }
     if (!this.isPlaying) {
