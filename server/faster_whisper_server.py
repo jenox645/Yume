@@ -1190,7 +1190,9 @@ def _set_low_priority():
             import ctypes
 
             THREAD_PRIORITY_BELOW_NORMAL = -1
-            ctypes.windll.kernel32.SetThreadPriority(ctypes.windll.kernel32.GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL)
+            ctypes.windll.kernel32.SetThreadPriority(
+                ctypes.windll.kernel32.GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL
+            )
         else:
             os.nice(10)
     except Exception:
