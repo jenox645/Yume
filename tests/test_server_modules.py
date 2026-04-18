@@ -48,6 +48,9 @@ def _install_flask_stub():
         def before_request(self, f):
             return f
 
+        def after_request(self, f):
+            return f
+
         def teardown_request(self, f):
             return f
 
@@ -72,14 +75,6 @@ def _install_flask_stub():
     sys.modules["flask"] = flask_mod
 
 
-def _install_flask_cors_stub():
-    if "flask_cors" in sys.modules:
-        return
-    fc = types.ModuleType("flask_cors")
-    fc.CORS = lambda *a, **kw: None
-    sys.modules["flask_cors"] = fc
-
-
 def _install_faster_whisper_stub():
     if "faster_whisper" in sys.modules:
         return
@@ -89,7 +84,6 @@ def _install_faster_whisper_stub():
 
 
 _install_flask_stub()
-_install_flask_cors_stub()
 _install_faster_whisper_stub()
 
 # Now safe to import server modules

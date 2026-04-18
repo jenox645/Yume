@@ -31,7 +31,6 @@ if sys.platform == "win32":
         pass
 
 from flask import Flask, g, jsonify, request
-from flask_cors import CORS
 
 try:
     from faster_whisper import WhisperModel
@@ -51,16 +50,26 @@ from _security import validate_url
 # ── Flask app ─────────────────────────────────────────────────────────────────
 app = Flask(__name__)
 
-CORS(
-    app,
-    resources={
-        r"/*": {
-            "origins": ["chrome-extension://*", "http://localhost:*", "http://127.0.0.1:*"],  # noqa: S5332 — CORS for local servers only
-            "methods": ["GET", "POST", "OPTIONS"],
-            "allow_headers": ["Content-Type", "X-API-Token"],
-        }
-    },
-)
+# Trusted origins for CORS — only local servers and the browser extension.
+_CORS_ORIGINS = frozenset([
+    "chrome-extension://",  # prefix match — any Chrome/Edge/Brave/Opera extension
+    "moz-extension://",     # prefix match — any Firefox extension
+])
+_CORS_HEADERS = "Content-Type, X-API-Token"
+_CORS_METHODS = "GET, POST, OPTIONS"
+
+
+def _is_trusted_origin(origin) -> bool:
+    """Return True for chrome-extension:// origins and all loopback origins."""
+    if not origin:
+        return False
+    if any(origin.startswith(pfx) for pfx in _CORS_ORIGINS):
+        return True
+    # Accept http://localhost:* and http://127.0.0.1:* (loopback only)
+    import urllib.parse
+    parsed = urllib.parse.urlparse(origin)
+    return parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1")
+
 
 # ── Security: shared secret token ────────────────────────────────────────────
 # Generated at startup, written to .yume_token so the extension can discover it.
@@ -73,7 +82,11 @@ ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
 def _security_checks():
     """Host header + API token validation.  Blocks DNS rebinding and CSRF."""
     if request.method == "OPTIONS":
-        return None
+        # Validate origin before echoing CORS headers for preflight
+        origin = request.headers.get("Origin")
+        if not _is_trusted_origin(origin):
+            return jsonify({"error": "Forbidden: untrusted origin"}), 403
+        return "", 204
 
     host = request.host.split(":")[0].lower()
     if host not in ALLOWED_HOSTS:
@@ -87,6 +100,18 @@ def _security_checks():
             return jsonify({"error": "Forbidden: invalid token"}), 403
 
     return None
+
+
+@app.after_request
+def _add_cors_headers(response):
+    """Attach CORS headers to every response for trusted origins only."""
+    origin = request.headers.get("Origin")
+    if _is_trusted_origin(origin):
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Methods"] = _CORS_METHODS
+        response.headers["Access-Control-Allow-Headers"] = _CORS_HEADERS
+        response.headers["Vary"] = "Origin"
+    return response
 
 
 @app.teardown_request
@@ -371,11 +396,9 @@ def list_translation_models():
 # ── Routes: prepare (download full audio) ────────────────────────────────────
 
 
-@app.route("/prepare", methods=["POST", "OPTIONS"])
+@app.route("/prepare", methods=["POST"])
 def prepare():
     """Download full audio for a video. Called once before chunk transcription."""
-    if request.method == "OPTIONS":
-        return "", 204
 
     try:
         data = request.get_json()
@@ -429,11 +452,9 @@ def prepare():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/prepare_direct", methods=["POST", "OPTIONS"])
+@app.route("/prepare_direct", methods=["POST"])
 def prepare_direct():
     """Download audio from a direct stream URL (m3u8, mp4, etc.)."""
-    if request.method == "OPTIONS":
-        return "", 204
 
     try:
         data = request.get_json()
@@ -533,10 +554,8 @@ def prepare_direct():
 # ── Routes: transcription ─────────────────────────────────────────────────────
 
 
-@app.route("/transcribe_url", methods=["POST", "OPTIONS"])
+@app.route("/transcribe_url", methods=["POST"])
 def transcribe_url():
-    if request.method == "OPTIONS":
-        return "", 204
 
     if _state.model is None:
         return jsonify({"error": "Model is still loading. Retry shortly."}), 503
@@ -651,10 +670,8 @@ def transcribe_url():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/transcribe", methods=["POST", "OPTIONS"])
+@app.route("/transcribe", methods=["POST"])
 def transcribe():
-    if request.method == "OPTIONS":
-        return "", 204
 
     if _state.model is None:
         return jsonify({"error": "Model is still loading. Retry shortly."}), 503
@@ -699,11 +716,9 @@ def transcribe():
 # ── Routes: romanization ──────────────────────────────────────────────────────
 
 
-@app.route("/romanize", methods=["POST", "OPTIONS"])
+@app.route("/romanize", methods=["POST"])
 def romanize():
     """Deterministic romanization for ja/zh/ko. <5 ms vs 1-10 s for LLM."""
-    if request.method == "OPTIONS":
-        return "", 204
 
     data = request.get_json() or {}
     text = data.get("text", "").strip()
@@ -725,11 +740,9 @@ def romanize():
     return jsonify({"supported": False, "language": lang}), 501
 
 
-@app.route("/romanize_batch", methods=["POST", "OPTIONS"])
+@app.route("/romanize_batch", methods=["POST"])
 def romanize_batch():
     """Batch deterministic romanization — single round trip for N texts."""
-    if request.method == "OPTIONS":
-        return "", 204
 
     data = request.get_json() or {}
     texts = data.get("texts", [])

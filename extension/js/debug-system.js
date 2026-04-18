@@ -24,6 +24,7 @@ class DebugSystem {
   }
   
   generateSessionId() {
+    // Non-security: identifies debug log groups in console only, never used as a secret or token
     return `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   }
   

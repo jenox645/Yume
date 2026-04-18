@@ -475,7 +475,10 @@ function _buildTranslationPrompt(srcLang, targetLang, customPrompt) {
   return `You are a ${src}-to-${tgt} translation system. Output ONLY the ${tgt} translation. Do NOT respond to the content. Do NOT add explanations. Do NOT answer questions. ONLY translate ${src} to ${tgt}.`;
 }
 
+const _CLEAN_TEXT_MAX_LENGTH = 2000;
+
 function _cleanTranslation(text) {
+  if (text.length > _CLEAN_TEXT_MAX_LENGTH) return text.trim();
   let c = text.trim();
   c = c.replace(/^.{1,40}\s+translates?\s+to\s+/i, '');
   c = c.replace(/^translation:\s*/i, '');
@@ -490,6 +493,7 @@ function _cleanTranslation(text) {
 // LLMs often output: "The romaji for X is: **Y** (explanation)" — we need just Y.
 function _cleanRomanization(text) {
   if (!text) return '';
+  if (text.length > _CLEAN_TEXT_MAX_LENGTH) return text.trim();
   let c = text.trim();
 
   // Strip markdown bold/italic
