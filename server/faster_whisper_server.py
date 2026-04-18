@@ -51,10 +51,12 @@ from _security import validate_url
 app = Flask(__name__)
 
 # Trusted origins for CORS — only local servers and the browser extension.
-_CORS_ORIGINS = frozenset([
-    "chrome-extension://",  # prefix match — any Chrome/Edge/Brave/Opera extension
-    "moz-extension://",     # prefix match — any Firefox extension
-])
+_CORS_ORIGINS = frozenset(
+    [
+        "chrome-extension://",  # prefix match — any Chrome/Edge/Brave/Opera extension
+        "moz-extension://",  # prefix match — any Firefox extension
+    ]
+)
 _CORS_HEADERS = "Content-Type, X-API-Token"
 _CORS_METHODS = "GET, POST, OPTIONS"
 
@@ -67,6 +69,7 @@ def _is_trusted_origin(origin) -> bool:
         return True
     # Accept http://localhost:* and http://127.0.0.1:* (loopback only)
     import urllib.parse
+
     parsed = urllib.parse.urlparse(origin)
     return parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1")
 
