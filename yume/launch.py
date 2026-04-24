@@ -137,19 +137,32 @@ def _check_resources(cfg: dict) -> bool:
                 f"but only {avail_vram / 1024:.1f} GB is free.",
             ))
 
-    # ── RAM check for GGUF translation model (file size × 1.2) ───────────────
+    # ── RAM/VRAM check for GGUF translation model (file size × 1.2) ─────────
+    # llama.cpp uses --n_gpu_layers -1 when a GPU is present, so the model
+    # lives in VRAM rather than system RAM. Only warn about RAM when no GPU
+    # offloading is available.
     if bk == "llamacpp":
         gp = cfg.get("gguf_model_path", "")
         if gp and Path(gp).exists():
             model_size_mb = Path(gp).stat().st_size / (1024 * 1024)
-            required_ram_mb = int(model_size_mb * 1.2)
-            avail_ram_mb = _get_available_ram_mb()
-            if avail_ram_mb > 0 and avail_ram_mb < required_ram_mb:
-                issues.append((
-                    "ram",
-                    f"Translation model ({Path(gp).name}) needs ~{required_ram_mb / 1024:.1f} GB RAM, "
-                    f"but only {avail_ram_mb / 1024:.1f} GB is available.",
-                ))
+            required_mb = int(model_size_mb * 1.2)
+            has_gpu = gpu.get("has_nvidia", False) or gpu.get("has_amd", False)
+            if has_gpu:
+                avail_vram_mb = _get_available_vram_mb()
+                if avail_vram_mb > 0 and avail_vram_mb < required_mb:
+                    issues.append((
+                        "vram",
+                        f"Translation model ({Path(gp).name}) needs ~{required_mb / 1024:.1f} GB VRAM, "
+                        f"but only {avail_vram_mb / 1024:.1f} GB is free.",
+                    ))
+            else:
+                avail_ram_mb = _get_available_ram_mb()
+                if avail_ram_mb > 0 and avail_ram_mb < required_mb:
+                    issues.append((
+                        "ram",
+                        f"Translation model ({Path(gp).name}) needs ~{required_mb / 1024:.1f} GB RAM, "
+                        f"but only {avail_ram_mb / 1024:.1f} GB is available.",
+                    ))
 
     if not issues:
         return True
@@ -450,6 +463,21 @@ def _start_llamacpp(cfg: dict, procs: list, lhs: list, bi: dict, env: dict, tpor
     kill_port_process(port)
     info(f"Starting llama.cpp server with {Path(gp).name}...")
     gpu = detect_gpu()
+    using_gpu_layers = gpu["has_nvidia"] or (gpu["has_amd"] and not IS_WIN)
+    if using_gpu_layers:
+        try:
+            import llama_cpp.llama_cpp as _lib  # type: ignore[import]
+
+            backend_ok = callable(getattr(_lib, "ggml_backend_cuda_reg", None))
+        except Exception:
+            backend_ok = False
+        if backend_ok:
+            info("GPU offloading enabled (--n_gpu_layers -1)")
+        else:
+            warn("llama-cpp-python is a CPU-only build — model will load into RAM, not VRAM.")
+            warn("Run: python pocket_yume.py setup → reinstall packages to fix this.")
+    else:
+        info("No supported GPU found — running translation model on CPU")
     cmd = [
         sys.executable,
         "-m",

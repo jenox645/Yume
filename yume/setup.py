@@ -169,7 +169,6 @@ def setup_wizard(cfg: dict) -> dict:
     _step(2, "Component Check")
     info(f"{C.DIM}Checking which tools and packages are already installed...{C.RESET}")
     print()
-    header("Component Check")
     missing = []
     yt = find_tool("yt-dlp")
     ff = find_tool("ffmpeg")
@@ -256,7 +255,6 @@ def setup_wizard(cfg: dict) -> dict:
 
         # ── Step 3: YouTube Authentication ────────────────────────────────────
         _step(3, "YouTube Authentication")
-        header("YouTube Authentication")
         info("YouTube blocks automated downloads to prevent bots.")
         info("Yume needs a way to prove you're a real person.")
         info(f"\n{C.DIM}Browser Cookies is the easiest — just be logged into YouTube in your browser.{C.RESET}")
@@ -301,7 +299,6 @@ def setup_wizard(cfg: dict) -> dict:
 
         # ── Step 4: Install components ─────────────────────────────────────────
         _step(4, "Installing Components")
-        header("Installing")
 
         if "yt-dlp" in missing:
             if not ae or ask_yn("Install yt-dlp?"):

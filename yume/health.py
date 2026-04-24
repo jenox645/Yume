@@ -90,6 +90,24 @@ def health_check(cfg: dict) -> None:
         except ImportError:
             return (name, False, "not installed")
 
+    def _chk_llama_cuda():
+        gpu = detect_gpu()
+        if not (gpu.get("has_nvidia") or gpu.get("has_amd")):
+            return None  # not relevant on CPU-only machines
+        try:
+            import llama_cpp.llama_cpp as _lib  # type: ignore[import]
+
+            cuda_ok = callable(getattr(_lib, "ggml_backend_cuda_reg", None))
+            if cuda_ok:
+                return ("llama-cpp CUDA support", True, "GPU offloading available")
+            return (
+                "llama-cpp CUDA support",
+                False,
+                "CPU-only build — model will use RAM, not VRAM. Re-run setup to reinstall with CUDA",
+            )
+        except ImportError:
+            return ("llama-cpp CUDA support", False, "llama-cpp-python not installed")
+
     def _chk_roma(pkg, desc):
         try:
             __import__(pkg)
@@ -147,6 +165,7 @@ def health_check(cfg: dict) -> None:
         f_flask = ex.submit(_chk_pkg, "flask", "Flask")
         f_cors = ex.submit(_chk_pkg, "flask_cors", "Flask-CORS")
         f_llama = ex.submit(_chk_pkg, "llama_cpp", "llama-cpp-python")
+        f_llama_cuda = ex.submit(_chk_llama_cuda)
         f_kakasi = ex.submit(_chk_roma, "pykakasi", "Japanese romaji (kanji→reading)")
         f_pinyin = ex.submit(_chk_roma, "pypinyin", "Chinese pinyin")
         f_config = ex.submit(_chk_config)
@@ -169,6 +188,9 @@ def health_check(cfg: dict) -> None:
         results.append(f_flask.result())
         results.append(f_cors.result())
         results.append(f_llama.result())
+        llama_cuda = f_llama_cuda.result()
+        if llama_cuda is not None:
+            results.append(llama_cuda)
 
         roma_results = [f_kakasi.result(), f_pinyin.result()]
         roma_installed = sum(1 for _, ok, detail in roma_results if ok and "not installed" not in detail)
