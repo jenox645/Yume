@@ -480,6 +480,8 @@ def install_llamacpp_python() -> bool:
     installed = False
     if gpu["has_nvidia"]:
         if IS_WIN:
+            # --force-reinstall ensures a CPU-only build already on disk is replaced.
+            # Prebuilt wheels only exist for Python ≤3.12; 3.13+ must build from source.
             installed = _pip_install_with_progress(
                 [
                     sys.executable,
@@ -487,6 +489,7 @@ def install_llamacpp_python() -> bool:
                     "pip",
                     "install",
                     "llama-cpp-python",
+                    "--force-reinstall",
                     "--extra-index-url",
                     "https://abetlen.github.io/llama-cpp-python/whl/cu124",
                     "-q",
@@ -495,7 +498,29 @@ def install_llamacpp_python() -> bool:
                 "Installing llama-cpp-python (CUDA prebuilt)",
             )
             if not installed:
-                warn("Prebuilt failed, trying CPU version...")
+                if sys.version_info >= (3, 13):
+                    pyver = f"{sys.version_info.major}.{sys.version_info.minor}"
+                    warn(f"No prebuilt CUDA wheel for Python {pyver} — trying source build.")
+                    info(f"{C.DIM}Requires CUDA Toolkit (nvidia.com) + Visual Studio C++ tools.{C.RESET}")
+                    env = os.environ.copy()
+                    env["CMAKE_ARGS"] = "-DGGML_CUDA=on"
+                    installed = _pip_install_with_progress(
+                        [
+                            sys.executable,
+                            "-m",
+                            "pip",
+                            "install",
+                            "llama-cpp-python",
+                            "--force-reinstall",
+                            "--no-cache-dir",
+                            "-q",
+                        ],
+                        f"Building llama-cpp-python (CUDA from source, Python {pyver})",
+                        env=env,
+                        timeout=900,
+                    )
+                if not installed:
+                    warn("CUDA install failed, falling back to CPU version...")
         else:
             env = os.environ.copy()
             env["CMAKE_ARGS"] = "-DGGML_CUDA=on"

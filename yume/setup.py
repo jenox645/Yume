@@ -193,7 +193,20 @@ def setup_wizard(cfg: dict) -> dict:
     try:
         import llama_cpp  # noqa: F401
 
-        success("llama-cpp-python: OK")
+        has_gpu_hw = gpu.get("has_nvidia") or (gpu.get("has_amd") and not IS_WIN)
+        if has_gpu_hw:
+            try:
+                import llama_cpp.llama_cpp as _lib
+                cuda_ok = callable(getattr(_lib, "ggml_backend_cuda_reg", None))
+            except Exception:
+                cuda_ok = False
+            if cuda_ok:
+                success("llama-cpp-python: OK (CUDA — GPU offloading enabled)")
+            else:
+                warn("llama-cpp-python: CPU-only build — GPU offloading disabled")
+                missing.append("llama_cpp_cuda")
+        else:
+            success("llama-cpp-python: OK")
     except ImportError:
         warn("llama-cpp-python: MISSING")
         missing.append("llama_cpp")
@@ -233,7 +246,17 @@ def setup_wizard(cfg: dict) -> dict:
         return cfg
 
     if missing:
-        print(f"\n  Missing: {C.BOLD}{', '.join(missing)}{C.RESET}\n")
+        _MISSING_LABELS = {
+            "yt-dlp": "yt-dlp",
+            "ffmpeg": "FFmpeg",
+            "python_deps": "faster-whisper",
+            "llama_cpp": "llama-cpp-python",
+            "llama_cpp_cuda": "llama-cpp-python (needs CUDA reinstall)",
+            "server_deps": "uvicorn/fastapi",
+            "gguf_model": "GGUF translation model",
+        }
+        labels = [_MISSING_LABELS.get(m, m) for m in missing]
+        print(f"\n  Missing / needs fix: {C.BOLD}{', '.join(labels)}{C.RESET}\n")
         mode = ask_arrow(
             "Proceed?",
             [
@@ -330,7 +353,22 @@ def setup_wizard(cfg: dict) -> dict:
                     f"Install manually: {C.CYAN}pip install llama-cpp-python{C.RESET}",
                 )
 
-        if "server_deps" in missing and "llama_cpp" not in missing:
+        if "llama_cpp_cuda" in missing:
+            print()
+            info("llama-cpp-python is installed but built without CUDA — GPU offloading won't work.")
+            pyver = f"{sys.version_info.major}.{sys.version_info.minor}"
+            if sys.version_info >= (3, 13):
+                warn(f"Python {pyver}: no prebuilt CUDA wheel exists yet.")
+                info("The installer will attempt a source build (needs CUDA Toolkit + Visual Studio C++).")
+                info(f"{C.DIM}If source build fails, install Python 3.12 for reliable prebuilt support.{C.RESET}")
+            if not ae or ask_yn("Reinstall llama-cpp-python with CUDA support?"):
+                _install_with_retry(
+                    "llama-cpp-python (CUDA)",
+                    install_llamacpp_python,
+                    f"{C.DIM}Manual: set CMAKE_ARGS=-DGGML_CUDA=on && pip install llama-cpp-python --force-reinstall{C.RESET}",
+                )
+
+        if "server_deps" in missing and "llama_cpp" not in missing and "llama_cpp_cuda" not in missing:
             if not ae or ask_yn("Install server dependencies (uvicorn, fastapi)?"):
                 def _install_server_deps():
                     r = _run(
