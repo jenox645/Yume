@@ -77,11 +77,17 @@ def _check_pip() -> bool:
         _pip_venv_warned = True
         warn("Installing packages into your system Python.")
         info("Consider using a virtual environment:")
-        info(f"  {sys.executable} -m venv yume-env")
-        if IS_WIN:
-            info("  yume-env\\Scripts\\activate")
+        if IS_WIN and sys.version_info >= (3, 13):
+            info(f"  {C.DIM}Python {sys.version_info.major}.{sys.version_info.minor} may lack prebuilt CUDA wheels.")
+            info(f"  {C.DIM}Use Python 3.12 for guaranteed CUDA support:{C.RESET}")
+            info(f"  {C.CYAN}py -3.12 -m venv yume-env{C.RESET}  {C.DIM}(install 3.12 from python.org if missing){C.RESET}")
+            info(f"  {C.CYAN}yume-env\\Scripts\\activate{C.RESET}")
         else:
-            info("  source yume-env/bin/activate")
+            info(f"  {sys.executable} -m venv yume-env")
+            if IS_WIN:
+                info("  yume-env\\Scripts\\activate")
+            else:
+                info("  source yume-env/bin/activate")
         print()
     return True
 
@@ -481,8 +487,10 @@ def install_llamacpp_python() -> bool:
     if gpu["has_nvidia"]:
         if IS_WIN:
             # --force-reinstall ensures a CPU-only build already on disk is replaced.
-            # Prebuilt wheels only exist for Python ≤3.12; 3.13+ must build from source.
-            installed = _pip_install_with_progress(
+            # pip --extra-index-url silently falls back to PyPI's CPU wheel when the
+            # CUDA index has no wheel for the current Python version, so we verify CUDA
+            # support after the install rather than trusting the exit code alone.
+            _pip_install_with_progress(
                 [
                     sys.executable,
                     "-m",
@@ -497,28 +505,38 @@ def install_llamacpp_python() -> bool:
                 ],
                 "Installing llama-cpp-python (CUDA prebuilt)",
             )
+            # Verify CUDA support is actually present — can't trust the exit code
+            _vr = _run(
+                [
+                    sys.executable,
+                    "-c",
+                    "from llama_cpp import llama_cpp as l; "
+                    "print(hasattr(l, 'ggml_backend_cuda_reg'))",
+                ],
+                timeout=15,
+            )
+            installed = _vr.returncode == 0 and _vr.stdout.strip() == "True"
             if not installed:
-                if sys.version_info >= (3, 13):
-                    pyver = f"{sys.version_info.major}.{sys.version_info.minor}"
-                    warn(f"No prebuilt CUDA wheel for Python {pyver} — trying source build.")
-                    info(f"{C.DIM}Requires CUDA Toolkit (nvidia.com) + Visual Studio C++ tools.{C.RESET}")
-                    env = os.environ.copy()
-                    env["CMAKE_ARGS"] = "-DGGML_CUDA=on"
-                    installed = _pip_install_with_progress(
-                        [
-                            sys.executable,
-                            "-m",
-                            "pip",
-                            "install",
-                            "llama-cpp-python",
-                            "--force-reinstall",
-                            "--no-cache-dir",
-                            "-q",
-                        ],
-                        f"Building llama-cpp-python (CUDA from source, Python {pyver})",
-                        env=env,
-                        timeout=900,
-                    )
+                pyver = f"{sys.version_info.major}.{sys.version_info.minor}"
+                warn(f"Prebuilt CUDA wheel not available for Python {pyver} — trying source build.")
+                info(f"{C.DIM}Requires CUDA Toolkit (nvidia.com) + Visual Studio C++ tools.{C.RESET}")
+                env = os.environ.copy()
+                env["CMAKE_ARGS"] = "-DGGML_CUDA=on"
+                installed = _pip_install_with_progress(
+                    [
+                        sys.executable,
+                        "-m",
+                        "pip",
+                        "install",
+                        "llama-cpp-python",
+                        "--force-reinstall",
+                        "--no-cache-dir",
+                        "-q",
+                    ],
+                    f"Building llama-cpp-python (CUDA from source, Python {pyver})",
+                    env=env,
+                    timeout=900,
+                )
                 if not installed:
                     warn("CUDA install failed, falling back to CPU version...")
         else:
