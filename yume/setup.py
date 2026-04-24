@@ -256,25 +256,8 @@ def setup_wizard(cfg: dict) -> dict:
             "gguf_model": "GGUF translation model",
         }
         labels = [_MISSING_LABELS.get(m, m) for m in missing]
-        print(f"\n  Missing / needs fix: {C.BOLD}{', '.join(labels)}{C.RESET}\n")
-        mode = ask_arrow(
-            "Proceed?",
-            [
-                ("Install all", "Download everything needed automatically"),
-                ("Choose each", "Ask before installing each component"),
-                ("Skip", "Set up later from the Tools menu"),
-            ],
-            default=0,
-            allow_back=False,
-        )
-
-        if mode == 2:
-            cfg["first_run_complete"] = True
-            save_config(cfg)
-            pause()
-            return cfg
-
-        ae = mode == 1  # ask-each
+        print(f"\n  Needs installation: {C.BOLD}{', '.join(labels)}{C.RESET}")
+        pause()
 
         # ── Step 3: YouTube Authentication ────────────────────────────────────
         _step(3, "YouTube Authentication")
@@ -319,6 +302,27 @@ def setup_wizard(cfg: dict) -> dict:
             )
             cfg["youtube_auth_method"] = "deno"
         save_config(cfg)
+
+        # ── Install decision (auth is now configured) ──────────────────────────
+        print(f"\n  Ready to install: {C.BOLD}{', '.join(labels)}{C.RESET}\n")
+        mode = ask_arrow(
+            "How to proceed?",
+            [
+                ("Install all", "Download everything needed automatically"),
+                ("Choose each", "Ask before installing each component"),
+                ("Skip", "Set up later from the Tools menu"),
+            ],
+            default=0,
+            allow_back=False,
+        )
+
+        if mode == 2:
+            cfg["first_run_complete"] = True
+            save_config(cfg)
+            pause()
+            return cfg
+
+        ae = mode == 1  # ask-each
 
         # ── Step 4: Install components ─────────────────────────────────────────
         _step(4, "Installing Components")
