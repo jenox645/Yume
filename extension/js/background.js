@@ -852,15 +852,19 @@ async function handleRomanizeBatch(texts, sourceLang, sendResponse) {
 // BATCH TRANSLATION
 // ============================================================================
 
-function _buildBatchPrompt(srcLang, targetLang, customPrompt, priorContext) {
+function _buildBatchPrompt(srcLang, targetLang, customPrompt, priorContext, videoTitle) {
   const src = LANG_NAMES[srcLang] || LANG_NAMES['ja'];
   const tgt = targetLang || 'English';
   const base = customPrompt
     ? customPrompt.replace(/\{src\}/g, src).replace(/\{tgt\}/g, tgt)
     : `Translate ${src} to ${tgt}.`;
+  // Video title is free disambiguating context (song name, artist, topic).
+  // Newlines stripped + length capped so a hostile page title can't restructure the prompt.
+  const title = (videoTitle || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  const titleCtx = title ? `The lines are from a video titled "${title}".\n` : '';
   // ~320 chars ≈ 80 tokens — skip oversized context snippets
   const ctx = (priorContext && priorContext.length <= 320) ? `Prior context: ${priorContext}\n` : '';
-  return `${ctx}${base} Output ONLY numbered lines matching [N] input. Nothing else.`;
+  return `${titleCtx}${ctx}${base} Output ONLY numbered lines matching [N] input. Nothing else.`;
 }
 
 async function handleTranslateBatch(batchText, count, sendResponse, sender, chunkIndex) {
@@ -899,7 +903,7 @@ async function handleTranslateBatch(batchText, count, sendResponse, sender, chun
 
     // Build messages (shared by streaming and non-streaming paths)
     const batchMessages = [
-      { role: "system", content: _buildBatchPrompt(srcLang, tgtLang, settings?.translationPrompt, _lastTranslatedSentence) },
+      { role: "system", content: _buildBatchPrompt(srcLang, tgtLang, settings?.translationPrompt, _lastTranslatedSentence, sender?.tab?.title) },
       { role: "user", content: uncachedLines.join('\n') },
       // Forced assistant prefix: steers model to continue from [1] instead of generating preamble.
       { role: "assistant", content: "[1]" }
@@ -913,9 +917,21 @@ async function handleTranslateBatch(batchText, count, sendResponse, sender, chun
     // -----------------------------------------------------------------------
     if (uncachedLines.length > 2) {
       let streamFailed = false;
+      let watchdog = null;
       try {
         const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 120000);
+        // Inactivity watchdog: covers headers AND the body read below. A stalled
+        // SSE stream (LLM wedged mid-generation) would otherwise hang this chunk
+        // forever — reader.read() has no timeout of its own. Reset on every token;
+        // disposed in the finally below on every exit path.
+        watchdog = setTimeout(() => ctrl.abort(), 120000);
+        // 120s inactivity, matching the non-streaming budget: slow consumer
+        // hardware can take >60s before the FIRST token of a large batch
+        // (prompt processing), and a tighter limit would abort healthy runs.
+        const resetWatchdog = () => {
+          clearTimeout(watchdog);
+          watchdog = setTimeout(() => ctrl.abort(), 120000);
+        };
         const streamResp = await fetch(`${translationUrl}/v1/chat/completions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -927,7 +943,7 @@ async function handleTranslateBatch(batchText, count, sendResponse, sender, chun
           }),
           signal: ctrl.signal
         });
-        clearTimeout(timer);
+        resetWatchdog();
 
         if (!streamResp.ok) throw new Error(`Translation error: ${streamResp.status}`);
 
@@ -958,6 +974,7 @@ async function handleTranslateBatch(batchText, count, sendResponse, sender, chun
         outer: while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+          resetWatchdog();
           sseBuffer += decoder.decode(value, { stream: true });
           const sseLines = sseBuffer.split('\n');
           sseBuffer = sseLines.pop(); // keep incomplete line
@@ -1006,6 +1023,8 @@ async function handleTranslateBatch(batchText, count, sendResponse, sender, chun
       } catch (e) {
         console.warn('[Background] Streaming translation failed, retrying without stream:', e.message);
         streamFailed = true;
+      } finally {
+        clearTimeout(watchdog);
       }
 
       if (streamFailed) {

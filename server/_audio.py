@@ -220,7 +220,9 @@ def download_audio_segment(url, start_time, duration):
         print(f"[Yume] Rejected invalid URL: {err} — {url[:80]}")
         return None
 
-    tmp_dir = tempfile.mkdtemp()
+    # yume_ prefix is required: the caller's cleanup and the startup sweep
+    # only remove yume_* directories — an unprefixed dir leaks on every call.
+    tmp_dir = tempfile.mkdtemp(prefix="yume_")
     output_path = os.path.join(tmp_dir, "segment.wav")
 
     try:

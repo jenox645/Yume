@@ -805,7 +805,13 @@ function setupEventListeners() {
   document.getElementById('switchWhisperModel')?.addEventListener('click', () => switchWhisperModel().catch(console.error));
 
   // SRT export
-  document.getElementById('exportSrt')?.addEventListener('click', () => exportSrt().catch(console.error));
+  document.getElementById('exportSrt')?.addEventListener('click', () => exportSubtitles('srt').catch(console.error));
+  document.getElementById('exportVtt')?.addEventListener('click', () => exportSubtitles('vtt').catch(console.error));
+
+  // History (persistent subtitle library)
+  document.getElementById('refreshHistory')?.addEventListener('click', () => loadHistory().catch(console.error));
+  document.getElementById('clearHistory')?.addEventListener('click', () => clearHistory().catch(console.error));
+  loadHistory().catch(console.error);
 }
 
 // ============================================================================
@@ -1163,10 +1169,10 @@ async function switchWhisperModel() {
 }
 
 // ============================================================================
-// SRT EXPORT
+// SUBTITLE EXPORT (SRT / WebVTT)
 // ============================================================================
 
-async function exportSrt() {
+async function exportSubtitles(format = 'srt') {
   const statusEl = document.getElementById('exportStatus');
   if (statusEl) { statusEl.textContent = 'Exporting...'; statusEl.className = 'status-message'; }
 
@@ -1174,20 +1180,23 @@ async function exportSrt() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) throw new Error('No active tab');
 
+    const action = format === 'vtt' ? 'EXPORT_VTT' : 'EXPORT_SRT';
     const response = await new Promise((resolve, reject) => {
-      chrome.tabs.sendMessage(tab.id, { action: 'EXPORT_SRT' }, (r) => {
+      chrome.tabs.sendMessage(tab.id, { action }, (r) => {
         if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
         else resolve(r);
       });
     });
 
     if (!response?.success) throw new Error(response?.error || 'Export failed');
-    if (!response.srt || response.count === 0) throw new Error('No subtitles to export');
+    const content = format === 'vtt' ? response.vtt : response.srt;
+    if (!content || response.count === 0) throw new Error('No subtitles to export');
 
     // Create and download file
-    const blob = new Blob([response.srt], { type: 'text/srt;charset=utf-8' });
+    const mime = format === 'vtt' ? 'text/vtt;charset=utf-8' : 'text/srt;charset=utf-8';
+    const blob = new Blob([content], { type: mime });
     const url = URL.createObjectURL(blob);
-    const filename = `yume-subtitles-${new Date().toISOString().slice(0,16).replace(/[T:]/g,'-')}.srt`;
+    const filename = `yume-subtitles-${new Date().toISOString().slice(0,16).replace(/[T:]/g,'-')}.${format}`;
 
     const a = document.createElement('a');
     a.href = url;
@@ -1208,6 +1217,108 @@ async function exportSrt() {
     if (statusEl) { statusEl.textContent = e.message; statusEl.className = 'status-message error'; }
     setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 4000);
   }
+}
+
+// ============================================================================
+// HISTORY — persistent subtitle library (yumeLib_* keys in storage.local)
+// ============================================================================
+
+async function loadHistory() {
+  const listEl = document.getElementById('historyList');
+  if (!listEl) return;
+  const all = await chrome.storage.local.get(null);
+  const entries = Object.keys(all)
+    .filter(k => k.startsWith('yumeLib_'))
+    .map(k => ({ key: k, ...all[k] }))
+    .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+
+  if (entries.length === 0) {
+    listEl.innerHTML = '<div class="blacklist-empty">No saved videos yet — fully processed videos appear here.</div>';
+    return;
+  }
+
+  listEl.innerHTML = entries.map((e) => {
+    const date = e.savedAt ? new Date(e.savedAt).toLocaleDateString() : '';
+    const lineCount = Object.values(e.subtitleChunks || {})
+      .reduce((n, c) => n + (Array.isArray(c) ? c.length : 0), 0);
+    const label = (e.title || e.key.slice(8)).slice(0, 60);
+    return `
+      <div class="blacklist-item">
+        <span class="blacklist-text" title="${_escapeHtml(e.url || '')}">${_escapeHtml(label)}
+          <span style="color:var(--text-dim);font-size:10px;display:block">${_escapeHtml(date)} · ${lineCount} lines</span>
+        </span>
+        <button class="yume-button secondary hist-srt" data-key="${_escapeHtml(e.key)}" style="padding:2px 8px;font-size:10px;margin-top:0">SRT</button>
+        <button class="blacklist-remove hist-del" data-key="${_escapeHtml(e.key)}" title="Remove">×</button>
+      </div>`;
+  }).join('');
+
+  listEl.querySelectorAll('.hist-srt').forEach(btn =>
+    btn.addEventListener('click', () => exportHistoryEntry(btn.getAttribute('data-key')).catch(console.error)));
+  listEl.querySelectorAll('.hist-del').forEach(btn =>
+    btn.addEventListener('click', async () => {
+      await chrome.storage.local.remove(btn.getAttribute('data-key'));
+      loadHistory().catch(console.error);
+    }));
+}
+
+// Standalone SRT builder — history entries may belong to videos with no open
+// tab, so the popup can't delegate to the content script's exporter.
+function _srtFromChunks(subtitleChunks) {
+  const segs = [];
+  for (const chunk of Object.values(subtitleChunks || {})) {
+    for (const s of (chunk || [])) {
+      if (s.original || s.english) segs.push(s);
+    }
+  }
+  segs.sort((a, b) => a.start - b.start);
+  const deduped = [];
+  for (const s of segs) {
+    const last = deduped[deduped.length - 1];
+    if (last && Math.abs(last.start - s.start) < 0.3 && last.original === s.original) continue;
+    deduped.push(s);
+  }
+  const fmt = (sec) => {
+    const t = Math.max(0, Math.round(sec * 1000));
+    const h = Math.floor(t / 3600000), m = Math.floor((t % 3600000) / 60000);
+    const s2 = Math.floor((t % 60000) / 1000), ms = t % 1000;
+    return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s2).padStart(2,'0')},${String(ms).padStart(3,'0')}`;
+  };
+  const lines = [];
+  deduped.forEach((s, i) => {
+    lines.push(`${i + 1}`);
+    lines.push(`${fmt(s.start)} --> ${fmt(s.end)}`);
+    const parts = [];
+    if (s.original) parts.push(s.original);
+    if (s.english && s.english !== s.original) parts.push(s.english);
+    if (s.romaji) parts.push(s.romaji);
+    lines.push(parts.join('\n'));
+    lines.push('');
+  });
+  return { srt: lines.join('\n'), count: deduped.length };
+}
+
+async function exportHistoryEntry(key) {
+  const stored = await chrome.storage.local.get(key);
+  const entry = stored[key];
+  if (!entry?.subtitleChunks) { showToast('Entry not found', 'error'); return; }
+  const { srt, count } = _srtFromChunks(entry.subtitleChunks);
+  if (count === 0) { showToast('No subtitles in this entry', 'error'); return; }
+  const blob = new Blob([srt], { type: 'text/srt;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `yume-${(entry.title || 'subtitles').replace(/[^\w-]+/g, '_').slice(0, 40)}.srt`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast(`Exported ${count} subtitles`, 'success');
+}
+
+async function clearHistory() {
+  const all = await chrome.storage.local.get(null);
+  const keys = Object.keys(all).filter(k => k.startsWith('yumeLib_'));
+  if (keys.length) await chrome.storage.local.remove(keys);
+  await loadHistory();
+  showToast(keys.length ? `Removed ${keys.length} entries` : 'History already empty', 'success');
 }
 
 // ============================================================================

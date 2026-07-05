@@ -482,8 +482,9 @@ class TestPythonCompatibility:
         Without this import, `int | str` in function signatures raises TypeError
         on Python 3.8/3.9. This test caught a real crash reported by a user.
         """
+        skip_dirs = {"__pycache__", "venv", ".venv", "yume-env", "node_modules", "site-packages"}
         for py_file in ROOT.glob("**/*.py"):
-            if "__pycache__" in str(py_file) or "wanakana" in str(py_file):
+            if skip_dirs.intersection(py_file.parts) or "wanakana" in str(py_file):
                 continue
             content = py_file.read_text(encoding="utf-8", errors="replace")
 

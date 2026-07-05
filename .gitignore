@@ -11,6 +11,7 @@ build/
 .venv/
 venv/
 env/
+yume-env/
 
 # ── IDE / Editor ──
 .idea/
@@ -82,3 +83,6 @@ extension/fonts/README.md
 # ── Claude Code session data (machine-specific, not project docs) ──
 .claude/
 CLAUDE.md
+Sunset_Blu_Swing.png
+Transcribing.png
+Yume Showcase.mp4

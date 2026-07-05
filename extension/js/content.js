@@ -74,13 +74,16 @@
     return null;
   }
 
+  // Stable across page reloads (no timestamps) — must match the id semantics
+  // in AudioCapture._getVideoId so caches and session restore stay coherent.
   function getVideoId() {
     const url = window.location.href;
     if (url.includes('youtube.com') || url.includes('youtu.be')) {
       const urlParams = new URLSearchParams(window.location.search);
-      return urlParams.get('v') || 'youtube-' + Date.now();
+      const v = urlParams.get('v');
+      if (v) return v;
     }
-    return window.location.pathname.replace(/[^a-zA-Z0-9]/g, '-') + '-' + Date.now();
+    return window.location.pathname.replace(/[^a-zA-Z0-9]/g, '-');
   }
 
   // ========================================================================
@@ -92,7 +95,10 @@
       state.subtitleWindow = new SubtitleWindow();
       state.subtitleWindow.updateStatus('Starting...', 'loading');
 
-      await state.audioCapture.startCapture();
+      const started = await state.audioCapture.startCapture();
+      // false = aborted mid-start (user toggled off while downloading) —
+      // stopSubtitles already reset the state; don't mark active.
+      if (started === false) return;
 
       state.isActive = true;
       // Status managed by prefetch-ready event
@@ -345,12 +351,14 @@
       return false;
     }
 
-    if (message.action === 'EXPORT_SRT') {
+    if (message.action === 'EXPORT_SRT' || message.action === 'EXPORT_VTT') {
       if (!state.audioCapture || !state.isActive) {
         sendResponse({ success: false, error: 'No active session' });
         return false;
       }
-      const result = state.audioCapture.exportSRT();
+      const result = message.action === 'EXPORT_VTT'
+        ? state.audioCapture.exportVTT()
+        : state.audioCapture.exportSRT();
       sendResponse({ success: true, ...result });
       return false;
     }

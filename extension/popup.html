@@ -457,9 +457,29 @@
         </div>
         <div style="display:flex;gap:8px;margin-top:8px">
           <button type="button" id="exportSrt" class="yume-button primary" style="flex:1;margin-top:0">Export SRT</button>
+          <button type="button" id="exportVtt" class="yume-button primary" style="flex:1;margin-top:0">Export VTT</button>
           <button type="button" id="clearCache" class="yume-button danger" style="flex:1;margin-top:0">Clear Cache</button>
         </div>
         <div id="exportStatus" class="status-message" style="margin-top:4px"></div>
+      </div>
+    </div>
+
+    <!-- History (persistent subtitle library) -->
+    <div class="yume-section collapsible collapsed" data-section="history">
+      <div class="section-label section-toggle">
+        <span class="toggle-arrow">&#9654;</span> History
+      </div>
+      <div class="section-body">
+        <div class="hallucination-info" style="margin-bottom:6px">
+          Fully processed videos are kept for 30 days &mdash; reopening one restores
+          its subtitles instantly, no GPU work needed.
+        </div>
+        <div id="historyList" class="diag-log"></div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button type="button" id="refreshHistory" class="yume-button secondary" style="flex:1;margin-top:0">Refresh</button>
+          <button type="button" id="clearHistory" class="yume-button danger" style="flex:1;margin-top:0">Clear All</button>
+        </div>
+        <div id="historyStatus" class="status-message" style="margin-top:4px"></div>
       </div>
     </div>
 

@@ -353,6 +353,17 @@ class TestIsHallucination(unittest.TestCase):
     def test_share_detected(self):
         self.assertTrue(_filter.is_hallucination("Share"))
 
+    # ── Regression: social words inside real lyrics must NOT be dropped ──────
+
+    def test_like_inside_sentence_allowed(self):
+        self.assertFalse(_filter.is_hallucination("I like you more than words can say"))
+
+    def test_follow_inside_sentence_allowed(self):
+        self.assertFalse(_filter.is_hallucination("Follow me into the night sky"))
+
+    def test_share_inside_sentence_allowed(self):
+        self.assertFalse(_filter.is_hallucination("A dream we share together"))
+
     # ── Pattern in longer text ────────────────────────────────────────────────
 
     def test_hallucination_embedded_in_sentence(self):

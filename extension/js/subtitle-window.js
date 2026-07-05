@@ -38,12 +38,38 @@ class SubtitleWindow {
         if (p.top)    this.element.style.top     = p.top;
         if (p.width)  this.element.style.width   = p.width;
         if (p.height) this.element.style.height  = p.height;
+        // A position saved on a larger screen (or after a stray drag) can land
+        // entirely offscreen with no way to grab it back — clamp into view.
+        this._clampToViewport();
       } else {
         this.element.style.left   = '20px';
         this.element.style.bottom = '80px';
       }
       this.applyCustomStyles();
     });
+  }
+
+  // Keep at least the header reachable: clamp so a grabbable strip of the
+  // window is always inside the viewport.
+  _clampToViewport() {
+    if (!this.element) return;
+    const rect = this.element.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return; // not laid out yet
+    const margin = 60; // px of the window that must stay visible
+    const maxLeft = window.innerWidth - margin;
+    const maxTop  = window.innerHeight - 40; // header height
+    const minLeft = margin - rect.width;
+    let left = rect.left, top = rect.top, moved = false;
+    if (left > maxLeft) { left = maxLeft; moved = true; }
+    if (left < minLeft) { left = Math.max(0, minLeft); moved = true; }
+    if (top > maxTop)   { top = maxTop; moved = true; }
+    if (top < 0)        { top = 0; moved = true; }
+    if (moved) {
+      this.element.style.left = `${left}px`;
+      this.element.style.top = `${top}px`;
+      this.element.style.bottom = 'auto';
+      this.element.style.right = 'auto';
+    }
   }
 
   create() {
@@ -395,7 +421,7 @@ class SubtitleWindow {
     this.element.style.top  = `${e.clientY - this.dragOffset.y}px`;
     this.element.style.bottom = 'auto'; this.element.style.right = 'auto';
   }
-  stopDrag() { if (this.isDragging) { this.isDragging = false; this.element.style.cursor = 'default'; this.savePosition(); } }
+  stopDrag() { if (this.isDragging) { this.isDragging = false; this.element.style.cursor = 'default'; this._clampToViewport(); this.savePosition(); } }
 
   startResize(e) { e.preventDefault(); this.isResizing = true; this.resizeStart = { x: e.clientX, y: e.clientY, width: this.element.offsetWidth, height: this.element.offsetHeight }; }
   resize(e) {

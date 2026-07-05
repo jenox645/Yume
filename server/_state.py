@@ -59,6 +59,10 @@ cache_lock = threading.Lock()
 # produce corrupted/empty results.  Serialise all transcription through this lock.
 transcribe_lock = threading.Lock()
 
+# Serialises /model/switch — two concurrent switches would each load a model,
+# briefly tripling VRAM and leaving whichever finishes last as the winner.
+model_switch_lock = threading.Lock()
+
 # ── YouTube auth ──────────────────────────────────────────────────────────────
 youtube_auth_method = "cookies"  # "cookies" or "deno"
 cookies_browser = "chrome"

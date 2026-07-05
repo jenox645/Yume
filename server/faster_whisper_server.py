@@ -328,12 +328,21 @@ def switch_model():
     if new_model == _state.model_name:
         return jsonify({"status": "already_loaded", "model": _state.model_name})
 
-    old_model = _state.model_name
-    print(f"[Yume] Switching model: {old_model} -> {new_model}")
+    if not _state.model_switch_lock.acquire(blocking=False):
+        return jsonify({"error": "A model switch is already in progress"}), 409
 
     try:
-        # Load outside the lock so /transcribe can still return 503 while loading
-        new_whisper = WhisperModel(new_model, device=_state.device, compute_type=_state.compute_type)
+        old_model = _state.model_name
+        print(f"[Yume] Switching model: {old_model} -> {new_model}")
+
+        try:
+            # Load outside transcribe_lock so in-flight transcriptions finish on the old model
+            new_whisper = WhisperModel(new_model, device=_state.device, compute_type=_state.compute_type)
+        except Exception as e:
+            # The old model was never touched — it keeps serving; no rollback needed
+            print(f"[Yume] Model switch failed (still on {old_model}): {e}")
+            return jsonify({"error": f"Switch failed: {str(e)}", "model": old_model}), 500
+
         with _state.transcribe_lock:
             _state.model_name = new_model
             _state.model = new_whisper
@@ -341,19 +350,8 @@ def switch_model():
             _state.subtitle_cache.clear()
         print(f"[Yume] Model switched to {_state.model_name}")
         return jsonify({"status": "ok", "model": _state.model_name, "previous": old_model})
-
-    except Exception as e:
-        print(f"[Yume] Model switch failed: {e}")
-        try:
-            rollback_whisper = WhisperModel(old_model, device=_state.device, compute_type=_state.compute_type)
-            with _state.transcribe_lock:
-                _state.model_name = old_model
-                _state.model = rollback_whisper
-        except Exception as rollback_err:
-            print(f"[Yume] Model rollback also failed: {rollback_err}")
-            _state.model = None
-            return jsonify({"error": f"Switch failed and rollback failed: {str(e)}. Server may need restart."}), 500
-        return jsonify({"error": f"Switch failed: {str(e)}"}), 500
+    finally:
+        _state.model_switch_lock.release()
 
 
 # ── Route: translation model discovery ───────────────────────────────────────
@@ -546,6 +544,11 @@ def prepare_direct():
         size_kb = os.path.getsize(output_path) / 1024
 
         with _state.cache_lock:
+            if len(_state.full_audio_cache) >= _state.AUDIO_CACHE_MAX:
+                oldest = next(iter(_state.full_audio_cache))
+                evicted = _state.full_audio_cache.pop(oldest, None)
+                if evicted:
+                    _audio.cleanup_audio_entry(evicted)
             _state.full_audio_cache[video_id] = {
                 "path": output_path,
                 "duration": duration,
@@ -586,9 +589,14 @@ def transcribe_url():
         if not valid:
             return jsonify({"error": f"Invalid URL: {err}"}), 400
 
-        chunk_index = int(data.get("chunk_index", 0))
-        chunk_duration = int(data.get("chunk_duration", 30))
-        step_size = int(data.get("step_size", 25))
+        try:
+            chunk_index = int(data.get("chunk_index", 0))
+            chunk_duration = int(data.get("chunk_duration", 30))
+            step_size = int(data.get("step_size", 25))
+        except (TypeError, ValueError):
+            return jsonify({"error": "chunk_index, chunk_duration and step_size must be integers"}), 400
+        if chunk_index < 0 or not (1 <= chunk_duration <= 300) or not (1 <= step_size <= 300):
+            return jsonify({"error": "chunk_index/chunk_duration/step_size out of range"}), 400
         language = data.get("language") or None
 
         cache_key = f"{video_id}:{step_size}:{chunk_index}"

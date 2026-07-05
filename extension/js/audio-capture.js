@@ -113,6 +113,11 @@ class AudioCapture {
     this.videoUrl    = window.location.href;
     this.isCapturing = true;
     this._readySignaled = false;
+    // If stopCapture() runs while one of the awaits below is pending, this
+    // start must not resume — it would transcribe into cleared state and
+    // attach a stray timeupdate listener.
+    const startGen = this.generation;
+    const aborted = () => this.generation !== startGen || !this.isCapturing;
 
     // Read settings
     try {
@@ -161,48 +166,96 @@ class AudioCapture {
     // Must be here, not before health check — the server needs to be up
     // for the probe to reach pykakasi/pypinyin on the server.
     await this._probeDeterministicRoma();
+    if (aborted()) return false;
 
-    window.dispatchEvent(new CustomEvent('display-status', {
-      detail: { message: 'Downloading audio...', type: 'loading' }
-    }));
-
-    await this._prepareVideo();
-    DEBUG.success('AudioCapture', `Full audio ready: ${this.videoDuration.toFixed(0)}s`);
-
-    this.totalChunks = Math.ceil(this.videoDuration / this.stepSize);
-    this._dispatchProgress();
-
-    // Try restoring subtitles from session (survives page reload)
+    // Try restoring subtitles BEFORE downloading — a full restore means no
+    // download or transcription is needed at all (previously the full audio
+    // was re-downloaded even when every chunk was already cached).
     const restored = await this._restoreFromSession();
-    if (restored && this.fetchedChunks.size >= this.totalChunks) {
-      // All chunks already cached — go straight to playback
-      DEBUG.success('AudioCapture', 'All chunks restored from session — skipping transcription');
+    if (aborted()) return false;
+    if (restored && this.totalChunks > 0 && this.fetchedChunks.size >= this.totalChunks) {
+      DEBUG.success('AudioCapture', 'All chunks restored — skipping download + transcription');
       this._signalReady();
       this.timeUpdateHandler = () => this._onTimeUpdate();
       video.addEventListener('timeupdate', this.timeUpdateHandler);
-      DEBUG.success('AudioCapture', 'Session restore complete — playback ready');
       return true;
     }
-
-    const startChunk = this._chunkForTime(video.currentTime);
-
-    // If partially restored, skip already-fetched chunks
     if (restored && this.fetchedChunks.size > 0) {
       DEBUG.info('AudioCapture', `Partial restore: ${this.fetchedChunks.size}/${this.totalChunks} from session`);
     }
 
     window.dispatchEvent(new CustomEvent('display-status', {
+      detail: { message: 'Downloading audio...', type: 'loading' }
+    }));
+
+    // Custom stream URLs have no per-chunk fallback (the page URL isn't
+    // yt-dlp-able), so the direct download must finish before transcription.
+    let customUrl = null;
+    try {
+      const { customStreamUrl } = await new Promise(r => chrome.storage.local.get(['customStreamUrl'], r));
+      customUrl = customStreamUrl || null;
+    } catch (_e) { /* treat as no custom URL */ }
+
+    let prepared;
+    let prepareError = null;
+    if (customUrl) {
+      await this._prepareVideo(); // throws on failure, same as before
+      prepared = true;
+    } else {
+      // Fire the download WITHOUT awaiting: chunk 0 is transcribed through the
+      // server's per-chunk stream fallback while the full download runs, cutting
+      // time-to-first-subtitle from download+whisper to max(download, whisper).
+      const preparePromise = this._prepareVideo()
+        .then(() => true)
+        .catch((err) => { prepareError = err; return false; });
+      if (!this.fetchedChunks.has(0)) {
+        await this._fetchChunk(0);
+      }
+      prepared = await preparePromise;
+      // An empty chunk 0 from the stream fallback may mean the fallback itself
+      // failed (no extractable stream URL), not that the audio is instrumental.
+      // Retry once from the now-prepared full audio — a cheap local slice.
+      if (prepared && !aborted() && this.fetchedChunks.has(0) && (this.subtitleChunks[0] || []).length === 0) {
+        DEBUG.info('AudioCapture', 'Chunk 0 empty via stream fallback — retrying from prepared audio');
+        this.fetchedChunks.delete(0);
+        delete this.subtitleChunks[0];
+        await this._fetchChunk(0);
+      }
+    }
+    if (aborted()) return false;
+
+    if (!prepared) {
+      const chunk0HasSubs = (this.subtitleChunks[0] || []).length > 0;
+      const elementDuration = Number.isFinite(video.duration) ? video.duration : 0;
+      if (!chunk0HasSubs || elementDuration <= 0) {
+        throw prepareError || new Error('Failed to download audio');
+      }
+      // Full download failed but per-chunk streaming demonstrably works —
+      // continue in fallback mode (each chunk sliced from the stream URL, slower).
+      DEBUG.warn('AudioCapture', `Full download failed (${prepareError?.message}) — continuing with per-chunk streaming`);
+      this._addDiag(-1, 'retry', 0, 0, 'Full download failed — per-chunk streaming mode (slower)');
+      this.videoDuration = elementDuration;
+    } else {
+      DEBUG.success('AudioCapture', `Full audio ready: ${this.videoDuration.toFixed(0)}s`);
+    }
+
+    this.totalChunks = Math.ceil(this.videoDuration / this.stepSize);
+    this._dispatchProgress();
+
+    window.dispatchEvent(new CustomEvent('display-status', {
       detail: { message: 'Transcribing...', type: 'loading' }
     }));
 
-    // Always fetch chunk 0 first — the video may have advanced during the
-    // prepare phase (audio download takes 5-30s), causing _chunkForTime()
-    // to return chunk 1+ and skip the beginning of the video entirely.
-    if (startChunk > 0 && !this.fetchedChunks.has(0)) {
-      DEBUG.info('AudioCapture', `Video advanced to chunk ${startChunk} during prepare — fetching chunk 0 first`);
+    // Chunk 0 first (already fetched in the parallel path — no-op there), then
+    // the chunk under the playhead in case the video advanced while downloading.
+    if (!this.fetchedChunks.has(0)) {
       await this._fetchChunk(0);
     }
-    await this._fetchChunk(startChunk);
+    const startChunk = this._chunkForTime(video.currentTime);
+    if (startChunk > 0 && !this.fetchedChunks.has(startChunk)) {
+      await this._fetchChunk(startChunk);
+    }
+    if (aborted()) return false;
     // Always signal ready so the pipeline + timeupdate handler can start.
     // If the first chunk(s) had no vocals (instrumental intro, silence, etc.),
     // show a different status so the user doesn't see "Ready ✓" with 0 subtitles.
@@ -310,11 +363,16 @@ class AudioCapture {
           // if there are now retryable chunks instead of breaking immediately.
           if (this.fetchedChunks.size < this.totalChunks) continue;
         }
-        const nonEmpty = Array.from(this.fetchedChunks).filter(i => 
+        const nonEmpty = Array.from(this.fetchedChunks).filter(i =>
           this.subtitleChunks[i] && this.subtitleChunks[i].length > 0
         ).length;
         const total = this.fetchedChunks.size;
-        if (nonEmpty === 0 && total > 0) {
+        const inRetry = this.fetchingChunks.size;
+        if (inRetry > 0) {
+          // Chunks stuck in translation-retry limbo finalize on their own
+          // timers — don't report the pipeline as complete while they're live.
+          this._addDiag(-1, 'retry', 0, 0, `Pipeline drained: ${inRetry} chunk(s) still retrying translation`);
+        } else if (nonEmpty === 0 && total > 0) {
           this._addDiag(-1, 'stopped', 0, 0, `All ${total} chunks empty — try Clear Cache and restart`);
         } else {
           this._addDiag(-1, 'ok', 0, 0, `Pipeline complete: ${nonEmpty} with subtitles / ${total} total`);
@@ -322,31 +380,36 @@ class AudioCapture {
         this._dispatchProgress();
         break;
       }
+      const wasPriority = this._lastPickWasPriority;
 
       // Horizon: pause if too far ahead of playback (saves GPU for unwatched content)
       const currentChunk = this._chunkForTime(this.video?.currentTime || 0);
-      if (next > currentChunk + 10 && next !== this.priorityChunk) {
+      if (next > currentChunk + 10 && !wasPriority) {
         await this._sleep(2000);
         continue;
       }
 
       if (this.fetchingChunks.has(next)) { await this._sleep(500); continue; }
 
-      // Wait for previous translation to finish before starting next transcription.
-      // This ensures at most 1 translation is in flight at any time.
-      // The overlap is: transcribe(N) happens while translate(N-1) finishes.
-      if (pendingTranslation) {
-        await pendingTranslation;
-        pendingTranslation = null;
-      }
-
-      // Phase 1: Transcribe this chunk (Whisper server)
+      // Phase 1: Transcribe (Whisper = GPU). Deliberately NOT gated on the
+      // in-flight translation (LLM = separate server) — this is the overlap
+      // that makes the pipeline parallel: transcribe(N+1) runs while
+      // translate(N) is still in flight. Awaiting pendingTranslation here
+      // instead would serialise the whole pipeline (whisper → LLM → whisper…),
+      // which is exactly the bug this ordering fixes.
       const transcribeResult = await this._transcribeOnly(next);
       if (gen !== this.generation) break; // video changed, abort
       if (!transcribeResult) continue; // error or empty, already handled
 
-      // Phase 2: Fire translation in background — don't await!
-      // Next loop iteration will await it before starting the NEXT transcription.
+      // Phase 2: at most ONE translation in flight at a time (the LLM is
+      // single-threaded — concurrent calls cause timeouts and lost results).
+      // Wait for the previous chunk's translation before firing this one.
+      if (pendingTranslation) {
+        await pendingTranslation;
+        pendingTranslation = null;
+      }
+      if (gen !== this.generation) break;
+
       pendingTranslation = this._translateAndFinalize(next, transcribeResult.segments, transcribeResult.whisperTime, transcribeResult.t0, gen, transcribeResult.wasCached);
     }
 
@@ -354,12 +417,18 @@ class AudioCapture {
   }
 
   _nextChunkToFetch() {
+    // Records whether the returned pick came from a user seek — the caller's
+    // horizon check exempts priority picks. (It used to compare against
+    // this.priorityChunk, which this method has already reset to -1 by then.)
+    this._lastPickWasPriority = false;
+
     // Priority chunk (user seeked to unfetched region)
     if (this.priorityChunk >= 0 &&
         !this.fetchedChunks.has(this.priorityChunk) &&
         !this.fetchingChunks.has(this.priorityChunk)) {
       const p = this.priorityChunk;
       this.priorityChunk = -1;
+      this._lastPickWasPriority = true;
       return p;
     }
     this.priorityChunk = -1;
@@ -531,107 +600,18 @@ class AudioCapture {
 
   // =========================================================================
   // FETCH A CHUNK (transcribe + translate + optionally romanize)
-  // Used for first chunk (must complete fully before playback starts)
-  // Pipeline chunks use _transcribeOnly + _translateAndFinalize for overlap
+  // Thin wrapper: transcribe, then run the same translate/romanize/store path
+  // the pipeline uses. Awaiting it returns once the chunk is stored (or its
+  // first translation attempt failed and a retry was scheduled — placeholders
+  // with original text are already visible by then).
   // =========================================================================
 
   async _fetchChunk(chunkIndex) {
     const result = await this._transcribeAndFilter(chunkIndex);
     if (!result) return;
-
-    const { segments: cleanSegments, whisperTime, t0, wasCached } = result;
-
-    // Store source-only placeholders IMMEDIATELY so original text is visible
-    // even if translation fails (graceful degradation)
-    const placeholders = cleanSegments.map(seg => ({
-      start: seg.start, end: seg.end,
-      original: seg.text, english: '', romaji: '',
-      confidence: seg.confidence || 0
-    }));
-    this.subtitleChunks[chunkIndex] = placeholders;
-
-    try {
-      // 2. Translate (skip entirely if translation is disabled)
-      const tTrans = performance.now();
-      if (this._timings[chunkIndex]) this._timings[chunkIndex].translateStart = tTrans;
-      const { settings: transSettings } = await new Promise(r => chrome.storage.local.get(['settings'], r));
-      const srcLang = transSettings?.sourceLanguage || this.sourceLanguage || 'ja';
-      const isDeterministic = DETERMINISTIC_ROMA_LANGS.has(srcLang);
-
-      // Decide whether to romanize:
-      // - Deterministic languages (ja/zh/ko): ALWAYS (speculative — nearly free, <100ms)
-      // - LLM languages (ru/ar): only if user enabled showRomaji
-      const shouldRomanize = isDeterministic || transSettings?.showRomaji;
-
-      let translated;
-      if (transSettings?.showEnglish === false) {
-        translated = placeholders;
-      } else {
-        // Romanization strategy depends on whether deterministic (instant) is available:
-        // - Deterministic (pykakasi/pypinyin): parallel with translation (free, <100ms)
-        // - LLM-only: AFTER translation (they share the same LLM, can't parallelize)
-        const canParallelRoma = shouldRomanize && _deterministicRomaAvailable[this.sourceLanguage || 'ja'] === true;
-
-        if (canParallelRoma) {
-          // Parallel: translation + romanization fire simultaneously
-          const origTexts = cleanSegments.map(seg => seg.text);
-          const [batchResult, romaResult] = await Promise.all([
-            this._translateBatch(cleanSegments, chunkIndex),
-            this._romanizeTexts(origTexts, srcLang)
-          ]);
-          translated = batchResult;
-          if (this._timings[chunkIndex]) this._timings[chunkIndex].batchEnd = performance.now();
-          if (romaResult) {
-            for (let i = 0; i < translated.length && i < romaResult.length; i++) {
-              if (romaResult[i]) translated[i].romaji = romaResult[i];
-            }
-          }
-        } else {
-          // Sequential: translate first, then romanize (LLM-only or no romaji)
-          translated = await this._translateBatch(cleanSegments, chunkIndex);
-          if (this._timings[chunkIndex]) this._timings[chunkIndex].batchEnd = performance.now();
-          if (shouldRomanize) {
-            try {
-              await this._romanizeBatch(translated);
-            } catch (_e) { /* romanization is optional */ }
-          }
-        }
-      }
-      if (this._timings[chunkIndex]) this._timings[chunkIndex].translateEnd = performance.now();
-      const transTime = ((performance.now() - tTrans) / 1000).toFixed(1);
-
-      // 4. Store fully translated segments (replaces source-only placeholders)
-      this.subtitleChunks[chunkIndex] = translated;
-      this.fetchedChunks.add(chunkIndex);
-      this.fetchingChunks.delete(chunkIndex);
-
-      const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-      const preview = translated[0]?.original?.substring(0, 20) || '';
-      const progress = `[${this.fetchedChunks.size}/${this.totalChunks}]`;
-      const transOk = translated.filter(s => s.english && s.english.length > 0).length;
-      const transTotal = translated.length;
-      DEBUG.success('AudioCapture', `Chunk ${chunkIndex} ready: ${transTotal} segs (${transOk} translated) in ${elapsed}s ${progress}`);
-      const cacheTag = wasCached ? ' [cached]' : '';
-      const transTag = transOk < transTotal ? ` [${transOk}/${transTotal} translated]` : '';
-      this._addDiag(chunkIndex, 'ok', translated.length, elapsed,
-        `w:${whisperTime}s t+r:${transTime}s "${preview}"${cacheTag}${transTag}`);
-      this._dispatchProgress();
-      this._checkAndSignalReady(chunkIndex);
-
-    } catch (error) {
-      const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-      this._addDiag(chunkIndex, 'error', 0, elapsed, error.message);
-      // Graceful degradation: mark chunk as fetched with source-only placeholders
-      // so original text is still visible and the pipeline doesn't retry endlessly
-      this.fetchedChunks.add(chunkIndex);
-      this.fetchingChunks.delete(chunkIndex);
-      this._dispatchProgress();
-      if (chunkIndex === 0) {
-        window.dispatchEvent(new CustomEvent('display-error', {
-          detail: { message: `Translation failed: ${error.message}. Showing original text only.` }
-        }));
-      }
-    }
+    await this._translateAndFinalize(
+      chunkIndex, result.segments, result.whisperTime, result.t0, this.generation, result.wasCached
+    );
   }
 
   // Phase 1: Transcribe only (Whisper server). Returns segments or null.
@@ -760,6 +740,11 @@ class AudioCapture {
         delete this._retryCount[chunkIndex];
         this._addDiag(chunkIndex, 'error', cleanSegments.length, elapsed,
           `Translation failed after 3 retries: ${error.message} — keeping originals`);
+        if (chunkIndex === 0) {
+          window.dispatchEvent(new CustomEvent('display-error', {
+            detail: { message: `Translation failed: ${error.message}. Showing original text only.` }
+          }));
+        }
         this._dispatchProgress();
         this._checkAndSignalReady(chunkIndex);
       }
@@ -785,6 +770,9 @@ class AudioCapture {
   }
 
   _dispatchProgress() {
+    // Before the audio download reports a duration, totalChunks is 0 — a
+    // dispatch would render a "0/0" badge and mark the run complete.
+    if (this.totalChunks === 0) return;
     // Count fully processed chunks and romanized chunks
     // Only count chunks in fetchedChunks (not placeholders)
     let translatedCount = 0;
@@ -823,7 +811,7 @@ class AudioCapture {
   }
 
   async _saveToSession() {
-    if (!this.videoId || this.fetchedChunks.size === 0) return;
+    if (!this.videoId || this.fetchedChunks.size === 0 || this.totalChunks === 0) return;
     try {
       // Only save chunks that are fully processed (have translations if they have text)
       // This prevents saving placeholders with english='' before translation completes
@@ -846,6 +834,7 @@ class AudioCapture {
         fetchedChunks: [...this.fetchedChunks].filter(i => cleanChunks[i] !== undefined),
         totalChunks: this.totalChunks,
         videoDuration: this.videoDuration,
+        stepSize: this.stepSize,  // chunk indexes are meaningless under a different step size
         timestamp: Date.now()
       };
       // Key by videoId, keep last 3 videos max
@@ -859,42 +848,102 @@ class AudioCapture {
         await chrome.storage.session.remove(yumeKeys[0]);
       }
       await chrome.storage.session.set({ [sessionKey]: data });
+
+      // Fully processed videos also go to the persistent library, so the GPU
+      // work survives browser restarts (session storage dies with the browser).
+      if (this.totalChunks > 0 && data.fetchedChunks.length >= this.totalChunks) {
+        await this._saveToLibrary(data);
+      }
     } catch (_e) {
       // Session storage can fail (quota, etc) — non-critical
     }
+  }
+
+  // Persistent subtitle library — chrome.storage.local, survives browser restart.
+  // Bounded: 15 newest videos, 30-day TTL. Best-effort (quota failures ignored).
+  async _saveToLibrary(data) {
+    try {
+      const key = `yumeLib_${this.videoId}`;
+      const entry = {
+        ...data,
+        title: (document.title || '').slice(0, 150),
+        url: window.location.href,
+        savedAt: Date.now()
+      };
+      const all = await new Promise(r => chrome.storage.local.get(null, r));
+      const libKeys = Object.keys(all).filter(k => k.startsWith('yumeLib_'));
+      const MAX_ENTRIES = 15;
+      const TTL_MS = 30 * 24 * 60 * 60 * 1000;
+      const now = Date.now();
+      const toRemove = libKeys.filter(k => now - (all[k]?.savedAt || 0) > TTL_MS);
+      const live = libKeys
+        .filter(k => !toRemove.includes(k))
+        .sort((a, b) => (all[a]?.savedAt || 0) - (all[b]?.savedAt || 0));
+      while (live.length >= MAX_ENTRIES && !live.includes(key)) {
+        toRemove.push(live.shift());
+      }
+      if (toRemove.length) await new Promise(r => chrome.storage.local.remove(toRemove, r));
+      await new Promise(r => chrome.storage.local.set({ [key]: entry }, r));
+      DEBUG.info('AudioCapture', `Saved to library: ${entry.title || this.videoId}`);
+    } catch (_e) { /* storage quota — library is best-effort */ }
   }
 
   async _restoreFromSession() {
     if (!this.videoId) return false;
     try {
       const sessionKey = `yume_${this.videoId}`;
+      const libKey = `yumeLib_${this.videoId}`;
       const stored = await chrome.storage.session.get(sessionKey);
-      const data = stored[sessionKey];
-      if (!data || !data.subtitleChunks || !data.fetchedChunks) return false;
-      // Only restore if reasonably fresh (< 30 min)
-      if (Date.now() - (data.timestamp || 0) > 30 * 60 * 1000) return false;
+      let data = stored[sessionKey];
+      let source = 'session';
 
-      // Reject sessions where all chunks are empty — these are stale from
+      // Session data must be fresh (< 30 min); fall back to the persistent
+      // library (30-day TTL, enforced at save time) when it misses.
+      if (data && Date.now() - (data.timestamp || 0) > 30 * 60 * 1000) data = null;
+      if (!data || !data.subtitleChunks || !data.fetchedChunks) {
+        const lib = await new Promise(r => chrome.storage.local.get(libKey, r));
+        data = lib[libKey];
+        source = 'library';
+        if (!data || !data.subtitleChunks || !data.fetchedChunks) return false;
+      }
+
+      const discard = () => {
+        if (source === 'library') {
+          try { chrome.storage.local.remove(libKey); } catch (_e) { /* ok */ }
+        } else {
+          chrome.storage.session.remove(sessionKey).catch(() => {});
+        }
+      };
+
+      // Chunk indexes are derived from stepSize — data saved under a different
+      // chunk-duration setting would misalign every subtitle lookup. Keep the
+      // data (settings may revert) but don't restore it.
+      if (data.stepSize && data.stepSize !== this.stepSize) {
+        DEBUG.warn('AudioCapture', `${source} saved with stepSize ${data.stepSize}, current ${this.stepSize} — not restoring`);
+        return false;
+      }
+
+      // Reject caches where all chunks are empty — these are stale from
       // bad cache hits and should be re-transcribed fresh
       const nonEmptyChunks = data.fetchedChunks.filter(i => {
         const segs = data.subtitleChunks[i];
         return segs && segs.length > 0;
       });
       if (nonEmptyChunks.length === 0 && data.fetchedChunks.length > 2) {
-        DEBUG.warn('AudioCapture', `Session has ${data.fetchedChunks.length} chunks but all empty — discarding`);
-        chrome.storage.session.remove(sessionKey).catch(() => {});
+        DEBUG.warn('AudioCapture', `${source} has ${data.fetchedChunks.length} chunks but all empty — discarding`);
+        discard();
         return false;
       }
 
-      // Reject sessions where chunks have text but no translations — these
+      // Reject caches where chunks have text but no translations — these
       // are placeholders saved before translation completed
       const hasUntranslated = nonEmptyChunks.some(i => {
         const segs = data.subtitleChunks[i];
         return segs.some(seg => seg.original && !seg.english);
       });
       if (hasUntranslated) {
-        DEBUG.warn('AudioCapture', 'Session has untranslated segments — discarding to re-process');
-        chrome.storage.session.remove(sessionKey).catch(() => {});
+        DEBUG.warn('AudioCapture', `${source} has untranslated segments — discarding to re-process`);
+        discard();
         return false;
       }
 
@@ -904,7 +953,7 @@ class AudioCapture {
       this.videoDuration = data.videoDuration || this.videoDuration;
 
       DEBUG.success('AudioCapture',
-        `Restored ${this.fetchedChunks.size}/${this.totalChunks} chunks from session`);
+        `Restored ${this.fetchedChunks.size}/${this.totalChunks} chunks from ${source}`);
       this._dispatchProgress();
       return true;
     } catch (_e) {
@@ -928,7 +977,8 @@ class AudioCapture {
   // EXPORT SUBTITLES (SRT format)
   // =========================================================================
 
-  exportSRT() {
+  // Collect all cached segments sorted by time, deduplicating the 5s overlap region.
+  _collectExportSegments() {
     const allSegments = [];
     for (const [_idx, segments] of Object.entries(this.subtitleChunks)) {
       for (const seg of segments) {
@@ -937,33 +987,56 @@ class AudioCapture {
     }
     allSegments.sort((a, b) => a.start - b.start);
 
-    // Deduplicate segments with same start time (overlap region)
     const deduped = [];
     for (const seg of allSegments) {
       const last = deduped[deduped.length - 1];
       if (last && Math.abs(last.start - seg.start) < 0.3 && last.original === seg.original) continue;
       deduped.push(seg);
     }
+    return deduped;
+  }
 
+  _exportCueText(seg) {
+    const parts = [];
+    if (seg.original) parts.push(seg.original);
+    if (seg.english && seg.english !== seg.original) parts.push(seg.english);
+    if (seg.romaji) parts.push(seg.romaji);
+    return parts.join('\n');
+  }
+
+  exportSRT() {
+    const deduped = this._collectExportSegments();
     const lines = [];
     deduped.forEach((seg, i) => {
       lines.push(`${i + 1}`);
-      lines.push(`${this._fmtSrt(seg.start)} --> ${this._fmtSrt(seg.end)}`);
-      const parts = [];
-      if (seg.original) parts.push(seg.original);
-      if (seg.english && seg.english !== seg.original) parts.push(seg.english);
-      if (seg.romaji) parts.push(seg.romaji);
-      lines.push(parts.join('\n'));
+      lines.push(`${this._fmtTimestamp(seg.start, ',')} --> ${this._fmtTimestamp(seg.end, ',')}`);
+      lines.push(this._exportCueText(seg));
       lines.push('');
     });
 
     return { srt: lines.join('\n'), count: deduped.length, fetched: this.fetchedChunks.size, total: this.totalChunks };
   }
 
-  _fmtSrt(sec) {
-    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
-    const s = Math.floor(sec % 60), ms = Math.round((sec % 1) * 1000);
-    return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')},${String(ms).padStart(3,'0')}`;
+  exportVTT() {
+    const deduped = this._collectExportSegments();
+    const lines = ['WEBVTT', ''];
+    for (const seg of deduped) {
+      lines.push(`${this._fmtTimestamp(seg.start, '.')} --> ${this._fmtTimestamp(seg.end, '.')}`);
+      lines.push(this._exportCueText(seg));
+      lines.push('');
+    }
+
+    return { vtt: lines.join('\n'), count: deduped.length, fetched: this.fetchedChunks.size, total: this.totalChunks };
+  }
+
+  // SRT uses ',' as the millisecond separator; WebVTT uses '.'
+  // Works in whole ms — rounding the fractional part alone can produce ms=1000
+  // and emit invalid timestamps like "00:00:01,1000".
+  _fmtTimestamp(sec, msSep) {
+    const totalMs = Math.max(0, Math.round(sec * 1000));
+    const h = Math.floor(totalMs / 3600000), m = Math.floor((totalMs % 3600000) / 60000);
+    const s = Math.floor((totalMs % 60000) / 1000), ms = totalMs % 1000;
+    return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}${msSep}${String(ms).padStart(3,'0')}`;
   }
 
   // =========================================================================
@@ -1610,6 +1683,7 @@ class AudioCapture {
     this.subtitleChunks = {}; this.fetchedChunks = new Set(); this.fetchingChunks = new Set();
     this.lastShownSegment = null; this.emptyChunkCount = 0; this.fetchingStopped = false;
     this.prepared = false; this.pipelineRunning = false; this.priorityChunk = -1;
+    this._retryCount = {}; this._timings = {};
 
     // Remove storage listener to prevent leaks when AudioCapture is recreated
     if (this._onStorageChanged) {
@@ -1630,12 +1704,13 @@ class AudioCapture {
     this.lastShownSegment = null;
     this.emptyChunkCount  = 0;
     this.fetchingStopped  = false;
-    // Clear session storage so stale data doesn't restore on page reload
+    // Clear session + library storage so stale data doesn't restore later
     try {
       if (this.videoId) {
         chrome.storage.session.remove(`yume_${this.videoId}`);
+        chrome.storage.local.remove(`yumeLib_${this.videoId}`);
       }
-    } catch (_e) { /* session storage may not be available */ }
+    } catch (_e) { /* storage may not be available */ }
     // Clear displayed subtitle
     window.dispatchEvent(new CustomEvent('display-subtitle', {
       detail: { original: '', english: '', romaji: '' }
@@ -1680,10 +1755,17 @@ class AudioCapture {
     const params = new URLSearchParams(window.location.search);
     const ytId = params.get('v');
     if (ytId) return ytId;
-    // Non-YouTube: include video src snippet for uniqueness across videos on same page
+    // Non-YouTube: build a STABLE id from page path + src snippet + duration.
+    // It must be identical across page reloads — a previous version appended
+    // Date.now(), which silently defeated session restore and the server's
+    // full-audio cache (every reload re-downloaded and re-transcribed).
     const video = document.querySelector('video');
-    const srcHint = (video?.src || video?.currentSrc || '').slice(-20).replace(/\W/g, '');
-    return window.location.pathname.replace(/\W/g, '-') + '-' + srcHint + '-' + Date.now();
+    const src = video?.src || video?.currentSrc || '';
+    // blob:/mediasource URLs embed a random per-session UUID — their tail is
+    // NOT stable across reloads, so rely on path + duration instead.
+    const srcHint = src.startsWith('blob:') ? '' : src.slice(-20).replace(/\W/g, '');
+    const durHint = Number.isFinite(video?.duration) ? Math.round(video.duration) : '';
+    return window.location.pathname.replace(/\W/g, '-') + '-' + srcHint + '-' + durHint;
   }
 
   _sendMessage(message) {

@@ -44,7 +44,6 @@ HALLUCINATION_PATTERNS = [
     "\u8bf7\u8ba2\u9605",
     "\u611f\u8c22\u89c2\u770b",
     "\u611f\u8c22\u6536\u770b",
-    "\u5b57\u5e55\u5236\u4f5c",
     "\u5b57\u5e55\u7ec4",
     "\u8c22\u8c22\u5927\u5bb6\u7684\u652f\u6301",
     "\u8bb0\u5f97\u70b9\u8d5e",
@@ -60,11 +59,6 @@ HALLUCINATION_PATTERNS = [
     "\u0634\u0643\u0631\u0627 \u0644\u0644\u0645\u0634\u0627\u0647\u062f\u0629",
     "\u0644\u0627 \u062a\u0646\u0633\u0649 \u0627\u0644\u0627\u0639\u062c\u0627\u0628",  # bare alef form
     "\u0644\u0627 \u062a\u0646\u0633\u0649 \u0627\u0644\u0625\u0639\u062c\u0627\u0628",  # hamza-below form (Whisper standard)
-    # Universal social media
-    "Like",
-    "Share",
-    "Comment",
-    "Follow",
 ]
 
 # ── Credits-line patterns ─────────────────────────────────────────────────────
@@ -88,10 +82,20 @@ CREDITS_PATTERNS = [
     "mastering",
 ]
 
-SINGLE_WORD_BLOCKLIST = ["music", "mm", "hmm"]  # vocal sounds (la/na/da/oh/ah are real lyrics)
+# Exact whole-line matches only.  "like"/"share"/"comment"/"follow" used to be
+# substring patterns, which silently dropped real lyrics ("I like you", "follow me").
+# As bare one-word lines they are YouTube-outro hallucinations; inside a sentence
+# they are legitimate. (la/na/da/oh/ah are real lyrics and stay allowed.)
+SINGLE_WORD_BLOCKLIST = ["music", "mm", "hmm", "like", "share", "comment", "follow", "subscribe"]
 
 
 # ── Detection logic ───────────────────────────────────────────────────────────
+
+
+# Precomputed lowercase copies — is_hallucination runs per transcribed segment,
+# so lowering every pattern on every call is pure waste.
+_HALLUCINATION_PATTERNS_LOWER = [p.lower() for p in HALLUCINATION_PATTERNS]
+_CREDITS_PATTERNS_LOWER = [p.lower() for p in CREDITS_PATTERNS]
 
 
 def is_hallucination(text):
@@ -103,8 +107,8 @@ def is_hallucination(text):
     t = unicodedata.normalize("NFC", t)
     t_lower = t.lower()
 
-    for pat in HALLUCINATION_PATTERNS:
-        if pat.lower() in t_lower:
+    for pat in _HALLUCINATION_PATTERNS_LOWER:
+        if pat in t_lower:
             return True
 
     # User-reported blacklist (sent from extension popup)
@@ -141,8 +145,8 @@ def is_credits_line(text):
     """Return True if text looks like a credits/attribution line."""
     t = text.strip()
     t_lower = t.lower()
-    for pat in CREDITS_PATTERNS:
-        if pat.lower() in t_lower:
+    for pat in _CREDITS_PATTERNS_LOWER:
+        if pat in t_lower:
             return True
     if "\u30fb" in t and len(t) < 60:  # Japanese interpunct in short line = credits
         return True
