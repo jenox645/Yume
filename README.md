@@ -58,7 +58,7 @@ Chrome, Brave, Edge:
 3. Click **Load unpacked** → select the `extension/` folder
 4. Pin the Yume icon in the toolbar
 
-Firefox: handled by the setup wizard. <!-- TODO: integrate Firefox setup into wizard -->
+Firefox: open `about:debugging` → **This Firefox** → **Load Temporary Add-on** → select `extension/manifest_firefox.json`. Note: temporary add-ons unload when Firefox closes — re-load after each restart (Chrome/Edge/Brave installs persist).
 
 **3. Watch**
 

@@ -75,6 +75,50 @@ def _install_with_retry(label: str, install_fn, manual_hint: str = "") -> bool:
     return False
 
 
+def _open_folder(path: Path) -> bool:
+    """Open a folder in the system file manager. Best-effort, never raises."""
+    try:
+        if IS_WIN:
+            os.startfile(str(path))  # noqa: S606  # nosec B606 — fixed local path, not user input
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(path)])  # noqa: S603, S607  # nosec B603 B607
+        else:
+            subprocess.Popen(["xdg-open", str(path)])  # noqa: S603, S607  # nosec B603 B607
+        return True
+    except Exception:
+        return False
+
+
+def _extension_guide() -> None:
+    """Walk the user through loading the browser extension.
+
+    This is the step non-technical users miss: the wizard installs servers and
+    models, but subtitles only appear once the extension is loaded in the
+    browser — and nothing else in the first-run path explains how.
+    """
+    from yume.utils import EXT_DIR
+
+    print()
+    section("Browser Extension  (required — this is where subtitles appear)")
+    info("One minute in your browser and you're done:")
+    print()
+    print(f"    1. Open {C.CYAN}chrome://extensions{C.RESET} in Chrome, Edge or Brave")
+    print(f"       {C.DIM}(type it into the address bar and press Enter){C.RESET}")
+    print(f"    2. Turn ON {C.BOLD}Developer mode{C.RESET}  {C.DIM}(toggle in the top-right corner){C.RESET}")
+    print(f"    3. Click {C.BOLD}Load unpacked{C.RESET} and select this folder:")
+    print(f"       {C.BOLD}{EXT_DIR}{C.RESET}")
+    print(f"    4. Open any video, click the Yume icon in the toolbar, press {C.BOLD}Enable{C.RESET}")
+    print()
+    info(
+        f"{C.DIM}Firefox instead: about:debugging -> This Firefox -> Load Temporary Add-on"
+        f" -> select extension/manifest_firefox.json{C.RESET}"
+    )
+    print()
+    if ask_yn("Open the extension folder now (so it's ready to select in step 3)?", True):
+        if not _open_folder(EXT_DIR):
+            info(f"Could not open it automatically — the folder is: {EXT_DIR}")
+
+
 def setup_wizard(cfg: dict) -> dict:
     from config import DEFAULT_OLLAMA_PORT, save_config
 
@@ -242,6 +286,7 @@ def setup_wizard(cfg: dict) -> dict:
         success(f"\n  {C.BOLD}Everything ready!{C.RESET}")
         cfg["first_run_complete"] = True
         save_config(cfg)
+        _extension_guide()
         pause()
         return cfg
 
@@ -489,6 +534,8 @@ def setup_wizard(cfg: dict) -> dict:
         warn("Setup finished with missing components.")
         info("Run 'python pocket_yume.py health' to see details.")
         info("Missing components can be installed from the Tools menu.")
+
+    _extension_guide()
     pause()
     return cfg
 
