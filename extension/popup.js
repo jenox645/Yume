@@ -1,4 +1,4 @@
-// Yume - Popup Script v0.0.9
+// Yume - Popup Script v0.1.0
 console.log('[Yume Popup] Script loaded');
 
 // ============================================================================
@@ -79,11 +79,39 @@ document.addEventListener('DOMContentLoaded', () => {
   loadSettings().catch(e => console.error('[Yume] loadSettings failed:', e));
   checkServers().catch(e => console.error('[Yume] checkServers failed:', e));
   checkSubtitleStatus().catch(e => console.error('[Yume] checkSubtitleStatus failed:', e));
+  showShortcutHint();
 });
+
+// Show the actual toggle shortcut (users can remap it, so read the live binding)
+function showShortcutHint() {
+  const el = document.getElementById('shortcutHint');
+  if (!el || !chrome.commands?.getAll) return;
+  try {
+    chrome.commands.getAll((cmds) => {
+      const cmd = (cmds || []).find(c => c.name === 'toggle-subtitles');
+      el.textContent = cmd?.shortcut
+        ? `Keyboard shortcut: ${cmd.shortcut} (works on the video page)`
+        : 'Tip: set a toggle shortcut at chrome://extensions/shortcuts';
+    });
+  } catch (_e) { /* commands API unavailable — hint stays empty */ }
+}
 
 // ============================================================================
 // COLLAPSIBLE SECTIONS
 // ============================================================================
+
+// Fire the lazy data-loader for a section when it becomes visible. Shared by the
+// expand click handler AND restoreCollapsibleState so a section that is restored
+// open on popup reopen shows LIVE data, not stale/empty content.
+function loadSectionData(sid) {
+  const warn = (e) => console.warn('[Yume]', e.message);
+  if (sid === 'model') loadModels().catch(warn);
+  else if (sid === 'diagnostics') fetchDiagnostics().catch(warn);
+  else if (sid === 'hallucination') loadBlacklist();
+  else if (sid === 'stats') startStatsPolling();
+  else if (sid === 'whisper-model') fetchStats().catch(warn);
+  else if (sid === 'history') loadHistory().catch(warn);
+}
 
 function restoreCollapsibleState() {
   chrome.storage.local.get(['expandedSections'], (result) => {
@@ -94,6 +122,8 @@ function restoreCollapsibleState() {
         section.classList.remove('collapsed');
         const arrow = section.querySelector('.toggle-arrow');
         if (arrow) arrow.textContent = '\u25BC';
+        // Populate the section's data just as if the user had clicked to expand it.
+        loadSectionData(id);
       }
     });
   });
@@ -114,17 +144,13 @@ function setupCollapsibleSections() {
       });
       chrome.storage.local.set({ expandedSections: expanded });
 
+      // NOTE: sid values must match the data-section attributes in popup.html
+      // ('model', 'stats', ...). Text fallbacks kept for safety.
       const sid = section.getAttribute('data-section') || '';
       if (!section.classList.contains('collapsed')) {
-        const text = label.textContent.trim();
-        if (sid === 'translation-model' || text.includes('Translation Model')) loadModels().catch(e => console.warn('[Yume]', e.message));
-        if (sid === 'diagnostics' || text.includes('Diagnostics')) fetchDiagnostics().catch(e => console.warn('[Yume]', e.message));
-        if (sid === 'hallucination' || text.includes('Hallucination')) loadBlacklist();
-        if (sid === 'server-stats' || text.includes('Server Stats')) startStatsPolling();
-        if (sid === 'whisper-model' || text.includes('Whisper Model')) fetchStats().catch(e => console.warn('[Yume]', e.message));
-      } else {
-        const text = label.textContent.trim();
-        if (sid === 'server-stats' || text.includes('Server Stats')) stopStatsPolling();
+        loadSectionData(sid);
+      } else if (sid === 'stats') {
+        stopStatsPolling();
       }
     });
   });
@@ -223,13 +249,19 @@ async function toggleSubtitles() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab) throw new Error('No active tab found');
 
+    // Browser pages (chrome://, about:, the Web Store...) never get content
+    // scripts — tell the user why instead of a cryptic connection error.
+    if (!_isScriptablePage(tab.url)) {
+      throw new Error("Yume can't run on this page — open a video page (like YouTube) and try again.");
+    }
+
     let response;
     try {
       response = await chrome.tabs.sendMessage(tab.id, { action: 'TOGGLE_SUBTITLES' });
     } catch (msgErr) {
       if (msgErr.message.includes('Receiving end does not exist') ||
           msgErr.message.includes('Could not establish connection')) {
-        throw new Error('Content script not loaded. Hard reload (Ctrl+Shift+R) then try again.');
+        throw new Error('Yume is not loaded on this tab yet — reload the page (F5), then try again.');
       }
       throw msgErr;
     }
@@ -255,12 +287,31 @@ function updateToggleButton(isActive) {
   else { button.classList.remove('active'); text.textContent = 'Enable'; }
 }
 
+// Pages where content scripts can run (http/https/file). Everything else
+// (chrome://, about:, extension pages, Web Store) can never host subtitles.
+function _isScriptablePage(url) {
+  return /^(https?|file):/.test(url || '') &&
+         !(url || '').startsWith('https://chromewebstore.google.com');
+}
+
 async function checkSubtitleStatus() {
+  const statusMsg = document.getElementById('statusMessage');
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab) return;
+    if (!_isScriptablePage(tab.url)) {
+      statusMsg.textContent = "Yume can't run on this page — open a video page (like YouTube).";
+      statusMsg.className = 'status-message';
+      return;
+    }
     const response = await chrome.tabs.sendMessage(tab.id, { action: 'GET_STATUS' });
-    if (response?.success) updateToggleButton(response.active);
+    if (response?.success) {
+      updateToggleButton(response.active);
+      if (!response.active && response.hasVideo === false) {
+        statusMsg.textContent = 'No video detected on this page yet.';
+        statusMsg.className = 'status-message';
+      }
+    }
   } catch (e) { console.warn('[Yume]', e.message); }
 }
 
@@ -337,6 +388,22 @@ async function checkServers() {
     if (translationEl._failCount >= 3) {
       translationEl.className = 'status-indicator disconnected';
     }
+  }
+
+  _updateServerHint();
+}
+
+// A red dot alone doesn't tell a new user what to DO — spell it out.
+function _updateServerHint() {
+  const el = document.getElementById('serverHint');
+  if (!el) return;
+  const wDown = document.getElementById('whisperStatus')?.classList.contains('disconnected');
+  const tDown = document.getElementById('translationStatus')?.classList.contains('disconnected');
+  if (wDown || tDown) {
+    el.textContent = 'Server offline? Start Yume first (double-click START_YUME.bat, or run "python pocket_yume.py launch"), then click Refresh.';
+    el.style.display = '';
+  } else {
+    el.style.display = 'none';
   }
 }
 
@@ -737,9 +804,11 @@ function setupEventListeners() {
     document.getElementById(id)?.addEventListener('change', () => saveSettings(true));
   });
 
-  // Source language → update romaji label + save
+  // Source language → update romaji label, refresh font groups for the new
+  // language (JA fonts → ZH fonts etc), then save
   document.getElementById('sourceLanguage')?.addEventListener('change', () => {
     updateRomajiLabel();
+    populateFontDropdowns();
     saveSettings(true);
   });
 

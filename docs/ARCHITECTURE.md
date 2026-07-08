@@ -1,6 +1,6 @@
 # Architecture
 
-> Yume v0.0.9 · Pocket Yume CLI · ~13,600 lines across 21 source files
+> Yume v0.1.0 · Pocket Yume CLI · ~13,600 lines across 21 source files
 
 ## Overview
 

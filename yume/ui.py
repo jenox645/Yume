@@ -231,20 +231,20 @@ def gold_hr() -> None:
 def header(sub: str | None = None, version: str = "") -> None:
     clear()
     print()
+    # The product is YUME — the logo spells the product, not the launcher.
     try:
         logo = [
-            f"{C.GOLD}╔═╗ ╔═╗ ╔═╗ ╦╔═ ╔═╗ ╔╦╗{C.RESET}",
-            f"{C.GOLD}╠═╝ ║ ║ ║   ╠╩╗ ║╣   ║ {C.RESET}",
-            f"{C.GOLD}╩   ╚═╝ ╚═╝ ╩ ╩ ╚═╝  ╩ {C.RESET}",
+            f"{C.GOLD}╦ ╦  ╦ ╦  ╔╦╗  ╔═╗{C.RESET}",
+            f"{C.GOLD}╚╦╝  ║ ║  ║║║  ║╣ {C.RESET}",
+            f"{C.GOLD} ╩   ╚═╝  ╩ ╩  ╚═╝{C.RESET}",
         ]
         for line in logo:
             print(center(line))
-        print(center(f"{C.PURPLE}{C.BOLD}Y  U  M  E{C.RESET}"))
     except UnicodeEncodeError:
-        print(center(f"{C.GOLD}P O C K E T{C.RESET}"))
-        print(center(f"{C.PURPLE}{C.BOLD}Y  U  M  E{C.RESET}"))
-    if version:
-        print(center(f"{C.DIM}v{version}{C.RESET}"))
+        print(center(f"{C.GOLD}{C.BOLD}Y  U  M  E{C.RESET}"))
+    print(center(f"{C.PURPLE}You Understand More Easily{C.RESET}"))
+    tag = "Pocket Yume CLI" + (f" · v{version}" if version else "")
+    print(center(f"{C.DIM}{tag}{C.RESET}"))
     if sub:
         print(center(f"{C.BOLD}{sub}{C.RESET}"))
     print()
@@ -432,9 +432,12 @@ def ask_arrow(prompt: str, options: list, default: int = 0, allow_back: bool = T
                     sys.stdout.flush()
                     return sel
                 elif ch == b"\x1b":
-                    sys.stdout.write("\n")
-                    sys.stdout.flush()
-                    return -1 if allow_back else sel
+                    # Esc must never activate the highlighted item — when back
+                    # is disallowed (e.g. main menu) it does nothing.
+                    if allow_back:
+                        sys.stdout.write("\n")
+                        sys.stdout.flush()
+                        return -1
                 elif ch == b"\x03":
                     raise KeyboardInterrupt
                 elif ch.isdigit():
@@ -476,12 +479,13 @@ def ask_arrow(prompt: str, options: list, default: int = 0, allow_back: bool = T
                             _clear(n)
                             n = _render()
                             tty.setraw(fd)
-                    else:
-                        # Plain Esc key
+                    elif allow_back:
+                        # Plain Esc key. Esc must never activate the highlighted
+                        # item — when back is disallowed it does nothing.
                         termios.tcsetattr(fd, termios.TCSANOW, old)
                         sys.stdout.write("\n")
                         sys.stdout.flush()
-                        return -1 if allow_back else sel
+                        return -1
                 elif b in (b"\r", b"\n"):
                     termios.tcsetattr(fd, termios.TCSANOW, old)
                     sys.stdout.write("\n")

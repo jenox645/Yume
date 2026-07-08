@@ -19,7 +19,26 @@ MiB = 1024**2
 GiB = 1024**3
 
 
-def detect_gpu() -> dict:
+# detect_gpu() shells out to nvidia-smi / rocm-smi / wmic — up to several seconds
+# on machines without the tool. It's called on every menu render, so cache it;
+# GPUs don't get swapped between keystrokes.
+_GPU_CACHE_TTL = 60.0
+_gpu_cache: dict | None = None
+_gpu_cache_time: float = 0.0
+
+
+def detect_gpu(refresh: bool = False) -> dict:
+    global _gpu_cache, _gpu_cache_time
+    import time
+
+    if not refresh and _gpu_cache is not None and time.monotonic() - _gpu_cache_time < _GPU_CACHE_TTL:
+        return _gpu_cache
+    _gpu_cache = _detect_gpu_uncached()
+    _gpu_cache_time = time.monotonic()
+    return _gpu_cache
+
+
+def _detect_gpu_uncached() -> dict:
     r: dict = {"has_nvidia": False, "has_amd": False, "name": None, "vram_mb": 0, "vendor": "none"}
 
     # ── NVIDIA ────────────────────────────────────────────────────────────────

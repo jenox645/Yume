@@ -1,5 +1,5 @@
 // ============================================================================
-// BACKGROUND SERVICE WORKER (Manifest V3) - Yume v0.0.9
+// BACKGROUND SERVICE WORKER (Manifest V3) - Yume v0.1.0
 // Handles server health, transcription, translation, romanization proxy
 // Translation & romanization are SEPARATE calls (never combined)
 // ============================================================================
@@ -137,13 +137,13 @@ chrome.runtime.onInstalled.addListener((details) => {
   console.log('[Background] Extension installed/updated:', details.reason);
   if (details.reason === 'install') {
     // Fresh install — set all defaults
-    chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS }, installTime: Date.now(), version: '0.0.9' });
+    chrome.storage.local.set({ settings: { ...DEFAULT_SETTINGS }, installTime: Date.now(), version: '0.1.0' });
   } else if (details.reason === 'update') {
     // Update — merge new defaults into existing settings (preserves user changes)
     chrome.storage.local.get(['settings'], (result) => {
       const existing = result.settings || {};
       const merged = { ...DEFAULT_SETTINGS, ...existing };
-      chrome.storage.local.set({ settings: merged, version: '0.0.9' });
+      chrome.storage.local.set({ settings: merged, version: '0.1.0' });
       console.log('[Background] Settings preserved across update');
     });
   }
@@ -472,7 +472,7 @@ function _buildTranslationPrompt(srcLang, targetLang, customPrompt) {
   if (customPrompt) {
     return customPrompt.replace(/\{src\}/g, src).replace(/\{tgt\}/g, tgt);
   }
-  return `You are a ${src}-to-${tgt} translation system. Output ONLY the ${tgt} translation. Do NOT respond to the content. Do NOT add explanations. Do NOT answer questions. ONLY translate ${src} to ${tgt}.`;
+  return `You are a ${src}-to-${tgt} translation system. Output ONLY the ${tgt} translation, in ${tgt} only — never output ${src}, Chinese, or Japanese characters. Do NOT respond to the content. Do NOT add explanations. Do NOT answer questions. ONLY translate ${src} to ${tgt}.`;
 }
 
 const _CLEAN_TEXT_MAX_LENGTH = 2000;
@@ -499,6 +499,101 @@ function _cleanTranslation(text) {
     console.warn(`[CleanTranslation] patterns=[${matched.join(',')}] in="${text.substring(0, 80)}"`);
   }
   return c.trim();
+}
+
+// CJK leak guard --------------------------------------------------------------
+// The batch prompt tells the model "never output Chinese or Japanese characters",
+// but a 7B-class model still transliterates mis-heard katakana proper nouns into
+// Chinese on stylized lines (real-song test: "ラスメディア" -> "拉斯媒体"). For a
+// non-CJK target that produces garbled subtitles like "smile in拉斯媒体". This
+// guard re-requests the offending line alone with the strict single-line prompt,
+// and if it STILL leaks, strips the CJK run so the subtitle stays readable.
+const _CJK_RE = /[぀-ヿ㐀-鿿豈-﫿ｦ-ﾟ]/;
+// Target languages legitimately written in these scripts — never treat as leaks.
+const _CJK_TARGET_LANGS = new Set(['Chinese', 'Japanese', 'Korean']);
+
+function _containsCJK(s) {
+  return !!s && _CJK_RE.test(s);
+}
+
+function _stripCJK(s) {
+  return s.replace(/[぀-ヿ㐀-鿿豈-﫿ｦ-ﾟ]+/g, '')
+    .replace(/\s{2,}/g, ' ').trim();
+}
+
+// Re-translate (then, as a last resort, strip) any assembled results that still
+// contain CJK for a non-CJK target. Mutates `results` and refreshes their cache.
+async function _guardCjkLeaks(results, uncachedIndices, ctx) {
+  const { srcLang, tgtLang, translationUrl, customPrompt } = ctx;
+  if (_CJK_TARGET_LANGS.has(tgtLang)) return; // CJK target: characters are expected output
+  for (const { originalIdx, text } of uncachedIndices) {
+    const cur = results[originalIdx];
+    if (!_containsCJK(cur)) continue;
+    let fixed = '';
+    try {
+      const resp = await _fetchWithTimeout(`${translationUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [
+            { role: 'system', content: _buildTranslationPrompt(srcLang, tgtLang, customPrompt) },
+            { role: 'user', content: text }
+          ],
+          max_tokens: 200,
+          temperature: 0,
+          stream: false
+        })
+      }, 30000);
+      if (resp.ok) {
+        const j = await resp.json();
+        fixed = _cleanTranslation(j.choices?.[0]?.message?.content || '');
+      }
+    } catch (_e) { /* fall through to strip */ }
+    // Retry failed or still leaked -> strip the CJK run off the better of the two.
+    if (!fixed || _containsCJK(fixed)) fixed = _stripCJK(fixed || cur);
+    if (fixed) {
+      console.warn(`[CJKGuard] leaked line re-resolved: "${cur.slice(0, 40)}" -> "${fixed.slice(0, 40)}"`);
+      results[originalIdx] = fixed;
+      _setCachedTranslation(`${srcLang}||${tgtLang}||${translationUrl}||${text}`, fixed);
+    }
+  }
+}
+
+// Batch translation drops lines with weaker/quantized LLMs: the model returns only
+// some [N] markers — or bare markers with no text (real DEEMO II「雨模様」run: a
+// qwen2.5-7b-q3 batch returned "[1][2]" for two lines, leaving 7 of 8 subtitles
+// BLANK). Single-line translation is far more reliable for such models, so any line
+// still empty after batch parsing gets one single-line retry. Without this those
+// subtitles render empty. Mutates `results`; refreshes cache for recovered lines.
+async function _fillMissingTranslations(results, uncachedIndices, ctx) {
+  const { srcLang, tgtLang, translationUrl, customPrompt } = ctx;
+  for (const { originalIdx, text } of uncachedIndices) {
+    if (results[originalIdx]) continue; // batch already produced this line
+    try {
+      const resp = await _fetchWithTimeout(`${translationUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [
+            { role: 'system', content: _buildTranslationPrompt(srcLang, tgtLang, customPrompt) },
+            { role: 'user', content: text }
+          ],
+          max_tokens: 200,
+          temperature: 0.1,
+          stream: false
+        })
+      }, 30000);
+      if (resp.ok) {
+        const j = await resp.json();
+        const fixed = _cleanTranslation(j.choices?.[0]?.message?.content || '');
+        if (fixed) {
+          console.warn(`[FillMissing] batch dropped line, single-line recovered: "${text.slice(0, 30)}" -> "${fixed.slice(0, 40)}"`);
+          results[originalIdx] = fixed;
+          _setCachedTranslation(`${srcLang}||${tgtLang}||${translationUrl}||${text}`, fixed);
+        }
+      }
+    } catch (_e) { /* leave blank rather than crash the chunk */ }
+  }
 }
 
 // Clean verbose LLM romanization output to extract just the romaji/pinyin/transliteration.
@@ -857,7 +952,7 @@ function _buildBatchPrompt(srcLang, targetLang, customPrompt, priorContext, vide
   const tgt = targetLang || 'English';
   const base = customPrompt
     ? customPrompt.replace(/\{src\}/g, src).replace(/\{tgt\}/g, tgt)
-    : `Translate ${src} to ${tgt}.`;
+    : `Translate ${src} to ${tgt}. Respond only in ${tgt} — never output ${src}, Chinese, or Japanese characters.`;
   // Video title is free disambiguating context (song name, artist, topic).
   // Newlines stripped + length capped so a hostile page title can't restructure the prompt.
   const title = (videoTitle || '').replace(/\s+/g, ' ').trim().slice(0, 120);
@@ -1012,6 +1107,9 @@ async function handleTranslateBatch(batchText, count, sendResponse, sender, chun
           }
         }
 
+        await _fillMissingTranslations(results, uncachedIndices, { srcLang, tgtLang, translationUrl, customPrompt: settings?.translationPrompt });
+        await _guardCjkLeaks(results, uncachedIndices, { srcLang, tgtLang, translationUrl, customPrompt: settings?.translationPrompt });
+
         const lastNonEmpty = results.filter(Boolean).pop();
         if (lastNonEmpty) {
           const sentences = lastNonEmpty.split(/(?<=[.!?])\s+/);
@@ -1062,6 +1160,9 @@ async function handleTranslateBatch(batchText, count, sendResponse, sender, chun
       }
     }
 
+    await _fillMissingTranslations(results, uncachedIndices, { srcLang, tgtLang, translationUrl, customPrompt: settings?.translationPrompt });
+    await _guardCjkLeaks(results, uncachedIndices, { srcLang, tgtLang, translationUrl, customPrompt: settings?.translationPrompt });
+
     // Save last translated sentence for next batch's prior-context snippet
     const lastNonEmpty = results.filter(Boolean).pop();
     if (lastNonEmpty) {
@@ -1075,7 +1176,11 @@ async function handleTranslateBatch(batchText, count, sendResponse, sender, chun
 }
 
 function _parseBatchResponse(raw, expectedCount) {
-  const lines = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  // Drop lines that are ONLY a marker ("[1]", "2)", "3."): a crashed/truncated
+  // LLM response can collapse to the forced "[1]" prefix, and the positional
+  // fallback below would then display the literal marker as a "translation".
+  const lines = raw.split('\n').map(l => l.trim())
+    .filter(l => l.length > 0 && !/^\[?\d+[\].)]*$/.test(l));
   const result = new Array(expectedCount).fill('');
 
   // Strategy 1: Parse by [N] or N) markers (preferred — unambiguous)

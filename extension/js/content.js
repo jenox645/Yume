@@ -1,5 +1,5 @@
 // ============================================================================
-// CONTENT SCRIPT v0.0.9 - Main orchestrator
+// CONTENT SCRIPT v0.1.0 - Main orchestrator
 // ============================================================================
 
 (async function() {
@@ -37,13 +37,14 @@
       }
 
       state.videoElement = await waitForVideo();
+      if (state.videoElement) state.videoId = getVideoId();
 
-      if (state.videoElement) {
-        state.videoId = getVideoId();
-        setupEventListeners();
-        startUrlWatcher();
-        DEBUG.success('ContentScript', 'Initialization complete');
-      }
+      // Attach even when no video was found yet — on SPA sites (YouTube home →
+      // watch page) the video appears after load, and enabling subtitles then
+      // must still have its display events wired.
+      setupEventListeners();
+      startUrlWatcher();
+      DEBUG.success('ContentScript', 'Initialization complete');
     } catch (error) {
       DEBUG.error('ContentScript', 'Initialization failed', { error: error.message });
     }
@@ -91,6 +92,16 @@
   // ========================================================================
 
   async function startSubtitles() {
+    // The video may have appeared after page load (SPA navigation) or been
+    // replaced — re-detect instead of trusting the element found at init.
+    if (!state.videoElement || !document.contains(state.videoElement)) {
+      state.videoElement = findVideoElement() || await waitForVideo(6);
+      if (!state.videoElement) {
+        throw new Error('No video found on this page — start playing a video, then try again.');
+      }
+      state.videoId = getVideoId();
+    }
+
     try {
       state.subtitleWindow = new SubtitleWindow();
       state.subtitleWindow.updateStatus('Starting...', 'loading');
@@ -331,7 +342,10 @@
     }
 
     if (message.action === 'GET_STATUS') {
-      sendResponse({ success: true, active: state.isActive, hasVideo: !!state.videoElement });
+      // Re-check live: state.videoElement can be stale (SPA nav) or null
+      // (video appeared after init) — the popup uses this for its hint.
+      const hasVideo = !!((state.videoElement && document.contains(state.videoElement)) || findVideoElement());
+      sendResponse({ success: true, active: state.isActive, hasVideo });
       return false;
     }
 

@@ -578,7 +578,13 @@ def _build_download_strategies(url, is_yt):
                 strategies.append(("cookies+mweb", ["--extractor-args", "youtube:player_client=mweb", *cookie_args]))
             strategies.append(("no-auth", []))
     else:
-        strategies.append(("default", [*cookie_args]))
+        # Non-YouTube URLs (direct media, other sites). Try browser cookies first
+        # for login-gated sites, but ALWAYS fall back to no-auth: a missing or
+        # locked cookie DB must not hard-fail a URL that never needed cookies
+        # (e.g. a direct .webm/.mp4, or any cookie-less environment).
+        if cookie_args:
+            strategies.append(("default", [*cookie_args]))
+        strategies.append(("no-auth", []))
 
     return strategies
 

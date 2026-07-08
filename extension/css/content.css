@@ -107,6 +107,8 @@
   letter-spacing: 0.02em;
   user-select: text;
   -webkit-user-select: text;
+  /* Keeps text readable in glass mode / low opacity over bright video */
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
 }
 
 .subtitle-english {
@@ -116,6 +118,7 @@
   overflow-wrap: break-word;
   user-select: text;
   -webkit-user-select: text;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
 }
 
 .subtitle-romaji {
@@ -127,6 +130,7 @@
   margin-bottom: 4px;
   user-select: text;
   -webkit-user-select: text;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
 }
 
 .subtitle-status {

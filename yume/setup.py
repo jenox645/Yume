@@ -12,7 +12,7 @@ from pathlib import Path
 
 from yume.hardware import IS_WIN, detect_gpu, detect_ram_gb, disk_free_gb, recommend_whisper_model
 from yume.network import HEALTH_PATH_OLLAMA, check_server
-from yume.ui import C, ask_arrow, ask_choice, ask_yn, center, error, header, info, pause, section, success, warn
+from yume.ui import C, ask_arrow, ask_yn, center, error, header, info, pause, section, success, warn
 from yume.utils import BASE_DIR, EXE, LOGS_DIR, SERVER_DIR, TOOLS_DIR, _run, _try_import, find_gguf_models, find_tool
 
 _log = logging.getLogger("pocket_yume")
@@ -21,7 +21,7 @@ _log = logging.getLogger("pocket_yume")
 _BACKEND_INFO: dict = {}
 _MODELS_DIR: Path = BASE_DIR / "models"
 _GGUF_DIR: Path = BASE_DIR / "models" / "translation"
-_VERSION: str = "0.0.9"
+_VERSION: str = "0.1.0"
 
 
 def set_setup_context(backend_info: dict, models_dir: Path, gguf_dir: Path, version: str) -> None:
@@ -133,7 +133,8 @@ def setup_wizard(cfg: dict) -> dict:
     )
     from yume.menus import browse_hf
 
-    header("First-Time Setup")
+    # Also reached via "Re-run Setup", so not "First-Time"
+    header("Setup Wizard")
     print(center(f"{C.BOLD}Welcome to Pocket Yume!{C.RESET}"))
     print(center(f"{C.DIM}Let's get Yume AI subtitles ready on your machine.{C.RESET}"))
     import platform
@@ -217,9 +218,9 @@ def setup_wizard(cfg: dict) -> dict:
     yt = find_tool("yt-dlp")
     ff = find_tool("ffmpeg")
     dn = find_tool("deno")
-    (success if yt else warn)(f"yt-dlp: {'OK ' + yt if yt else 'MISSING'}")
-    (success if ff else warn)(f"FFmpeg: {'OK ' + ff if ff else 'MISSING'}")
-    info(f"Deno:   {'OK ' + dn if dn else '-- not installed (optional)'}")
+    (success if yt else warn)(f"yt-dlp: {'installed — ' + yt if yt else 'missing'}")
+    (success if ff else warn)(f"FFmpeg: {'installed — ' + ff if ff else 'missing'}")
+    info(f"Deno:   {'installed — ' + dn if dn else 'not installed (optional)'}")
 
     if not yt:
         missing.append("yt-dlp")
@@ -229,9 +230,9 @@ def setup_wizard(cfg: dict) -> dict:
     try:
         import faster_whisper  # noqa: F401
 
-        success("faster-whisper: OK")
+        success("faster-whisper: installed")
     except ImportError:
-        warn("faster-whisper: MISSING")
+        warn("faster-whisper: missing")
         missing.append("python_deps")
 
     try:
@@ -245,23 +246,23 @@ def setup_wizard(cfg: dict) -> dict:
             except Exception:
                 cuda_ok = False
             if cuda_ok:
-                success("llama-cpp-python: OK (CUDA — GPU offloading enabled)")
+                success("llama-cpp-python: installed (CUDA — GPU offloading enabled)")
             else:
                 warn("llama-cpp-python: CPU-only build — GPU offloading disabled")
                 missing.append("llama_cpp_cuda")
         else:
-            success("llama-cpp-python: OK")
+            success("llama-cpp-python: installed")
     except ImportError:
-        warn("llama-cpp-python: MISSING")
+        warn("llama-cpp-python: missing")
         missing.append("llama_cpp")
 
     try:
         import uvicorn  # noqa: F401
         import fastapi  # noqa: F401
 
-        success("Server deps (uvicorn/fastapi): OK")
+        success("Server deps (uvicorn/fastapi): installed")
     except ImportError:
-        warn("Server deps (uvicorn/fastapi): MISSING")
+        warn("Server deps (uvicorn/fastapi): missing")
         missing.append("server_deps")
 
     gf = find_gguf_models()
@@ -452,8 +453,6 @@ def setup_wizard(cfg: dict) -> dict:
             gf_name = gf[0].name if gf else cfg.get("translation_model", "configured")
             success(f"Translation model already configured: {C.BOLD}{gf_name}{C.RESET}")
         if "gguf_model" in missing:
-            _step(5, "Translation Model")
-            section("Translation Model")
             info("Yume needs a GGUF model file to translate subtitles into English.")
             info(f"{C.DIM}llama.cpp loads it directly — no external servers required.{C.RESET}")
             print()
@@ -588,7 +587,7 @@ def uninstall_yume() -> None:
     print(f"    {', '.join(pip_pkgs)}")
     print()
 
-    ch = ask_choice(
+    ch = ask_arrow(
         "What to remove?",
         [
             ("Everything (data + pip packages)", "Full clean uninstall"),

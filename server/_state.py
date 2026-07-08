@@ -94,6 +94,9 @@ stats_lock = threading.Lock()
 # ── Hallucination filter state ────────────────────────────────────────────────
 # Populated via /blacklist/update from the extension popup.
 user_blacklist: list = []
+# Persistence file (config/blacklist.json) — set in _apply_config. Survives
+# restarts and lets the CLI edit the list while the server is down.
+blacklist_file: str = ""
 
 # ── API token ─────────────────────────────────────────────────────────────────
 # Generated at startup in main(); empty string is never valid.

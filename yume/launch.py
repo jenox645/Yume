@@ -17,6 +17,7 @@ from yume.network import (
     check_server,
     check_translation_server,
     discover_servers,
+    reset_api_token,
 )
 from yume.ports import ensure_port_free, find_free_port, is_port_free, kill_port_process
 from yume.ui import (
@@ -40,7 +41,7 @@ _log = logging.getLogger("pocket_yume")
 
 # Injected at startup by pocket_yume
 _BACKEND_INFO: dict = {}
-_VERSION: str = "0.0.9"
+_VERSION: str = "0.1.0"
 
 # Estimated VRAM requirements in MB per Whisper model (float16 on GPU)
 _WHISPER_VRAM_MB: dict[str, int] = {
@@ -239,6 +240,10 @@ def launch_services(cfg: dict) -> None:
     header("Launching Yume")
     procs: list = []
     lhs: list = []
+    # Each server run mints a fresh API token. Drop any token cached from an earlier
+    # launch in this same interactive session, so the runtime menu's blacklist/stats/
+    # model-switch don't fail auth against the new server and look like it's offline.
+    reset_api_token()
 
     def _cleanup() -> None:
         for _name, p in procs:
@@ -805,13 +810,14 @@ def _runtime_menu(cfg: dict, procs: list, lhs: list, bk: str) -> None:
             ws_up = check_server(cfg["whisper_host"], cfg["whisper_port"], "/health")["up"]
             ts_up = check_translation_server(cfg["translation_host"], cfg["translation_port"], bi)["up"]
 
-            ws_dot = f"{C.GREEN}●{C.RESET}" if ws_up else f"{C.RED}●{C.RESET}"
-            ts_dot = f"{C.GREEN}●{C.RESET}" if ts_up else f"{C.RED}●{C.RESET}"
+            # Word + colour so status is readable without colour vision
+            ws_st = f"{C.GREEN}● up{C.RESET}  " if ws_up else f"{C.RED}● DOWN{C.RESET}"
+            ts_st = f"{C.GREEN}● up{C.RESET}  " if ts_up else f"{C.RED}● DOWN{C.RESET}"
 
             print()
             panel(
-                f"  {ws_dot} Whisper     {cfg['whisper_host']}:{cfg['whisper_port']}\n"
-                f"  {ts_dot} Translation {cfg['translation_host']}:{cfg['translation_port']}",
+                f"  {ws_st} Whisper     {cfg['whisper_host']}:{cfg['whisper_port']}\n"
+                f"  {ts_st} Translation {cfg['translation_host']}:{cfg['translation_port']}",
                 title=f"{C.GREEN}Yume Running{C.RESET}",
                 style=C.GREEN,
             )
@@ -846,7 +852,9 @@ def _runtime_menu(cfg: dict, procs: list, lhs: list, bk: str) -> None:
                 _show_logs()
                 pause()
             elif ch == 6:
-                if ask_yn("Stop all servers?", default=True):
+                # Default No: this menu opens with Stop highlighted, so two
+                # accidental Enters must not kill running servers.
+                if ask_yn("Stop all servers?", default=False):
                     _stop_all()
                     return
     except KeyboardInterrupt:

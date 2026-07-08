@@ -8,7 +8,7 @@ import socket as _socket
 import sys
 import time
 
-from yume.ui import C, ask_choice, ask_input, error, info, success, warn
+from yume.ui import C, ask_arrow, ask_input, error, info, success, warn
 
 _log = logging.getLogger("pocket_yume")
 
@@ -153,23 +153,25 @@ def ensure_port_free(port: int, cfg: dict, key_prefix: str, exclude: set | None 
         print()
     from config import save_config
 
-    ch = ask_choice(
+    # Default = reassign, NOT kill: Enter-mashing must never terminate another
+    # app's process (on macOS port 5000 is often AirPlay).
+    ch = ask_arrow(
         "How to resolve?",
         [
+            ("Use a different port", "Auto-find a free port (recommended)"),
             ("Kill the process", f"Terminate {name or ('PID ' + str(pid) if pid else 'unknown process')}"),
-            ("Use a different port", "Auto-find a free port"),
             ("Enter port manually", None),
             ("Cancel", None),
         ],
         default=0,
     )
-    if ch == 0:
+    if ch == 1:
         if kill_port_process(port) and is_port_free(port):
             success(f"Port {port} is now free")
             return port
         error("Failed to free port")
         return None
-    elif ch == 1:
+    elif ch == 0:
         new_port = find_free_port(port + 1, exclude=exclude)
         if new_port:
             cfg[f"{key_prefix}_port"] = new_port

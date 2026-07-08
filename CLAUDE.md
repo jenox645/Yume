@@ -10,11 +10,13 @@ Yume is a browser extension + local server system for real-time AI-powered video
 - **Browser extension** (`extension/`) — Chrome/Firefox MV3, overlays subtitles, no build step required
 - **Whisper server** (`server/faster_whisper_server.py`) — Flask on port 5001, transcribes audio via faster-whisper
 - **Translation server** — Port 5000, runs llama.cpp / Ollama / custom OpenAI-compatible API
-- **CLI** (`pocket_yume.py`) — Thin entry point; all logic lives in the `yume/` package (benchmark, hardware, health, installers, launch, menus, network, ports, setup, ui, utils)
+- **CLI** (`pocket_yume.py`) — Thin entry point; all logic lives in the `yume/` package (benchmark, guides, hardware, health, installers, launch, menus, network, ports, setup, ui, utils)
 
 ## Code Review Policy
 
-After every fix or refactoring session, run CodeRabbit on all changed files before committing. Fix all critical and high-severity issues. Re-run until no critical issues remain.
+Primary review before committing: run the linters and tests (`ruff check .`, `npx eslint extension/js/ extension/popup.js`, `pytest tests/ -v`) and Claude Code's built-in `/code-review` on the diff. Fix all critical and high-severity issues.
+
+CodeRabbit is on the **free tier** (rate-limited, weaker than the trial) — do NOT run it automatically after every session. Reserve it for large or risky changes (security-sensitive code, big refactors, releases), at most one run per session, and only when the built-in review isn't enough.
 
 ## Commands
 
@@ -112,6 +114,7 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 | `yume/launch.py` | Server lifecycle: start llama.cpp / Ollama / Whisper, runtime menu |
 | `yume/setup.py` | Setup wizard, first-run detection, uninstall |
 | `yume/menus.py` | Interactive menus: main menu, settings, model selection, blacklist, stats |
+| `yume/guides.py` | Help & Guides menu: in-CLI cookbook of task-oriented recipes |
 | `yume/health.py` | Health check, system status display, font detection |
 | `yume/benchmark.py` | Whisper speed benchmark across models |
 | `yume/network.py` | HTTP helpers (`server_get`, `server_post`), download, server health checks |

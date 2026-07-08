@@ -1,5 +1,5 @@
 // ============================================================================
-// AUDIO CAPTURE v3.10.0 - Download-once + parallel pipeline (Yume v0.0.9)
+// AUDIO CAPTURE v3.10.0 - Download-once + parallel pipeline (Yume v0.1.0)
 // Translation and romanization are SEPARATE API calls
 // ============================================================================
 
@@ -125,6 +125,7 @@ class AudioCapture {
       this.sourceLanguage = settings?.sourceLanguage || 'ja';
       this.showRomaji = settings?.showRomaji || false;
       this.timingOffset = (settings?.timingOffset || 0) / 10;  // stored as ticks, convert to seconds
+      this._whisperModel = settings?.whisperModel || '';  // for diag hints only
     } catch (_e) { this.sourceLanguage = 'ja'; this.showRomaji = false; this.timingOffset = 0; }
 
     // Reload user blacklist
@@ -205,6 +206,9 @@ class AudioCapture {
       // Fire the download WITHOUT awaiting: chunk 0 is transcribed through the
       // server's per-chunk stream fallback while the full download runs, cutting
       // time-to-first-subtitle from download+whisper to max(download, whisper).
+      // _prepareInFlight tells the error path a retry from full audio is coming,
+      // so a fallback failure must not surface as a user-facing error.
+      this._prepareInFlight = true;
       const preparePromise = this._prepareVideo()
         .then(() => true)
         .catch((err) => { prepareError = err; return false; });
@@ -212,6 +216,7 @@ class AudioCapture {
         await this._fetchChunk(0);
       }
       prepared = await preparePromise;
+      this._prepareInFlight = false;
       // An empty chunk 0 from the stream fallback may mean the fallback itself
       // failed (no extractable stream URL), not that the audio is instrumental.
       // Retry once from the now-prepared full audio — a cheap local slice.
@@ -490,7 +495,17 @@ class AudioCapture {
       if (idx < 0) continue;
       const segments = this.subtitleChunks[idx];
       if (!segments) continue;
+      // Exclusive emission window: chunk `idx` owns [idx*step, (idx+1)*step). Once
+      // the next chunk has been transcribed, drop this chunk's 5s overlap-tail
+      // segments (start at/after the window end) — the next chunk re-transcribed
+      // that region, and showing both makes a boundary lyric appear twice with
+      // slightly different text/timing (the main cause of song subtitles feeling
+      // doubled / flickery / mistimed). The overlap is still used for Whisper
+      // context; we just stop displaying the duplicate.
+      const winEnd = (idx + 1) * this.stepSize;
+      const nextReady = (this.subtitleChunks[idx + 1] || []).length > 0;
       for (const seg of segments) {
+        if (nextReady && seg.start >= winEnd) continue;
         if (adjustedTime >= seg.start && adjustedTime < seg.end) {
           if (this.lastShownSegment === seg) return;
           // Re-check blacklist at display time only if not already verified
@@ -559,7 +574,11 @@ class AudioCapture {
         const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
         const rawCount = transcription?.segments?.length || 0;
         const cacheTag = wasCached ? ' (server cache)' : '';
-        this._addDiag(chunkIndex, 'empty', 0, elapsed, `${rawCount} raw -> 0 clean${cacheTag}`);
+        // Whisper heard nothing at all + small model → likely missed vocals, not silence
+        const smallModel = /^(tiny|base|small)$/.test(this._whisperModel || '');
+        const hint = (rawCount === 0 && smallModel)
+          ? ' — small models often miss vocals in music; try large-v3-turbo (popup → Whisper Model)' : '';
+        this._addDiag(chunkIndex, 'empty', 0, elapsed, `${rawCount} raw -> 0 clean${cacheTag}${hint}`);
         this.subtitleChunks[chunkIndex] = [];
         this.fetchedChunks.add(chunkIndex);
         this.fetchingChunks.delete(chunkIndex);
@@ -584,12 +603,22 @@ class AudioCapture {
 
     } catch (error) {
       const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-      this._addDiag(chunkIndex, 'error', 0, elapsed, error.message);
+      // While the full download is still running, a failed chunk-0 stream
+      // fallback is EXPECTED on setups where stream-URL extraction is blocked
+      // (bot detection) — startCapture retries it from the full audio right
+      // after prepare. Not an error the user should see.
+      const retryComing = chunkIndex === 0 && this._prepareInFlight;
+      if (retryComing) {
+        this._addDiag(chunkIndex, 'retry', 0, elapsed,
+          `Stream fallback failed (${error.message}) — waiting for full audio`);
+      } else {
+        this._addDiag(chunkIndex, 'error', 0, elapsed, error.message);
+      }
       this.fetchingChunks.delete(chunkIndex);
       this.fetchedChunks.add(chunkIndex);
       this.subtitleChunks[chunkIndex] = [];
       this._dispatchProgress();
-      if (chunkIndex === 0) {
+      if (chunkIndex === 0 && !retryComing) {
         window.dispatchEvent(new CustomEvent('display-error', {
           detail: { message: `Failed: ${error.message}` }
         }));
@@ -699,6 +728,29 @@ class AudioCapture {
       const progress = `[${this.fetchedChunks.size}/${this.totalChunks}]`;
       const transOk = translated.filter(s => s.english && s.english.length > 0).length;
       const transTotal = translated.length;
+
+      // Partial batch (LLM crashed/truncated mid-response): the partials are
+      // already stored and visible — retry the chunk to fill the gaps. Done
+      // lines come back instantly from the translation cache, so the retry
+      // only costs the missing lines.
+      if (pSettings?.showEnglish !== false && transOk < transTotal) {
+        if (!this._retryCount) this._retryCount = {};
+        const attempts = this._retryCount[chunkIndex] || 0;
+        if (attempts < 3) {
+          this._retryCount[chunkIndex] = attempts + 1;
+          const delay = 2000 * (attempts + 1);
+          this._addDiag(chunkIndex, 'retry', translated.length, elapsed,
+            `${transOk}/${transTotal} translated — retrying missing lines in ${delay / 1000}s`);
+          setTimeout(() => {
+            this._translateAndFinalize(chunkIndex, cleanSegments, whisperTime, t0, gen, wasCached);
+          }, delay);
+          this._dispatchProgress();
+          this._checkAndSignalReady(chunkIndex);
+          return;
+        }
+      }
+      if (this._retryCount) delete this._retryCount[chunkIndex];
+
       DEBUG.success('AudioCapture', `Chunk ${chunkIndex} ready: ${transTotal} segs (${transOk} translated) in ${elapsed}s ${progress} [parallel]`);
       const cacheTag = wasCached ? ' [cached]' : '';
       const transTag = transOk < transTotal ? ` [${transOk}/${transTotal} translated]` : '';
@@ -779,7 +831,14 @@ class AudioCapture {
     let romanizedCount = 0;
     for (const idx of this.fetchedChunks) {
       const segments = this.subtitleChunks[idx];
-      if (!segments || segments.length === 0) continue;
+      // Empty chunks (instrumental sections) have no translation/romanization
+      // work to do — count them as done, or the badges never reach total and
+      // the roma badge ("7R") sticks around forever after completion.
+      if (!segments || segments.length === 0) {
+        translatedCount++;
+        romanizedCount++;
+        continue;
+      }
       if (segments.some(seg => seg.english && seg.english.length > 0)) {
         translatedCount++;
       }
@@ -980,8 +1039,15 @@ class AudioCapture {
   // Collect all cached segments sorted by time, deduplicating the 5s overlap region.
   _collectExportSegments() {
     const allSegments = [];
-    for (const [_idx, segments] of Object.entries(this.subtitleChunks)) {
+    for (const [idxStr, segments] of Object.entries(this.subtitleChunks)) {
+      const idx = Number(idxStr);
+      const winEnd = (idx + 1) * this.stepSize;
+      const nextReady = (this.subtitleChunks[idx + 1] || []).length > 0;
       for (const seg of segments) {
+        // Exclusive window (same rule as live display): drop this chunk's 5s
+        // overlap-tail once the next chunk re-transcribed that region, so exported
+        // subtitles don't carry doubled boundary lines with slightly different text.
+        if (nextReady && seg.start >= winEnd) continue;
         if (seg.original || seg.english) allSegments.push(seg);
       }
     }
@@ -1527,14 +1593,14 @@ class AudioCapture {
     }
     if (purged > 0) {
       DEBUG.info('AudioCapture', `Purged ${purged} blacklisted segments from cache`);
-      if (this.lastShownSegment && this._isHallucination(
-        this.lastShownSegment.original || this.lastShownSegment.text || ''
-      )) {
-        this.lastShownSegment = null;
-        window.dispatchEvent(new CustomEvent('display-subtitle', {
-          detail: { original: '', english: '', romaji: '' }
-        }));
-      }
+      // Unconditionally clear then re-resolve the display. The conditional
+      // clear used to leave the reported text on screen whenever the current
+      // segment was purged (nothing re-dispatches on a paused video).
+      this.lastShownSegment = null;
+      window.dispatchEvent(new CustomEvent('display-subtitle', {
+        detail: { original: '', english: '', romaji: '' }
+      }));
+      if (this.video) this._showSubtitleAt(this.video.currentTime);
     }
   }
 
@@ -1596,16 +1662,25 @@ class AudioCapture {
       if (unique.size <= 2) return true;
     }
 
-    // Concatenated repetition
+    // Concatenated repetition. The repeating unit may start after a short
+    // prefix — "MACACACACA..." is "ma" + "ca"*N and never matches anchored at
+    // position 0, so also try offsets up to one unit length (extra repeat
+    // required there to avoid false positives on words like "banana").
     const concatMinLen = this.serverPatterns?.concatMinLen || 4;
     const concatCoverage = this.serverPatterns?.concatCoverage || 0.8;
     const clean = t.replace(/\s/g, '');
     if (clean.length >= concatMinLen) {
       for (let len = 2; len <= Math.min(8, clean.length / 2); len++) {
-        const sub = clean.substring(0, len);
-        const repeats = Math.floor(clean.length / len);
-        if (repeats >= 2 && sub.repeat(repeats) === clean.substring(0, len * repeats)) {
-          if (len * repeats >= clean.length * concatCoverage) return true;
+        for (let offset = 0; offset <= len; offset++) {
+          const body = clean.substring(offset);
+          const repeats = Math.floor(body.length / len);
+          const minRepeats = offset === 0 ? 2 : 3;
+          if (repeats < minRepeats) continue;
+          const sub = body.substring(0, len);
+          if (sub.repeat(repeats) === body.substring(0, len * repeats) &&
+              len * repeats >= body.length * concatCoverage) {
+            return true;
+          }
         }
       }
     }

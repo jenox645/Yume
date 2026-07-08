@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import urllib.request
 from pathlib import Path
@@ -33,7 +34,7 @@ from yume.ui import (
     table,
     warn,
 )
-from yume.utils import BASE_DIR, EXT_DIR, GGUF_DIR, TOOLS_DIR, GiB, KiB, find_gguf_models, find_tool
+from yume.utils import BASE_DIR, EXT_DIR, GGUF_DIR, TOOLS_DIR, GiB, KiB, MiB, find_gguf_models, find_tool
 
 _log = logging.getLogger("pocket_yume")
 
@@ -210,8 +211,37 @@ def cli_model(cfg: dict, args: list) -> None:
 # ── Blacklist / whisper model menus ───────────────────────────────────────────
 
 
+def _bl_file():
+    """Path of the persisted blacklist (shared with the whisper server)."""
+    from config import CONFIG_DIR
+
+    return CONFIG_DIR / "blacklist.json"
+
+
+def _bl_read_offline() -> list:
+    try:
+        items = json.loads(_bl_file().read_text(encoding="utf-8"))
+        return [str(i).strip() for i in items if str(i).strip()] if isinstance(items, list) else []
+    except FileNotFoundError:
+        return []
+    except Exception as e:
+        _log.debug("[_bl_read_offline] %s", e)
+        return []
+
+
+def _bl_write_offline(items: list) -> bool:
+    try:
+        _bl_file().parent.mkdir(parents=True, exist_ok=True)
+        _bl_file().write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+    except Exception as e:
+        error(f"Could not save: {e}")
+        return False
+
+
 def _menu_blacklist(cfg: dict) -> None:
-    """Blacklist management menu."""
+    """Blacklist management menu. Works offline too — the list lives in
+    config/blacklist.json, which the server loads at startup."""
     while True:
         header("Subtitle Filter (Blacklist)")
         info("Whisper sometimes generates fake text that wasn't actually spoken —")
@@ -221,13 +251,22 @@ def _menu_blacklist(cfg: dict) -> None:
         print()
         h, p = cfg["whisper_host"], cfg["whisper_port"]
         data = _server_get(h, p, "/blacklist")
-        if not data:
-            warn(f"Server not reachable at {h}:{p}")
-            info("Start server first")
-            pause()
-            return
-        bl = data.get("blacklist", [])
-        info(f"Server blacklist: {len(bl)} items")
+        offline = not data
+        if offline:
+            bl = _bl_read_offline()
+            warn(f"Server not running — editing the saved list ({_bl_file().name}).")
+            info(f"{C.DIM}Changes apply automatically the next time the server starts.{C.RESET}")
+            print()
+        else:
+            bl = data.get("blacklist", [])
+
+        def _bl_save(items: list) -> bool:
+            if offline:
+                return _bl_write_offline(items)
+            r = _server_post(h, p, "/blacklist/update", {"blacklist": items})
+            return bool(r and r.get("success"))
+
+        info(f"Blacklist: {len(bl)} items")
         if bl:
             for item in bl[:15]:
                 bullet(item)
@@ -254,8 +293,7 @@ def _menu_blacklist(cfg: dict) -> None:
                     pause()
                     continue
                 current.append(text)
-                r = _server_post(h, p, "/blacklist/update", {"blacklist": current})
-                if r and r.get("success"):
+                if _bl_save(current):
                     success(f"Added: {text}")
                 else:
                     error("Failed")
@@ -265,20 +303,24 @@ def _menu_blacklist(cfg: dict) -> None:
                 info("Empty")
                 pause()
                 continue
-            opts = [(item, None) for item in bl[:20]] + [("Back", None)]
+            shown = bl[:20]
+            if len(bl) > 20:
+                info(f"Showing first 20 of {len(bl)} — remove others with:")
+                info(f"{C.DIM}  python pocket_yume.py blacklist remove <text>{C.RESET}")
+            opts = [(item, None) for item in shown] + [("Back", None)]
             rc = ask_arrow("Remove which?", opts, default=len(opts) - 1)
-            if 0 <= rc < len(bl):
+            # Guard against len(shown), not len(bl) — with >20 items the "Back"
+            # entry sits at index 20, which is a valid bl index.
+            if 0 <= rc < len(shown):
                 removed = bl[rc]
                 current = bl[:]
                 current.pop(rc)
-                r = _server_post(h, p, "/blacklist/update", {"blacklist": current})
-                if r and r.get("success"):
+                if _bl_save(current):
                     success(f"Removed: {removed}")
             pause()
         elif ch == 2:
             if ask_yn("Clear ALL?", False):
-                r = _server_post(h, p, "/blacklist/update", {"blacklist": []})
-                if r and r.get("success"):
+                if _bl_save([]):
                     success("Cleared")
             pause()
 
@@ -407,77 +449,139 @@ def _menu_whisper_model(cfg: dict) -> None:
 # ── HuggingFace browser ────────────────────────────────────────────────────────
 
 
+# Curated starting points — a pick list, so nothing needs to be retyped
+_HF_RECOMMENDED_REPOS = [
+    ("Qwen/Qwen2.5-7B-Instruct-GGUF", "Best quality/VRAM balance for JP→EN — ~4.4 GB in Q4_K_M"),
+    ("Qwen/Qwen2.5-14B-Instruct-GGUF", "Noticeably better translations — ~8.7 GB in Q4_K_M"),
+    ("Qwen/Qwen2.5-3B-Instruct-GGUF", "Light — for CPU mode or small GPUs, ~2 GB in Q4_K_M"),
+    ("bartowski/gemma-2-9b-it-GGUF", "Google Gemma 2 alternative — ~5.8 GB in Q4_K_M"),
+]
+
+# "model-q4_0-00001-of-00002.gguf" → split file; strip the part suffix to group
+_GGUF_SPLIT_RE = re.compile(r"-\d{5}-of-\d{5}(?=\.gguf$)")
+
+
+def _group_gguf_parts(files: list[dict]) -> list[dict]:
+    """Collapse multi-part GGUFs into single logical entries.
+
+    llama.cpp needs EVERY part of a split model — offering individual parts
+    invites downloading a useless fragment, and per-part sizes make the
+    VRAM-fit tag lie (four 3.6 GB parts each "fit" a 12 GB card; the 14 GB
+    whole does not).
+    """
+    groups: dict[str, dict] = {}
+    for f in files:
+        base = _GGUF_SPLIT_RE.sub("", f["name"])
+        g = groups.setdefault(base, {"name": base, "bytes": 0, "parts": []})
+        g["bytes"] += f["bytes"]
+        g["parts"].append(f["name"])
+    out = []
+    for g in groups.values():
+        g["parts"].sort()  # 00001 first — llama.cpp loads from the first shard
+        sb = g["bytes"]
+        g["size"] = f"{sb / GiB:.2f} GB" if sb >= GiB else f"{sb / MiB:.0f} MB"
+        out.append(g)
+    out.sort(key=lambda g: g["bytes"])
+    return out
+
+
 def browse_hf(cfg: dict) -> None:
     """Browse and download GGUF models from HuggingFace."""
     from config import save_config
 
     while True:
-        header("Download GGUF Model from HuggingFace")
+        header("Download Translation Model")
         gpu = detect_gpu()
+        vram_gb = gpu["vram_mb"] / KiB if gpu["has_nvidia"] else 0.0
         if gpu["has_nvidia"]:
-            info(f"Your GPU: {gpu['name']} ({gpu['vram_mb']} MB VRAM)\n")
-            info("Quantization guide:")
-            bullet("Q4_K_M  ~4 bits -- best quality/speed balance")
-            bullet("Q5_K_M  ~5 bits -- slightly better quality")
-            bullet("Q8_0    ~8 bits -- near-original, 2x size")
-            bullet("Q3_K_S  ~3 bits -- smallest, lower quality")
-            print()
-            bullet(f"7B Q4_K_M ~ 4.4 GB -> fits {C.GREEN}6 GB{C.RESET} VRAM")
-            bullet(f"7B Q8_0 ~ 7.7 GB -> needs {C.YELLOW}8 GB{C.RESET} VRAM")
-            bullet(f"14B Q4_K_M ~ 8.7 GB -> needs {C.YELLOW}10 GB{C.RESET} VRAM")
+            info(f"Your GPU: {gpu['name']} — {C.BOLD}{vram_gb:.0f} GB VRAM{C.RESET}")
+            info(f"{C.DIM}Rule of thumb: biggest Q4_K_M that fits with ~1 GB spare.{C.RESET}")
+        else:
+            info(f"Hardware: {C.YELLOW}CPU mode{C.RESET} — prefer 3B models in Q4_K_M.")
+        info(f"{C.DIM}More detail: Help & Guides → Pick the right models for your PC.{C.RESET}")
 
-        print()
-        info("Recommended repos for Japanese -> English:")
-        print()
-        bullet(f"{C.CYAN}Qwen/Qwen2.5-7B-Instruct-GGUF{C.RESET}       -- best JP->EN, 7B")
-        bullet(f"{C.CYAN}Qwen/Qwen2.5-14B-Instruct-GGUF{C.RESET}      -- more accurate, 14B")
-        bullet(f"{C.CYAN}Qwen/Qwen2.5-3B-Instruct-GGUF{C.RESET}       -- lighter, 3B")
-        bullet(f"{C.CYAN}bartowski/gemma-2-9b-it-GGUF{C.RESET}         -- Google Gemma 2, 9B")
-        print()
-        repo = ask_input("HuggingFace repo (owner/model-name)", "")
-        if not repo:
+        opts = list(_HF_RECOMMENDED_REPOS)
+        opts.append(("Other repository...", "Type any HuggingFace repo (owner/model-name)"))
+        opts.append(("Back", None))
+        ch = ask_arrow("Pick a model:", opts, default=0)
+        if ch == -1 or ch == len(opts) - 1:
             return
+        if ch == len(_HF_RECOMMENDED_REPOS):
+            repo = ask_input("HuggingFace repo (owner/model-name)", "")
+            if not repo:
+                continue
+        else:
+            repo = _HF_RECOMMENDED_REPOS[ch][0]
 
-        info(f"Fetching files from {repo}...")
+        info(f"Fetching file list from {repo}...")
         files = hf_list_gguf(repo)
         if not files:
             warn("No .gguf files found. Use a GGUF repo (usually has '-GGUF' suffix).")
             pause()
             continue
 
-        print(f"\n  {C.BOLD}Files in {repo}:{C.RESET}\n")
-        opts = []
-        for f in files:
-            sg = f["bytes"] / GiB
-            fit = ""
-            if gpu["has_nvidia"]:
-                vg = gpu["vram_mb"] / KiB
-                if sg * 1.15 < vg:
-                    fit = f" {C.GREEN}+ fits GPU{C.RESET}"
-                elif sg < vg:
-                    fit = f" {C.YELLOW}~ tight{C.RESET}"
-                else:
-                    fit = f" {C.RED}x too large{C.RESET}"
-            opts.append((f"{f['name']}  ({f['size']}){fit}", None))
-        opts.append(("Back", None))
+        entries = _group_gguf_parts(files)
 
-        ch = ask_arrow("Select file:", opts, default=len(opts) - 1)
-        if ch == -1 or ch == len(files):
+        # Build labels: honest fit tag (total size vs VRAM) + ★ on the pick
+        # we'd recommend (largest Q4_K_M that fits comfortably).
+        def _fits(e: dict) -> str:
+            if not gpu["has_nvidia"]:
+                return ""
+            sg = e["bytes"] / GiB
+            if sg * 1.15 < vram_gb:
+                return "ok"
+            if sg < vram_gb:
+                return "tight"
+            return "no"
+
+        star_idx = -1
+        for i, e in enumerate(entries):  # entries are size-ascending
+            if "q4_k_m" in e["name"].lower() and _fits(e) in ("ok", ""):
+                star_idx = i
+
+        fopts = []
+        for i, e in enumerate(entries):
+            fit = {
+                "ok": f"  {C.GREEN}✓ fits your GPU{C.RESET}",
+                "tight": f"  {C.YELLOW}~ tight fit{C.RESET}",
+                "no": f"  {C.RED}✗ too large ({vram_gb:.0f} GB VRAM){C.RESET}",
+                "": "",
+            }[_fits(e)]
+            parts_note = f", {len(e['parts'])} files" if len(e["parts"]) > 1 else ""
+            star = f"  {C.GOLD}★ recommended{C.RESET}" if i == star_idx else ""
+            fopts.append((f"{e['name']}  ({e['size']}{parts_note}){fit}{star}", None))
+        fopts.append(("Back", None))
+
+        fc = ask_arrow(
+            f"Files in {repo}:", fopts, default=star_idx if star_idx >= 0 else len(fopts) - 1
+        )
+        if fc == -1 or fc == len(entries):
             continue
 
-        sel = files[ch]
+        sel = entries[fc]
         print()
-        info(f"File: {sel['name']}")
-        info(f"Size: {sel['size']}")
-        info(f"Dest: {GGUF_DIR / sel['name']}")
+        info(f"Model: {sel['name']}")
+        info(f"Size:  {sel['size']}" + (f"  ({len(sel['parts'])} files)" if len(sel["parts"]) > 1 else ""))
+        info(f"Dest:  {GGUF_DIR}")
+        if _fits(sel) == "no":
+            warn("Larger than your VRAM — it will run partly on CPU (much slower).")
         print()
 
         if ask_yn(f"Download {sel['name']}?"):
-            if hf_download(repo, sel["name"]):
-                cfg["gguf_model_path"] = str(GGUF_DIR / sel["name"])
+            ok = True
+            for i, part in enumerate(sel["parts"], 1):
+                if len(sel["parts"]) > 1:
+                    info(f"Part {i}/{len(sel['parts'])}")
+                if not hf_download(repo, part):
+                    error(f"Download failed: {part}")
+                    ok = False
+                    break
+            if ok:
+                first = sel["parts"][0]
+                cfg["gguf_model_path"] = str(GGUF_DIR / first)
                 cfg["translation_model"] = sel["name"]
                 save_config(cfg)
-                success(f"Saved to {GGUF_DIR / sel['name']}")
+                success(f"Saved to {GGUF_DIR / first}")
                 if cfg["translation_backend"] != "llamacpp":
                     if ask_yn("Switch backend to llama.cpp to use this model?"):
                         bi = _BI.get("llamacpp", {})
@@ -498,17 +602,22 @@ def tools_menu(cfg: dict) -> None:
     from yume.health import detect_fonts
 
     while True:
-        header("Tools Management")
+        # Same name as the main-menu entry that leads here
+        header("Tools & Fonts")
         yt = find_tool("yt-dlp")
         ff = find_tool("ffmpeg")
         dn = find_tool("deno")
         _cur_browser = _detect_extension_browser()
+        # ✓/✗ carry the meaning; colour is reinforcement only (colourblind-safe)
+        ok = f"{C.GREEN}✓ installed{C.RESET}"
+        miss = f"{C.RED}✗ missing{C.RESET}"
+        opt_miss = f"{C.DIM}– not installed{C.RESET}"
         ch = ask_arrow(
             "Select a tool:",
             [
-                (f"yt-dlp          {'OK' if yt else 'MISSING'}", "Downloads audio from YouTube and 1000+ video sites"),
-                (f"FFmpeg          {'OK' if ff else 'MISSING'}", "Converts audio between formats (required)"),
-                (f"Deno            {'OK' if dn else '--'}", "Helps bypass YouTube bot detection (optional)"),
+                (f"yt-dlp          {ok if yt else miss}", "Downloads audio from YouTube and 1000+ video sites"),
+                (f"FFmpeg          {ok if ff else miss}", "Converts audio between formats (required)"),
+                (f"Deno            {ok if dn else opt_miss}", "Helps bypass YouTube bot detection (optional)"),
                 ("Translation Backend", "Choose how Yume translates: llama.cpp / Ollama / LM Studio / Custom"),
                 ("Download Translation Model", "Browse and download GGUF models (the files your translator uses)"),
                 ("Python Dependencies", "Install required Python packages + romanization libraries"),
@@ -1296,7 +1405,7 @@ def settings_menu(cfg: dict) -> None:
                 ("Whisper settings", "Speech recognition model, device, precision"),
                 ("Translation settings", "Translation backend, address, model"),
                 ("Server addresses", "Host/port for Whisper and Translation servers"),
-                ("Subtitle tuning", "Chunk size, pause detection, word splitting"),
+                ("Subtitle tuning", "How many seconds of audio are processed at a time"),
                 ("Translation prompt", "Customize how the AI translates (tone, style, rules)"),
                 ("Romanization prompt", "Customize how the AI romanizes non-Latin text"),
                 ("YouTube auth", "How Yume accesses YouTube (Deno bot bypass or browser cookies)"),
@@ -1635,28 +1744,14 @@ def _set_addrs(cfg: dict) -> None:
 
 
 def _set_subs(cfg: dict) -> None:
+    # word_timestamps / pause_threshold are deliberately NOT offered here:
+    # the server forces word_timestamps off (music optimization — word mode
+    # drops segments) and pause_threshold depends on it, so asking the user
+    # to set them only misleads. The Settings table still lists both, dimmed,
+    # with the explanation.
     from config import save_config
 
     header("Subtitle Tuning")
-    print()
-    info("These settings control how Yume processes audio into subtitles.")
-    print()
-
-    info(f"{C.BOLD}Word-level timestamps{C.RESET}: Break subtitles at individual words instead of sentences.")
-    info(f"  Currently: {'ON' if cfg['word_timestamps'] else 'OFF'}")
-    cfg["word_timestamps"] = ask_yn("Enable word-level timestamps? (OFF is better for music)", cfg["word_timestamps"])
-
-    print()
-    info(f"{C.BOLD}Pause threshold{C.RESET}: How long a silence (in seconds) before Yume splits")
-    info("  a subtitle into two lines. Lower = more lines, higher = longer subtitles.")
-    info("  0.25s works well for songs, 0.4s works well for speech.")
-    info(f"  Currently: {cfg['pause_threshold']}s")
-    pt = ask_input("Pause threshold (0.2-1.0s)", str(cfg["pause_threshold"]))
-    try:
-        cfg["pause_threshold"] = float(pt)
-    except Exception as e:
-        _log.debug("[_set_subs] float-parse failed: %s", e)
-
     print()
     info(f"{C.BOLD}Chunk duration{C.RESET}: Yume processes audio in chunks of this many seconds.")
     info("  Smaller chunks = subtitles appear faster, but may cut words at boundaries.")
@@ -1665,10 +1760,13 @@ def _set_subs(cfg: dict) -> None:
     info(f"  Currently: {cfg['chunk_duration']}s")
     cd = ask_input("Chunk duration (10-60s)", str(cfg["chunk_duration"]))
     try:
-        cfg["chunk_duration"] = int(cd)
-    except Exception as e:
-        _log.debug("[_set_subs] int-parse failed: %s", e)
-
-    save_config(cfg)
-    success("Saved!")
+        val = int(cd)
+        clamped = max(10, min(60, val))
+        if clamped != val:
+            warn(f"{val}s is outside 10-60s — using {clamped}s")
+        cfg["chunk_duration"] = clamped
+        save_config(cfg)
+        success(f"Chunk duration: {clamped}s")
+    except ValueError:
+        warn(f"Not a number — keeping {cfg['chunk_duration']}s")
     pause()

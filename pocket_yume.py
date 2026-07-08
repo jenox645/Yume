@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pocket Yume CLI v0.0.9 -- Cross-platform installer & launcher for Yume AI Subtitles
+Pocket Yume CLI v0.1.0 -- Cross-platform installer & launcher for Yume AI Subtitles
 Complete rewrite: smart port management, API token auth, Windows cp1252 fix
 Supports: Windows, Linux, macOS
 """
@@ -44,7 +44,7 @@ from config import (  # noqa: E402
 # Japanese text may appear in logs. Wrapping stdout here breaks ANSI
 # color rendering on Windows terminals.
 
-VERSION = "0.0.9"
+VERSION = "0.1.0"
 
 KiB = 1024
 MiB = 1024**2
@@ -176,6 +176,7 @@ BACKEND_INFO = {
 # ── Yume sub-package imports ──────────────────────────────────────────────────
 
 from yume.benchmark import benchmark_whisper  # noqa: E402
+from yume.guides import guides_menu  # noqa: E402
 from yume.hardware import _detect_cpu_name, detect_gpu  # noqa: E402
 from yume.health import detect_fonts, health_check, set_backend_info as _health_set_bi, show_status  # noqa: E402
 from yume.installers import set_download_urls  # noqa: E402
@@ -189,7 +190,7 @@ from yume.menus import (  # noqa: E402
     tools_menu,
 )
 from yume.network import set_version as _network_set_version  # noqa: E402
-from yume.ports import show_ports_status  # noqa: E402
+from yume.ports import is_port_free, show_ports_status  # noqa: E402
 from yume.setup import set_setup_context, setup_wizard, uninstall_yume  # noqa: E402
 from yume.ui import C, enable_ansi, error, header, info, panel, pause  # noqa: E402
 from yume.utils import check_for_updates  # noqa: E402
@@ -218,7 +219,7 @@ def main_menu() -> None:
         cfg = setup_wizard(cfg)
 
     while True:
-        header()
+        header(version=VERSION)
         gpu = detect_gpu()
         if gpu["has_nvidia"]:
             gs = f"{C.GREEN}{gpu['name']}{C.RESET}"
@@ -234,10 +235,23 @@ def main_menu() -> None:
                 gs = f"{C.YELLOW}CPU: {cpu_name}{C.RESET}"
 
         bn = BACKEND_INFO.get(cfg.get("translation_backend", "llamacpp"), {}).get("name", "?")
+
+        # Instant local port probe (not a full health check) — enough to tell a
+        # returning user whether they still need to Launch.
+        w_up = not is_port_free(cfg["whisper_port"], cfg.get("whisper_host", "127.0.0.1"))
+        t_up = not is_port_free(cfg["translation_port"], cfg.get("translation_host", "127.0.0.1"))
+        if w_up and t_up:
+            srv = f"{C.GREEN}● running{C.RESET}"
+        elif w_up or t_up:
+            srv = f"{C.YELLOW}● partially running{C.RESET}  {C.DIM}(one server is down — use Launch Yume){C.RESET}"
+        else:
+            srv = f"{C.DIM}○ stopped — choose Launch Yume to start{C.RESET}"
+
         panel(
             f"{C.DIM}Hardware   {C.RESET}  {gs}\n"
             f"{C.DIM}Speech AI  {C.RESET}  {C.CYAN}{cfg['whisper_model']}{C.RESET}  on  {cfg['whisper_host']}:{cfg['whisper_port']}\n"
-            f"{C.DIM}Translator {C.RESET}  {C.MAGENTA}{bn}{C.RESET}  on  {cfg['translation_host']}:{cfg['translation_port']}",
+            f"{C.DIM}Translator {C.RESET}  {C.MAGENTA}{bn}{C.RESET}  on  {cfg['translation_host']}:{cfg['translation_port']}\n"
+            f"{C.DIM}Servers    {C.RESET}  {srv}",
             style=C.DIM,
         )
 
@@ -260,6 +274,8 @@ def main_menu() -> None:
                 f"  {C.YELLOW}⬆{C.RESET}  Update available: v{_update_result[0]}  {C.DIM}{_update_result[1]}{C.RESET}"
             )
 
+        print(f"  {C.DIM}Tip: 'python pocket_yume.py help' lists direct CLI commands (launch, status, stats...){C.RESET}")
+
         from yume.ui import ask_arrow
 
         ch = ask_arrow(
@@ -270,6 +286,7 @@ def main_menu() -> None:
                 ("Health Check", "Test every component end-to-end"),
                 ("Settings", "Whisper, translation, addresses, subtitles"),
                 ("Tools & Fonts", "Install, update, manage components, detect fonts"),
+                ("Help & Guides", "Step-by-step recipes: first subtitles, models, fixes"),
                 ("Re-run Setup", "Guided first-time configuration"),
                 ("Uninstall", "Remove Yume and all data"),
                 ("Exit", None),
@@ -289,12 +306,14 @@ def main_menu() -> None:
         elif ch == 4:
             tools_menu(cfg)
         elif ch == 5:
+            guides_menu(cfg)
+        elif ch == 6:
             cfg["first_run_complete"] = False
             save_config(cfg)
             cfg = setup_wizard(cfg)
-        elif ch == 6:
-            uninstall_yume()
         elif ch == 7:
+            uninstall_yume()
+        elif ch == 8:
             print(f"\n  {C.GOLD}Goodbye!{C.RESET}\n")
             break
 
@@ -365,34 +384,40 @@ def main() -> None:
             cfg["first_run_complete"] = False
             save_config(cfg)
             setup_wizard(cfg)
-        elif cmd == "help":
+        elif cmd in ("guide", "guides"):
+            guides_menu(cfg)
+        elif cmd in ("help", "-h", "--help"):
             print(f"\n  {C.BOLD}Pocket Yume v{VERSION}{C.RESET}")
             print("  Cross-platform installer for Yume AI Subtitles\n")
             print(f"  {C.BOLD}Usage:{C.RESET} python pocket_yume.py [command]\n")
-            print(f"  {C.GOLD}Commands:{C.RESET}")
-            print("    (none)              Interactive menu")
-            print("    launch              Start servers (interactive runtime menu)")
-            print("    status              Check components")
-            print("    health              Run full health check")
-            print("    stats               Live server statistics (GPU, session)")
-            print("    model               Show current Whisper model")
-            print("    model list          List available models with VRAM")
-            print("    model switch <n>    Hot-swap Whisper model")
-            print("    blacklist list      Show server blacklist")
-            print("    blacklist add <t>   Block a phrase")
+            print(f"  {C.GOLD}Run:{C.RESET}")
+            print("    (none)               Interactive menu")
+            print("    launch               Start servers (interactive runtime menu)")
+            print("    setup                Run setup wizard")
+            print("    guide                Step-by-step how-to guides (cookbook)")
+            print(f"\n  {C.GOLD}Inspect:{C.RESET}")
+            print("    status               Check components")
+            print("    health               Run full health check")
+            print("    stats                Live server statistics (GPU, session)")
+            print("    ports                Show port availability")
+            print("    recommend            Suggest best Whisper model for your hardware")
+            print("    fonts                Detect installed CJK and system fonts")
+            print("    benchmark            Test Whisper model speeds on your hardware")
+            print(f"\n  {C.GOLD}Manage:{C.RESET}")
+            print("    model                Show current Whisper model")
+            print("    model list           List available models with VRAM")
+            print("    model switch <n>     Hot-swap Whisper model")
+            print("    blacklist list       Show server blacklist")
+            print("    blacklist add <t>    Block a phrase")
             print("    blacklist remove <t> Unblock a phrase")
-            print("    blacklist clear     Clear all entries")
-            print("    ports               Show port availability")
-            print("    setup               Run setup wizard")
-            print("    export [path]       Export config to backup file")
-            print("    import <path>       Import config from backup file")
-            print("    recommend           Suggest best Whisper model for your hardware")
-            print("    fonts               Detect installed CJK and system fonts")
-            print("    benchmark           Test Whisper model speeds on your hardware")
-            print("    help                This message")
-            print("    --verbose / -v      Enable debug logging to stderr")
-            print("    --version           Print version and exit")
-            print("    --no-color          Disable colored output\n")
+            print("    blacklist clear      Clear all entries")
+            print("    export [path]        Export config to backup file")
+            print("    import <path>        Import config from backup file")
+            print(f"\n  {C.GOLD}Flags:{C.RESET}")
+            print("    help / -h / --help   This message")
+            print("    --verbose / -v       Enable debug logging to stderr")
+            print("    --version            Print version and exit")
+            print("    --no-color           Disable colored output\n")
         else:
             print(f"  Unknown: {cmd}. Try: python pocket_yume.py help")
         return

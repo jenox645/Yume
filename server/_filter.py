@@ -124,14 +124,22 @@ def is_hallucination(text):
         if len(unique) <= 2:
             return True
 
-    # Concatenated repetition: "musicmusic", "aaaaa", "la la la la"
+    # Concatenated repetition: "musicmusic", "aaaaa", "la la la la".
+    # The repeating unit may start after a short prefix — "MACACACACA..." is
+    # "ma" + "ca"*N and never matches anchored at position 0, so try offsets
+    # up to one unit length (require an extra repeat there to avoid false
+    # positives on words like "banana").
     clean = t_lower.replace(" ", "")
     if len(clean) >= 4:
         for sub_len in range(2, min(9, len(clean) // 2 + 1)):
-            sub = clean[:sub_len]
-            if sub * (len(clean) // len(sub)) == clean[: len(sub) * (len(clean) // len(sub))]:
-                repeats = len(clean) // len(sub)
-                if repeats >= 2 and len(sub) * repeats >= len(clean) * 0.95:
+            for offset in range(0, sub_len + 1):
+                body = clean[offset:]
+                repeats = len(body) // sub_len
+                min_repeats = 2 if offset == 0 else 3
+                if repeats < min_repeats:
+                    continue
+                sub = body[:sub_len]
+                if sub * repeats == body[: sub_len * repeats] and sub_len * repeats >= len(body) * 0.95:
                     print(f"[Yume] Hallucination: repeated '{sub}' x{repeats} in '{t}'")
                     return True
 

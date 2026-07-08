@@ -1140,10 +1140,16 @@ class TestBuildDownloadStrategies(unittest.TestCase):
         _state.youtube_auth_method = self._orig_auth
         _state.cookies_browser = self._orig_browser
 
-    def test_non_youtube_returns_single_strategy(self):
+    def test_non_youtube_has_no_auth_fallback(self):
+        # Non-YouTube URLs try cookies first (login-gated sites) but must always
+        # fall back to no-auth so a missing/locked cookie DB doesn't hard-fail a
+        # URL that never needed cookies (direct media, cookie-less environments).
         _state.youtube_auth_method = "cookies"
-        strategies = _audio._build_download_strategies("https://example.com/video", False)
-        self.assertEqual(len(strategies), 1)
+        with patch.object(_audio, "resolve_browser_cookies", return_value="firefox"):
+            strategies = _audio._build_download_strategies("https://example.com/video", False)
+        labels = [label for label, _ in strategies]
+        self.assertIn("no-auth", labels)
+        self.assertEqual(labels[-1], "no-auth")
 
     def test_youtube_cookies_has_multiple_strategies(self):
         _state.youtube_auth_method = "cookies"

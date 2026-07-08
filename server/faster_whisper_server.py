@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Yume -- Faster-Whisper Server v0.0.9
+Yume -- Faster-Whisper Server v0.1.0
 Word-level timestamps + pause re-splitting + security hardening
 Parallel startup: Flask starts before model loads. Prewarm inference on load.
 All output is ASCII-safe for Windows cp932/cp1252 locales.
@@ -209,7 +209,7 @@ def health():
     is_ready = _state.model is not None
     base = {
         "status": "ready" if is_ready else "loading",
-        "version": "0.0.9",
+        "version": "0.1.0",
         "prepare_supported": True,
         "ytdlp_available": _audio.check_ytdlp(),
     }
@@ -827,6 +827,13 @@ def update_blacklist():
         print(f"[Yume]   - {item!r}")
     if count > 10:
         print(f"[Yume]   ... and {count - 10} more")
+    # Persist so reported hallucinations survive server restarts
+    try:
+        if _state.blacklist_file:
+            with open(_state.blacklist_file, "w", encoding="utf-8") as f:
+                json.dump(_state.user_blacklist, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[Yume] Blacklist save failed: {e}")
     return jsonify({"success": True, "count": count})
 
 
@@ -979,6 +986,21 @@ def _apply_config(args):
         _state.translation_prompt = cfg.get("translation_prompt", "")
         _state.romanization_prompt = cfg.get("romanization_prompt", "")
 
+    # Persisted user blacklist — reported hallucinations must survive restarts
+    cfg_dir = Path(args.config).parent if args.config else Path(__file__).resolve().parent.parent / "config"
+    _state.blacklist_file = str(cfg_dir / "blacklist.json")
+    try:
+        with open(_state.blacklist_file, encoding="utf-8") as f:
+            items = json.load(f)
+        if isinstance(items, list):
+            _state.user_blacklist = [str(i).strip() for i in items if str(i).strip()]
+            if _state.user_blacklist:
+                print(f"[Yume] Loaded {len(_state.user_blacklist)} blacklist items from {_state.blacklist_file}")
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"[Yume] Blacklist load failed: {e}")
+
     # Resolve 'auto' device using CTranslate2's own detection (not torch)
     if _state.device == "auto":
         try:
@@ -1008,7 +1030,7 @@ def _apply_config(args):
 
 def _print_startup_banner(args):
     print("=" * 70)
-    print("  YUME -- Whisper Server v0.0.9")
+    print("  YUME -- Whisper Server v0.1.0")
     print("=" * 70)
     print(f"  Model:            {_state.model_name}")
     print(f"  Device:           {_state.device}")

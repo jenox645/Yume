@@ -261,33 +261,60 @@ def discover_api_token(host: str, port: int) -> str | None:
     return None
 
 
+def reset_api_token() -> None:
+    """Forget the cached API token so the next request re-discovers it. Each server
+    run mints a fresh token (secrets.token_urlsafe); a token cached from a previous
+    run — e.g. after Stop + relaunch within one interactive CLI session — would
+    otherwise fail auth on every request, making the runtime menu's blacklist, stats
+    and model-switch appear as 'server not running'. Called on server (re)start; the
+    request helpers also self-heal on a 401/403 by resetting and retrying once."""
+    global _api_token
+    _api_token = None
+
+
 def server_get(host: str, port: int, path: str, timeout: int = 5) -> dict | None:
-    """GET request with API token auth."""
-    try:
-        headers = {"User-Agent": "Yume"}
-        token = discover_api_token(host, port) if _is_localhost(host) else None
-        if token:
-            headers["X-API-Token"] = token
-        req = urllib.request.Request(f"http://{host}:{port}{path}", headers=headers)  # noqa: S5332 — local server
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
-            return json.loads(resp.read())
-    except Exception:
-        return None
+    """GET request with API token auth. Self-heals a stale cached token on 401/403."""
+    for attempt in (0, 1):
+        try:
+            headers = {"User-Agent": "Yume"}
+            token = discover_api_token(host, port) if _is_localhost(host) else None
+            if token:
+                headers["X-API-Token"] = token
+            req = urllib.request.Request(f"http://{host}:{port}{path}", headers=headers)  # noqa: S5332 — local server
+            with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            # A token cached from a previous server run is now stale — drop it and
+            # re-discover the current server's token once before giving up.
+            if e.code in (401, 403) and _is_localhost(host) and attempt == 0:
+                reset_api_token()
+                continue
+            return None
+        except Exception:
+            return None
+    return None
 
 
 def server_post(host: str, port: int, path: str, data: dict | None = None, timeout: int = 30) -> dict:
-    """POST request with API token auth."""
-    try:
-        body = json.dumps(data or {}).encode("utf-8")
-        headers = {"Content-Type": "application/json", "User-Agent": "Yume"}
-        token = discover_api_token(host, port) if _is_localhost(host) else None
-        if token:
-            headers["X-API-Token"] = token
-        req = urllib.request.Request(f"http://{host}:{port}{path}", data=body, headers=headers, method="POST")  # noqa: S5332 — local server
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
-            return json.loads(resp.read())
-    except Exception as e:
-        return {"error": str(e)}
+    """POST request with API token auth. Self-heals a stale cached token on 401/403."""
+    body = json.dumps(data or {}).encode("utf-8")
+    for attempt in (0, 1):
+        try:
+            headers = {"Content-Type": "application/json", "User-Agent": "Yume"}
+            token = discover_api_token(host, port) if _is_localhost(host) else None
+            if token:
+                headers["X-API-Token"] = token
+            req = urllib.request.Request(f"http://{host}:{port}{path}", data=body, headers=headers, method="POST")  # noqa: S5332 — local server
+            with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403) and _is_localhost(host) and attempt == 0:
+                reset_api_token()
+                continue
+            return {"error": f"HTTP {e.code}"}
+        except Exception as e:
+            return {"error": str(e)}
+    return {"error": "auth failed after token refresh"}
 
 
 def discover_servers(cfg: dict, backend_info: dict) -> dict:

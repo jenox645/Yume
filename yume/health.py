@@ -109,11 +109,12 @@ def health_check(cfg: dict) -> None:
             return ("llama-cpp CUDA support", False, "llama-cpp-python not installed")
 
     def _chk_roma(pkg, desc):
+        # Optional lib: always PASS, but the detail must not read like a failure
         try:
             __import__(pkg)
             return (pkg, True, f"installed — {desc}")
         except ImportError:
-            return (pkg, True, f"not installed (optional) — {desc}")
+            return (pkg, True, f"optional, not installed — {desc} will use the LLM (slower)")
 
     def _chk_config():
         c = load_config()

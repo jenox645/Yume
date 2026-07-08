@@ -1,5 +1,5 @@
 // ============================================================================
-// SUBTITLE WINDOW v0.0.9 - Chunk counter, ready toast, per-line fonts
+// SUBTITLE WINDOW v0.1.0 - Chunk counter, ready toast, per-line fonts
 // ============================================================================
 
 // eslint-disable-next-line no-redeclare
@@ -19,6 +19,29 @@ class SubtitleWindow {
     this.create();
     this.attachEventListeners();
     this._loadAndApplySettings();
+
+    // Fullscreen: the browser renders ONLY the fullscreen element, so a
+    // body-appended overlay disappears the moment the user goes fullscreen —
+    // the most common way to watch. Reparent into the fullscreen container.
+    this._onFullscreenChange = () => this._handleFullscreenChange();
+    document.addEventListener('fullscreenchange', this._onFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', this._onFullscreenChange);
+    // The user may enable subtitles while ALREADY in fullscreen (Alt+Y)
+    this._handleFullscreenChange();
+  }
+
+  _handleFullscreenChange() {
+    if (!this.element) return;
+    const fsEl = document.fullscreenElement || document.webkitFullscreenElement || null;
+    // If the fullscreen element is the <video> itself we can't inject children
+    // into it — leave the window in body (hidden in fullscreen, same as before).
+    // Most players (YouTube included) fullscreen a container div, which works.
+    const canHost = fsEl && fsEl.tagName !== 'VIDEO' && !this.element.contains(fsEl);
+    const host = canHost ? fsEl : document.body;
+    if (this.element.parentNode !== host) {
+      host.appendChild(this.element);
+      this._clampToViewport();
+    }
   }
 
   _loadAndApplySettings() {
@@ -233,6 +256,14 @@ class SubtitleWindow {
             badge.style.display = '';
           }
         }
+
+        // Re-render the CURRENTLY displayed cue so show/hide toggles (original,
+        // romaji, english), RTL, and confidence apply live to the line already on
+        // screen — not only to the next cue.
+        if (this.isPlaying && (this.currentOriginal || this.currentEnglish)) {
+          this.updateSubtitle(this.currentOriginal, this.currentEnglish,
+                              this.currentRomaji, this.currentConfidence);
+        }
       }
     });
   }
@@ -328,6 +359,7 @@ class SubtitleWindow {
     this.currentOriginal = original || '';
     this.currentEnglish  = english || '';
     this.currentRomaji   = romaji || '';
+    this.currentConfidence = confidence;
 
     const statusEl = this.element.querySelector('.subtitle-status');
     if (statusEl) statusEl.style.display = 'none';
@@ -438,7 +470,15 @@ class SubtitleWindow {
     }});
   }
   toggleMinimize() { this.element.classList.toggle('minimized'); }
-  close() { if (this.element?.parentNode) this.element.remove(); window.dispatchEvent(new CustomEvent('subtitle-window-closed')); }
+  close() {
+    if (this._onFullscreenChange) {
+      document.removeEventListener('fullscreenchange', this._onFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', this._onFullscreenChange);
+      this._onFullscreenChange = null;
+    }
+    if (this.element?.parentNode) this.element.remove();
+    window.dispatchEvent(new CustomEvent('subtitle-window-closed'));
+  }
   destroy() { this.close(); }
 }
 

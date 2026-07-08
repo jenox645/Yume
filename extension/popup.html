@@ -10,7 +10,7 @@
     <div class="yume-header">
       <div class="deco-line top-line"></div>
       <h1 class="yume-title">Yume</h1>
-      <div class="yume-subtitle">v0.0.9</div>
+      <div class="yume-subtitle">v0.1.0</div>
       <div class="deco-line bottom-line"></div>
     </div>
 
@@ -26,6 +26,7 @@
             </button>
           </div>
           <div id="statusMessage" class="status-message"></div>
+          <div id="shortcutHint" class="setting-hint" style="margin-top:4px"></div>
         </div>
       </div>
     </div>
@@ -52,6 +53,7 @@
             </div>
           </div>
         </div>
+        <div id="serverHint" class="setting-hint" style="display:none;margin:4px 0"></div>
         <button type="button" id="refreshStatus" class="yume-button secondary" aria-label="Refresh server status">Refresh</button>
       </div>
     </div>
@@ -129,6 +131,7 @@
               <span class="setting-unit">sec</span>
             </div>
           </div>
+          <div class="setting-hint">Seconds of audio processed per batch &mdash; 30 is a good default</div>
         </div>
         <div class="setting-card">
           <div class="setting-row">
@@ -444,7 +447,7 @@
     <!-- Diagnostics (collapsible) -->
     <div class="yume-section collapsible collapsed" data-section="diagnostics">
       <div class="section-label section-toggle">
-        <span class="toggle-arrow">&#9654;</span> Diagnostics
+        <span class="toggle-arrow">&#9654;</span> Diagnostics &amp; Export
       </div>
       <div class="section-body">
         <div id="diagPanel" class="diag-panel">

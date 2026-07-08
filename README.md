@@ -8,7 +8,7 @@
 
 Transcription · Translation · Romanization
 
-![Version](https://img.shields.io/badge/version-0.0.9-blue)
+![Version](https://img.shields.io/badge/version-0.1.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10+-green)
 ![Chrome](https://img.shields.io/badge/chrome-MV3-yellow)
 ![Firefox](https://img.shields.io/badge/firefox-MV3-orange)
@@ -242,6 +242,16 @@ YouTube blocks automated downloads to prevent bots. Yume supports two methods:
 
 <details>
 <summary><strong>Changelog</strong></summary>
+
+### v0.1.0
+
+- Subtitles now work in fullscreen (window reparents into the fullscreen container); text shadow keeps subtitles readable in glass mode over bright video.
+- Pipeline overlap: Whisper transcribes chunk N+1 while the LLM translates chunk N (~25-40% faster end-to-end).
+- History panel: fully processed videos are kept for 30 days and restore instantly on reopen; per-entry SRT export. WebVTT export added alongside SRT.
+- Popup QoL: shows the actual toggle shortcut (Alt+Y by default); explains when a page can't run Yume (chrome:// pages, Web Store) or has no video; actionable hint when servers are offline; font list follows the selected source language.
+- Enabling subtitles now works when the video appeared after page load (SPA navigation) instead of silently showing nothing.
+- First-run onboarding: setup wizard ends with an extension install guide; START_YUME.bat hardened (Run-as-administrator, missing Python).
+- Server fixes: temp-dir leak in per-chunk fallback, serialized model switching, bounded audio cache, hallucination filter no longer drops real lyrics containing "like/share/comment/follow".
 
 ### v0.0.9
 

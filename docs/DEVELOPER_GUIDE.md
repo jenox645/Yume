@@ -1,6 +1,6 @@
 # Developer Guide
 
-> Yume v0.0.9 · Pocket Yume CLI
+> Yume v0.1.0 · Pocket Yume CLI
 
 ## Setup
 
