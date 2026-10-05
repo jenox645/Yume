@@ -14,7 +14,6 @@ Coverage targets:
 from __future__ import annotations
 
 import os
-from contextlib import contextmanager
 import shutil
 import sys
 import tempfile
@@ -22,6 +21,8 @@ import threading
 import time
 import types
 import unittest
+
+import numpy as np
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -33,6 +34,7 @@ if _SERVER_DIR not in sys.path:
 # ── Inject minimal flask + faster_whisper stubs so fws can be imported ───────
 # Must happen BEFORE any test touches faster_whisper_server.
 
+
 def _install_flask_stub():
     if "flask" in sys.modules:
         return
@@ -41,6 +43,7 @@ def _install_flask_stub():
     class _FakeFlask:
         def __init__(self, name):
             self.name = name
+            self.config = {}
 
         def route(self, *args, **kwargs):
             return lambda f: f
@@ -215,7 +218,6 @@ class TestValidateUrl(unittest.TestCase):
 
 
 class TestState(unittest.TestCase):
-
     def test_model_initially_none(self):
         # _state.model is None until the real server loads it
         # (may have been set by another test — check it's a valid type)
@@ -224,33 +226,32 @@ class TestState(unittest.TestCase):
     def test_api_token_initially_empty_or_string(self):
         self.assertIsInstance(_state.API_TOKEN, str)
 
-    def test_cache_dicts_are_dict(self):
-        self.assertIsInstance(_state.subtitle_cache, dict)
-        self.assertIsInstance(_state.full_audio_cache, dict)
+    def test_stream_url_cache_is_dict(self):
         self.assertIsInstance(_state.stream_url_cache, dict)
 
     def test_locks_are_lock_instances(self):
         lock_type = type(threading.Lock())
         self.assertIsInstance(_state.transcribe_lock, lock_type)
-        self.assertIsInstance(_state.prefetch_lock, lock_type)
+        self.assertIsInstance(_state.model_switch_lock, lock_type)
         self.assertIsInstance(_state.cache_lock, lock_type)
         self.assertIsInstance(_state.stats_lock, lock_type)
 
-    def test_cache_max_constants_positive(self):
-        self.assertGreater(_state.SUBTITLE_CACHE_MAX, 0)
-        self.assertGreater(_state.AUDIO_CACHE_MAX, 0)
+    def test_stream_url_constants_positive(self):
         self.assertGreater(_state.STREAM_URL_CACHE_MAX, 0)
-
-    def test_ttl_constants_positive(self):
-        self.assertGreater(_state.FULL_AUDIO_TTL, 0)
         self.assertGreater(_state.STREAM_URL_TTL, 0)
 
     def test_server_stats_has_expected_keys(self):
         required = {
-            "start_time", "chunks_transcribed", "segments_produced",
-            "hallucinations_filtered", "total_audio_seconds",
-            "total_whisper_time", "downloads_completed",
-            "cache_hits", "cache_misses", "errors",
+            "start_time",
+            "regions_transcribed",
+            "segments_produced",
+            "hallucinations_filtered",
+            "total_audio_seconds",
+            "total_whisper_time",
+            "downloads_completed",
+            "lines_translated",
+            "translation_cache_hits",
+            "errors",
         }
         self.assertTrue(required.issubset(_state.server_stats.keys()))
 
@@ -267,15 +268,11 @@ class TestState(unittest.TestCase):
     def test_user_blacklist_is_list(self):
         self.assertIsInstance(_state.user_blacklist, list)
 
-    def test_pause_threshold_is_float(self):
-        self.assertIsInstance(_state.pause_threshold, float)
-
-    def test_use_word_timestamps_is_bool(self):
-        self.assertIsInstance(_state.use_word_timestamps, bool)
+    def test_load_error_starts_empty(self):
+        self.assertEqual(_state.load_error, "")
 
 
 class TestIsHallucination(unittest.TestCase):
-
     def setUp(self):
         _state.user_blacklist = []
 
@@ -372,6 +369,7 @@ class TestIsHallucination(unittest.TestCase):
     def test_hallucination_unicode_nfc_normalised(self):
         # NFC-normalised version should still match
         import unicodedata
+
         normalised = unicodedata.normalize("NFC", "ご視聴ありがとう")
         self.assertTrue(_filter.is_hallucination(normalised))
 
@@ -450,7 +448,6 @@ class TestIsHallucination(unittest.TestCase):
 
 
 class TestIsCreditsLine(unittest.TestCase):
-
     def test_vocals_credits_detected(self):
         self.assertTrue(_filter.is_credits_line("vocals: Hatsune Miku"))
 
@@ -477,6 +474,24 @@ class TestIsCreditsLine(unittest.TestCase):
 
     def test_animation_credits_detected(self):
         self.assertTrue(_filter.is_credits_line("animation: Studio Ghibli"))
+
+    def test_role_words_inside_real_lines_are_not_credits(self):
+        # Substring matching used to hide all of these
+        for line in [
+            "I watched the video again",
+            "remix the night away",
+            "Piano man, sing us a song",
+            "Video killed the radio star",
+            "この曲を作曲した人",
+            "トム・クルーズ",
+            "Musical night",
+        ]:
+            self.assertFalse(_filter.is_credits_line(line), line)
+            self.assertFalse(_filter.is_hallucination(line), line)
+
+    def test_role_lists_are_credits(self):
+        self.assertTrue(_filter.is_credits_line("作詞 作曲 編曲 初音ミク"))
+        self.assertTrue(_filter.is_credits_line("Music: Someone"))
 
     def test_normal_lyric_not_credits(self):
         self.assertFalse(_filter.is_credits_line("あなたに会いたい"))
@@ -509,11 +524,6 @@ class TestRomanize(unittest.TestCase):
     def test_romanize_chinese_returns_none_when_pypinyin_missing(self):
         result = _romanize.romanize_chinese("测试")
         self.assertTrue(result is None or isinstance(result, str))
-
-    def test_romanize_korean_returns_none(self):
-        # 'romanization' package doesn't exist on PyPI; always None
-        result = _romanize.romanize_korean("한국어")
-        self.assertIsNone(result)
 
     def test_get_kakasi_is_thread_safe(self):
         """Calling get_kakasi() from multiple threads should not raise."""
@@ -550,8 +560,7 @@ class TestRomanize(unittest.TestCase):
             {"hepburn": "tou", "passport": "to", "orig": "東"},
             {"hepburn": "kyou", "passport": "kyo", "orig": "京"},
         ]
-        with patch.object(_romanize, "_kakasi", mock_kakasi), \
-             patch.object(_romanize, "_kakasi_checked", True):
+        with patch.object(_romanize, "_kakasi", mock_kakasi), patch.object(_romanize, "_kakasi_checked", True):
             result = _romanize.romanize_japanese("東京")
         self.assertIsNotNone(result)
         self.assertIn("tou", result)
@@ -560,8 +569,7 @@ class TestRomanize(unittest.TestCase):
     def test_romanize_japanese_kakasi_exception_returns_none(self):
         mock_kakasi = MagicMock()
         mock_kakasi.convert.side_effect = RuntimeError("kakasi exploded")
-        with patch.object(_romanize, "_kakasi", mock_kakasi), \
-             patch.object(_romanize, "_kakasi_checked", True):
+        with patch.object(_romanize, "_kakasi", mock_kakasi), patch.object(_romanize, "_kakasi_checked", True):
             result = _romanize.romanize_japanese("東京")
         self.assertIsNone(result)
 
@@ -608,254 +616,80 @@ class _SpyModel:
         return iter(self.segments), _FakeInfo()
 
 
-class TestTranscribeFile(unittest.TestCase):
+class TestTranscribeAudio(unittest.TestCase):
+    """_transcribe.transcribe_audio(): music-tuned params, raw segments, offsets."""
+
+    AUDIO = np.zeros(16000 * 5, dtype=np.float32)  # 5 s of silence
 
     def setUp(self):
-        # Reset shared state before each test
         _state.model = None
-        _state.server_stats["chunks_transcribed"] = 0
-        _state.server_stats["segments_produced"] = 0
-        _state.server_stats["hallucinations_filtered"] = 0
-        _state.server_stats["total_audio_seconds"] = 0.0
-        _state.server_stats["total_whisper_time"] = 0.0
+        _state.server_stats["regions_transcribed"] = 0
 
     def tearDown(self):
         _state.model = None
 
-    # ── Model-not-loaded guard ────────────────────────────────────────────────
+    def _run(self, segs=None, **kw):
+        spy = _SpyModel(segs)
+        _state.model = spy
+        out = _transcribe.transcribe_audio(self.AUDIO, kw.pop("language", "ja"), **kw)
+        return spy, out
 
     def test_raises_when_model_is_none(self):
-        _state.model = None
         with self.assertRaises(RuntimeError) as ctx:
-            _transcribe.transcribe_file("/fake/audio.wav", "ja")
+            _transcribe.transcribe_audio(self.AUDIO, "ja")
         self.assertIn("loading", str(ctx.exception).lower())
 
-    # ── Tiny-file early return ────────────────────────────────────────────────
+    def test_too_short_audio_skips_model(self):
+        spy = _SpyModel()
+        _state.model = spy
+        self.assertEqual(_transcribe.transcribe_audio(np.zeros(100, dtype=np.float32), "ja"), [])
+        self.assertEqual(spy.call_count, 0)
 
-    def test_tiny_file_returns_empty_result(self):
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            f.write(b"\x00" * 100)  # 100 bytes — well below 10 KB
-            tmp = f.name
-        try:
-            _state.model = _SpyModel()
-            result = _transcribe.transcribe_file(tmp, "ja")
-            self.assertEqual(result["text"], "")
-            self.assertEqual(result["segments"], [])
-            self.assertEqual(result["duration"], 0)
-            # Model.transcribe must NOT be called for a tiny file
-            self.assertEqual(_state.model.call_count, 0)
-        finally:
-            os.unlink(tmp)
+    def test_first_region_uses_07_threshold(self):
+        spy, _ = self._run(is_first_region=True)
+        self.assertEqual(spy.last_kwargs["no_speech_threshold"], 0.7)
 
-    def test_tiny_file_returns_correct_structure(self):
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            f.write(b"\x00" * 50)
-            tmp = f.name
-        try:
-            _state.model = _SpyModel()
-            result = _transcribe.transcribe_file(tmp, "ja", start_offset=25.0)
-            self.assertEqual(result["start_offset"], 25.0)
-            self.assertEqual(result["language"], "ja")
-        finally:
-            os.unlink(tmp)
+    def test_other_regions_use_06_threshold(self):
+        spy, _ = self._run()
+        self.assertEqual(spy.last_kwargs["no_speech_threshold"], 0.6)
 
-    # ── no_speech_threshold parameter selection ───────────────────────────────
+    def test_music_tuned_parameters(self):
+        spy, _ = self._run()
+        kw = spy.last_kwargs
+        self.assertFalse(kw["vad_filter"])  # Silero VAD drops singing
+        self.assertFalse(kw["word_timestamps"])  # word mode drops segments
+        self.assertFalse(kw["condition_on_previous_text"])
+        self.assertEqual(kw["beam_size"], 5)
+        self.assertEqual(kw["log_prob_threshold"], -2.0)
 
-    @contextmanager
-    def _large_temp_file(self, size_bytes=20_000):
-        """Create a >10 KB temp WAV file, auto-cleanup on exit."""
-        f = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        f.write(b"\x00" * size_bytes)
-        f.close()
-        try:
-            yield f.name
-        finally:
-            try:
-                os.unlink(f.name)
-            except OSError:
-                pass
+    def test_language_forwarded(self):
+        spy, _ = self._run(language="zh")
+        self.assertEqual(spy.last_kwargs["language"], "zh")
+        spy, _ = self._run(language=None)
+        self.assertIsNone(spy.last_kwargs["language"])
 
-    def test_first_chunk_uses_07_threshold(self):
-        with self._large_temp_file() as tmp:
-            spy = _SpyModel()
-            _state.model = spy
-            _transcribe.transcribe_file(tmp, "ja", is_first_chunk=True)
-            self.assertEqual(spy.last_kwargs["no_speech_threshold"], 0.7)
+    def test_offset_applied_to_timestamps(self):
+        _, out = self._run([_FakeSegment(2.0, 5.0, "こんにちは")], offset=25.0)
+        self.assertAlmostEqual(out[0]["start"], 27.0, places=1)
+        self.assertAlmostEqual(out[0]["end"], 30.0, places=1)
 
-    def test_regular_chunk_uses_06_threshold(self):
-        with self._large_temp_file() as tmp:
-            spy = _SpyModel()
-            _state.model = spy
-            _transcribe.transcribe_file(tmp, "ja", is_first_chunk=False)
-            self.assertEqual(spy.last_kwargs["no_speech_threshold"], 0.6)
+    def test_returns_raw_segments_unfiltered(self):
+        """Filtering happens when serving (so blacklist edits apply to the cache)."""
+        _, out = self._run([_FakeSegment(0.0, 3.0, "Thank you for watching"), _FakeSegment(3.0, 6.0, "  ")])
+        self.assertEqual([s["text"] for s in out], ["Thank you for watching"])  # blank dropped, hallucination kept
 
-    def test_default_is_regular_chunk(self):
-        with self._large_temp_file() as tmp:
-            spy = _SpyModel()
-            _state.model = spy
-            _transcribe.transcribe_file(tmp, "ja")
-            self.assertEqual(spy.last_kwargs["no_speech_threshold"], 0.6)
+    def test_confidence_and_stats(self):
+        _, out = self._run([_FakeSegment(0.0, 2.0, "テスト", avg_logprob=-0.8)])
+        self.assertAlmostEqual(out[0]["confidence"], -0.8, places=1)
+        self.assertEqual(_state.server_stats["regions_transcribed"], 1)
 
-    def test_first_chunk_threshold_higher_than_regular(self):
-        with self._large_temp_file() as tmp:
-            spy_first = _SpyModel()
-            _state.model = spy_first
-            _transcribe.transcribe_file(tmp, "ja", is_first_chunk=True)
-            first_thresh = spy_first.last_kwargs["no_speech_threshold"]
-
-            spy_regular = _SpyModel()
-            _state.model = spy_regular
-            _transcribe.transcribe_file(tmp, "ja", is_first_chunk=False)
-            regular_thresh = spy_regular.last_kwargs["no_speech_threshold"]
-
-            self.assertGreater(first_thresh, regular_thresh)
-
-    # ── Other fixed parameters ────────────────────────────────────────────────
-
-    def test_vad_filter_always_false(self):
-        with self._large_temp_file() as tmp:
-            spy = _SpyModel()
-            _state.model = spy
-            _transcribe.transcribe_file(tmp, "ja")
-            self.assertFalse(spy.last_kwargs["vad_filter"])
-
-    def test_word_timestamps_always_false(self):
-        with self._large_temp_file() as tmp:
-            spy = _SpyModel()
-            _state.model = spy
-            _transcribe.transcribe_file(tmp, "ja")
-            self.assertFalse(spy.last_kwargs["word_timestamps"])
-
-    def test_condition_on_previous_text_false(self):
-        with self._large_temp_file() as tmp:
-            spy = _SpyModel()
-            _state.model = spy
-            _transcribe.transcribe_file(tmp, "ja")
-            self.assertFalse(spy.last_kwargs["condition_on_previous_text"])
-
-    def test_beam_size_is_5(self):
-        with self._large_temp_file() as tmp:
-            spy = _SpyModel()
-            _state.model = spy
-            _transcribe.transcribe_file(tmp, "ja")
-            self.assertEqual(spy.last_kwargs["beam_size"], 5)
-
-    def test_log_prob_threshold_is_negative_two(self):
-        with self._large_temp_file() as tmp:
-            spy = _SpyModel()
-            _state.model = spy
-            _transcribe.transcribe_file(tmp, "ja")
-            self.assertEqual(spy.last_kwargs["log_prob_threshold"], -2.0)
-
-    # ── Segment processing ────────────────────────────────────────────────────
-
-    def test_segment_timestamps_include_offset(self):
-        with self._large_temp_file() as tmp:
-            segs = [_FakeSegment(2.0, 5.0, "こんにちは")]
-            _state.model = _SpyModel(segs)
-            result = _transcribe.transcribe_file(tmp, "ja", start_offset=25.0)
-            self.assertEqual(len(result["segments"]), 1)
-            self.assertAlmostEqual(result["segments"][0]["start"], 27.0, places=1)
-            self.assertAlmostEqual(result["segments"][0]["end"], 30.0, places=1)
-
-    def test_hallucination_segments_filtered_out(self):
-        with self._large_temp_file() as tmp:
-            segs = [
-                _FakeSegment(0.0, 3.0, "Thank you for watching"),
-                _FakeSegment(3.0, 6.0, "今日はいい天気ですね"),
-            ]
-            _state.model = _SpyModel(segs)
-            result = _transcribe.transcribe_file(tmp, "ja")
-            texts = [s["text"] for s in result["segments"]]
-            self.assertNotIn("Thank you for watching", texts)
-            self.assertIn("今日はいい天気ですね", texts)
-
-    def test_credits_segments_filtered_out(self):
-        with self._large_temp_file() as tmp:
-            segs = [
-                _FakeSegment(0.0, 3.0, "vocal: Hatsune Miku"),
-                _FakeSegment(3.0, 6.0, "愛してる"),
-            ]
-            _state.model = _SpyModel(segs)
-            result = _transcribe.transcribe_file(tmp, "ja")
-            texts = [s["text"] for s in result["segments"]]
-            self.assertNotIn("vocal: Hatsune Miku", texts)
-            self.assertIn("愛してる", texts)
-
-    def test_empty_text_segment_skipped(self):
-        with self._large_temp_file() as tmp:
-            segs = [
-                _FakeSegment(0.0, 1.0, "  "),
-                _FakeSegment(1.0, 4.0, "今日は"),
-            ]
-            _state.model = _SpyModel(segs)
-            result = _transcribe.transcribe_file(tmp, "ja")
-            self.assertEqual(len(result["segments"]), 1)
-
-    def test_stats_updated_after_transcription(self):
-        with self._large_temp_file() as tmp:
-            before = _state.server_stats["chunks_transcribed"]
-            _state.model = _SpyModel([_FakeSegment(0.0, 2.0, "テスト")])
-            _transcribe.transcribe_file(tmp, "ja")
-            self.assertEqual(_state.server_stats["chunks_transcribed"], before + 1)
-
-    def test_hallucination_count_incremented(self):
-        with self._large_temp_file() as tmp:
-            before = _state.server_stats["hallucinations_filtered"]
-            segs = [
-                _FakeSegment(0.0, 3.0, "Subscribe"),
-                _FakeSegment(3.0, 6.0, "[Music]"),
-            ]
-            _state.model = _SpyModel(segs)
-            _transcribe.transcribe_file(tmp, "ja")
-            self.assertEqual(_state.server_stats["hallucinations_filtered"], before + 2)
-
-    def test_language_forwarded_to_model(self):
-        with self._large_temp_file() as tmp:
-            spy = _SpyModel()
-            _state.model = spy
-            _transcribe.transcribe_file(tmp, "zh")
-            self.assertEqual(spy.last_kwargs["language"], "zh")
-
-    def test_none_language_forwarded(self):
-        with self._large_temp_file() as tmp:
-            spy = _SpyModel()
-            _state.model = spy
-            _transcribe.transcribe_file(tmp, None)
-            self.assertIsNone(spy.last_kwargs["language"])
-
-    def test_result_structure(self):
-        with self._large_temp_file() as tmp:
-            _state.model = _SpyModel([_FakeSegment(0.0, 2.0, "テスト")])
-            result = _transcribe.transcribe_file(tmp, "ja", start_offset=10.0)
-            self.assertIn("text", result)
-            self.assertIn("segments", result)
-            self.assertIn("language", result)
-            self.assertIn("duration", result)
-            self.assertIn("start_offset", result)
-            self.assertEqual(result["start_offset"], 10.0)
-
-    def test_confidence_field_in_segment(self):
-        with self._large_temp_file() as tmp:
-            _state.model = _SpyModel([_FakeSegment(0.0, 2.0, "テスト", avg_logprob=-0.8)])
-            result = _transcribe.transcribe_file(tmp, "ja")
-            seg = result["segments"][0]
-            self.assertIn("confidence", seg)
-            self.assertAlmostEqual(seg["confidence"], -0.8, places=1)
-
-    def test_transcribe_lock_released_on_success(self):
-        """Verify the transcribe_lock is released after a successful call."""
-        with self._large_temp_file() as tmp:
-            _state.model = _SpyModel()
-            _transcribe.transcribe_file(tmp, "ja")
-            # If lock was not released, this acquire would block
-            acquired = _state.transcribe_lock.acquire(blocking=False)
-            self.assertTrue(acquired, "transcribe_lock was not released")
-            _state.transcribe_lock.release()
+    def test_transcribe_lock_released(self):
+        self._run()
+        self.assertTrue(_state.transcribe_lock.acquire(blocking=False), "transcribe_lock was not released")
+        _state.transcribe_lock.release()
 
 
 class TestYtdlpCmd(unittest.TestCase):
-
     def setUp(self):
         self._orig_auth = _state.youtube_auth_method
 
@@ -876,7 +710,6 @@ class TestYtdlpCmd(unittest.TestCase):
 
 
 class TestIsYoutubeUrl(unittest.TestCase):
-
     def _yt(self, url):
         self.assertTrue(_audio.is_youtube_url(url), f"Expected YouTube: {url}")
 
@@ -925,7 +758,6 @@ class TestIsYoutubeUrl(unittest.TestCase):
 
 
 class TestCheckYtdlp(unittest.TestCase):
-
     def setUp(self):
         # Reset cache so each test starts fresh
         _audio._ytdlp_cache["available"] = None
@@ -965,121 +797,41 @@ class TestCheckYtdlp(unittest.TestCase):
         mock_run.assert_called_once()
 
 
-class TestCleanupAudio(unittest.TestCase):
+class TestAudioFiles(unittest.TestCase):
+    """_audio.load_audio() / remove_temp()."""
 
-    def test_cleanup_audio_entry_missing_path_no_crash(self):
-        """Non-existent paths must not raise exceptions."""
-        entry = {"path": "/nonexistent/yume_xyz/audio.wav"}
-        _audio.cleanup_audio_entry(entry)  # must not raise
+    def test_load_audio_reads_16k_wav(self):
+        import wave
 
-    def test_cleanup_audio_entry_removes_yume_dir(self):
-        tmp_dir = tempfile.mkdtemp(prefix="yume_")
-        audio_file = os.path.join(tmp_dir, "audio.wav")
-        open(audio_file, "w").close()
-        entry = {"path": audio_file}
-        _audio.cleanup_audio_entry(entry)
-        self.assertFalse(os.path.exists(tmp_dir))
+        tmp = tempfile.mkdtemp(prefix="yume_")
+        path = os.path.join(tmp, "a.wav")
+        with wave.open(path, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes((np.ones(16000, dtype=np.int16) * 16384).tobytes())
+        audio = _audio.load_audio(path)
+        self.assertEqual(audio.dtype, np.float32)
+        self.assertEqual(len(audio), 16000)
+        self.assertAlmostEqual(float(audio[0]), 0.5, places=3)
+        _audio.remove_temp(path)
+        self.assertFalse(os.path.exists(tmp))
 
-    def test_cleanup_audio_entry_empty_path_no_crash(self):
-        _audio.cleanup_audio_entry({"path": ""})
+    def test_remove_temp_leaves_non_yume_dirs(self):
+        tmp = tempfile.mkdtemp(prefix="keep_")
+        path = os.path.join(tmp, "x.wav")
+        open(path, "wb").close()
+        _audio.remove_temp(path)
+        self.assertTrue(os.path.isdir(tmp))  # only the file goes
+        self.assertFalse(os.path.exists(path))
+        shutil.rmtree(tmp, ignore_errors=True)
 
-    def test_cleanup_audio_entry_non_yume_dir_left_alone(self):
-        """Directories NOT starting with yume_/tmp must not be deleted."""
-        tmp_dir = tempfile.mkdtemp(prefix="safe_")
-        audio_file = os.path.join(tmp_dir, "audio.wav")
-        open(audio_file, "w").close()
-        entry = {"path": audio_file}
-        _audio.cleanup_audio_entry(entry)
-        # Directory should still exist
-        self.assertTrue(os.path.exists(tmp_dir))
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
-    def test_cleanup_all_audio_clears_state(self):
-        # Populate cache with a temp entry (path doesn't need to exist)
-        _state.full_audio_cache["test_vid"] = {
-            "path": "/tmp/nonexistent/audio.wav",
-            "duration": 120.0,
-            "timestamp": time.time(),
-        }
-        _audio.cleanup_all_audio()
-        self.assertEqual(len(_state.full_audio_cache), 0)
-
-
-class TestGetAudioDuration(unittest.TestCase):
-
-    def test_returns_float_on_success(self):
-        with patch("_audio.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="123.45\n")
-            dur = _audio.get_audio_duration("/fake/audio.wav")
-        self.assertAlmostEqual(dur, 123.45)
-
-    def test_returns_zero_on_failure(self):
-        with patch("_audio.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=1, stdout="")
-            dur = _audio.get_audio_duration("/fake/audio.wav")
-        self.assertEqual(dur, 0.0)
-
-    def test_returns_zero_on_exception(self):
-        with patch("_audio.subprocess.run", side_effect=FileNotFoundError):
-            dur = _audio.get_audio_duration("/fake/audio.wav")
-        self.assertEqual(dur, 0.0)
-
-    def test_returns_zero_on_invalid_output(self):
-        with patch("_audio.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="not-a-number\n")
-            dur = _audio.get_audio_duration("/fake/audio.wav")
-        self.assertEqual(dur, 0.0)
-
-
-class TestSliceAudio(unittest.TestCase):
-
-    def test_missing_source_returns_none(self):
-        result = _audio.slice_audio("/definitely/does/not/exist.wav", 0, 30)
-        self.assertIsNone(result)
-
-    def test_ffmpeg_success_returns_path(self):
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as src:
-            src.write(b"\x00" * 100)
-            src_path = src.name
-        out_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        out_file.write(b"\x00" * 5000)  # > 1000 bytes
-        out_file.close()
-
-        try:
-            with patch("_audio.subprocess.run") as mock_run, \
-                 patch("tempfile.NamedTemporaryFile") as mock_ntf:
-                mock_run.return_value = MagicMock(returncode=0)
-                mock_ntf.return_value.__enter__ = lambda s: s
-                mock_ntf.return_value.__exit__ = MagicMock(return_value=False)
-                mock_ntf.return_value.name = out_file.name
-                mock_ntf.return_value.close = lambda: None
-
-                result = _audio.slice_audio(src_path, 0, 30)
-        finally:
-            os.unlink(src_path)
-            try:
-                os.unlink(out_file.name)
-            except OSError:
-                pass
-
-        # Either worked (returned path) or None; just ensure no exception
-        self.assertTrue(result is None or isinstance(result, str))
-
-    def test_ffmpeg_failure_returns_none(self):
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as src:
-            src.write(b"\x00" * 100)
-            src_path = src.name
-        try:
-            with patch("_audio.subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(returncode=1)
-                result = _audio.slice_audio(src_path, 0, 30)
-        finally:
-            os.unlink(src_path)
-        self.assertIsNone(result)
+    def test_remove_temp_none_is_noop(self):
+        _audio.remove_temp(None)
+        _audio.remove_temp("")
 
 
 class TestFriendlifyYtdlpError(unittest.TestCase):
-
     def _check(self, raw: str, fragment: str):
         msg = _audio.friendlify_ytdlp_error(raw)
         self.assertIn(fragment.lower(), msg.lower(), f"Expected {fragment!r} in: {msg!r}")
@@ -1130,7 +882,6 @@ class TestFriendlifyYtdlpError(unittest.TestCase):
 
 
 class TestBuildDownloadStrategies(unittest.TestCase):
-
     def setUp(self):
         self._orig_auth = _state.youtube_auth_method
         self._orig_browser = _state.cookies_browser
@@ -1174,7 +925,6 @@ class TestBuildDownloadStrategies(unittest.TestCase):
 
 
 class TestGetStreamUrl(unittest.TestCase):
-
     def setUp(self):
         _state.stream_url_cache.clear()
 
@@ -1207,8 +957,7 @@ class TestGetStreamUrl(unittest.TestCase):
 
     def test_successful_ytdlp_caches_result(self):
         stream = "https://cdn.example.com/live.mp4"
-        with patch("_audio.subprocess.run") as mock_run, \
-             patch.object(_audio, "build_auth_args", return_value=[]):
+        with patch("_audio.subprocess.run") as mock_run, patch.object(_audio, "build_auth_args", return_value=[]):
             mock_run.return_value = MagicMock(returncode=0, stdout=f"{stream}\n")
             result = _audio.get_stream_url("https://youtube.com/watch?v=newvid")
         self.assertEqual(result, stream)
@@ -1216,7 +965,6 @@ class TestGetStreamUrl(unittest.TestCase):
 
 
 class TestBgutil(unittest.TestCase):
-
     def test_bgutil_server_dir_returns_path(self):
         d = _bgutil.bgutil_server_dir()
         self.assertIsInstance(d, Path)
@@ -1257,28 +1005,6 @@ class TestBgutil(unittest.TestCase):
         result = _bgutil.start_bgutil_server()
         # Either False (main.ts missing) or True (somehow installed) — no exception
         self.assertIsInstance(result, bool)
-
-    def test_setup_bgutil_returns_true_if_already_present(self):
-        with patch.object(_bgutil, "bgutil_server_dir") as mock_dir:
-            fake_dir = MagicMock(spec=Path)
-            fake_main_ts = MagicMock(spec=Path)
-            fake_main_ts.exists.return_value = True
-            fake_dir.return_value = fake_dir
-            fake_dir.__truediv__ = lambda self, other: fake_main_ts
-            mock_dir.return_value = fake_dir
-            # Build correct path: server_dir / "src" / "main.ts"
-            # patch the chain
-        # Simpler: patch Path.exists on the specific file
-        with patch("_bgutil.bgutil_server_dir") as mock_sd:
-            mock_path = MagicMock(spec=Path)
-            mock_path.__str__ = lambda s: "/fake/server"
-            # mock_path / "src" / "main.ts" chain
-            main_ts = MagicMock(spec=Path)
-            main_ts.exists.return_value = True
-            mock_path.__truediv__.return_value.__truediv__.return_value = main_ts
-            mock_sd.return_value = mock_path
-            result = _bgutil.setup_bgutil_server()
-        self.assertTrue(result)
 
     def test_bgutil_port_constant(self):
         self.assertEqual(_bgutil.BGUTIL_PORT, 4416)
@@ -1324,10 +1050,8 @@ class TestCleanupStaleTemps(unittest.TestCase):
 
 
 class TestGetGpuStats(unittest.TestCase):
-
     def test_returns_none_when_nvidia_smi_missing(self):
-        with patch("faster_whisper_server.subprocess.run",
-                   side_effect=FileNotFoundError("nvidia-smi not found")):
+        with patch("faster_whisper_server.subprocess.run", side_effect=FileNotFoundError("nvidia-smi not found")):
             result = _fws._get_gpu_stats()
         self.assertIsNone(result)
 
@@ -1349,6 +1073,15 @@ class TestGetGpuStats(unittest.TestCase):
         self.assertEqual(result["gpu_temp_c"], 72)
         self.assertIn("RTX 3080", result["gpu_name"])
 
+    def test_first_gpu_of_several_and_missing_fields(self):
+        csv_out = "4096, 8192, [N/A], [N/A], GPU A\n100, 2048, 5, 40, GPU B\n"
+        with patch("faster_whisper_server.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=csv_out)
+            result = _fws._get_gpu_stats()
+        self.assertEqual(result["gpu_name"], "GPU A")
+        self.assertEqual(result["vram_total_mb"], 8192)
+        self.assertIsNone(result["gpu_temp_c"])
+
     def test_returns_none_when_insufficient_columns(self):
         with patch("faster_whisper_server.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="1024, 4096\n")
@@ -1357,27 +1090,29 @@ class TestGetGpuStats(unittest.TestCase):
 
 
 class TestApplyConfig(unittest.TestCase):
-
     def setUp(self):
         self._orig_model = _state.model_name
         self._orig_device = _state.device
         self._orig_compute = _state.compute_type
-        self._orig_wt = _state.use_word_timestamps
-        self._orig_pt = _state.pause_threshold
+        self._orig_browser = _state.cookies_browser
 
     def tearDown(self):
         _state.model_name = self._orig_model
         _state.device = self._orig_device
         _state.compute_type = self._orig_compute
-        _state.use_word_timestamps = self._orig_wt
-        _state.pause_threshold = self._orig_pt
+        _state.cookies_browser = self._orig_browser
 
     def _make_args(self, **kw):
         import argparse
+
         defaults = dict(
-            model="small", device="cpu", compute_type="int8",
-            no_word_timestamps=False, pause_threshold=0.25,
-            config=None, prewarm=False, low_vram=False, port=5001,
+            model="small",
+            device="cpu",
+            compute_type="int8",
+            config=None,
+            prewarm=False,
+            low_vram=False,
+            port=5001,
         )
         defaults.update(kw)
         return argparse.Namespace(**defaults)
@@ -1393,18 +1128,6 @@ class TestApplyConfig(unittest.TestCase):
     def test_sets_compute_type(self):
         _fws._apply_config(self._make_args(compute_type="int8"))
         self.assertEqual(_state.compute_type, "int8")
-
-    def test_no_word_timestamps_flag(self):
-        _fws._apply_config(self._make_args(no_word_timestamps=True))
-        self.assertFalse(_state.use_word_timestamps)
-
-    def test_word_timestamps_on_by_default(self):
-        _fws._apply_config(self._make_args(no_word_timestamps=False))
-        self.assertTrue(_state.use_word_timestamps)
-
-    def test_pause_threshold_set(self):
-        _fws._apply_config(self._make_args(pause_threshold=0.5))
-        self.assertAlmostEqual(_state.pause_threshold, 0.5)
 
     def test_auto_device_resolves(self):
         """'auto' device must resolve to 'cuda' or 'cpu'."""
@@ -1422,17 +1145,16 @@ class TestApplyConfig(unittest.TestCase):
         self.assertEqual(_state.compute_type, "int8")
 
     def test_config_file_overrides_args(self):
-        cfg = {"whisper_model": "base", "pause_threshold": 0.4}
-        with tempfile.NamedTemporaryFile(
-            suffix=".json", mode="w", delete=False
-        ) as f:
+        cfg = {"whisper_model": "base", "cookies_browser": "firefox"}
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as f:
             import json
+
             json.dump(cfg, f)
             cfg_path = f.name
         try:
             _fws._apply_config(self._make_args(model="large-v3", config=cfg_path))
             self.assertEqual(_state.model_name, "base")
-            self.assertAlmostEqual(_state.pause_threshold, 0.4)
+            self.assertEqual(_state.cookies_browser, "firefox")
         finally:
             os.unlink(cfg_path)
 
@@ -1443,6 +1165,7 @@ class TestConfigureLogging(unittest.TestCase):
     def _reset_logging(self):
         """logging.basicConfig is a no-op when handlers already exist; remove them first."""
         import logging
+
         root = logging.root
         for h in root.handlers[:]:
             root.removeHandler(h)
@@ -1451,6 +1174,7 @@ class TestConfigureLogging(unittest.TestCase):
     def test_verbose_sets_debug_level(self):
         import logging
         import argparse
+
         self._reset_logging()
         args = argparse.Namespace(verbose=True)
         with patch.dict(os.environ, {"LOG_LEVEL": ""}):
@@ -1460,6 +1184,7 @@ class TestConfigureLogging(unittest.TestCase):
     def test_non_verbose_sets_warning(self):
         import logging
         import argparse
+
         self._reset_logging()
         args = argparse.Namespace(verbose=False)
         with patch.dict(os.environ, {"LOG_LEVEL": ""}):
@@ -1468,7 +1193,6 @@ class TestConfigureLogging(unittest.TestCase):
 
 
 class TestParseArgs(unittest.TestCase):
-
     def test_defaults(self):
         with patch("sys.argv", ["server"]):
             args = _fws._parse_args()
@@ -1476,7 +1200,6 @@ class TestParseArgs(unittest.TestCase):
         self.assertEqual(args.device, "cuda")
         self.assertEqual(args.compute_type, "float16")
         self.assertEqual(args.port, 5001)
-        self.assertFalse(args.no_word_timestamps)
         self.assertFalse(args.prewarm)
         self.assertFalse(args.low_vram)
 
@@ -1500,10 +1223,11 @@ class TestParseArgs(unittest.TestCase):
             args = _fws._parse_args()
         self.assertTrue(args.prewarm)
 
-    def test_no_word_timestamps_flag(self):
+    def test_removed_word_timestamp_flags_rejected(self):
+        """--no-word-timestamps/--pause-threshold never affected transcription — gone."""
         with patch("sys.argv", ["server", "--no-word-timestamps"]):
-            args = _fws._parse_args()
-        self.assertTrue(args.no_word_timestamps)
+            with self.assertRaises(SystemExit):
+                _fws._parse_args()
 
 
 class TestPrintModelLoadError(unittest.TestCase):
@@ -1511,6 +1235,7 @@ class TestPrintModelLoadError(unittest.TestCase):
 
     def _capture(self, msg: str) -> str:
         import io
+
         buf = io.StringIO()
         with patch("sys.stdout", buf):
             _fws._print_model_load_error(RuntimeError(msg))
@@ -1542,19 +1267,18 @@ class TestPrintModelLoadError(unittest.TestCase):
 
 
 class TestSetLowPriority(unittest.TestCase):
-
     def test_does_not_raise(self):
         """Lowering thread priority is best-effort — must not raise in tests."""
         _fws._set_low_priority()
 
 
 class TestWriteTokenFile(unittest.TestCase):
-
     def test_writes_token_to_file(self):
         with tempfile.TemporaryDirectory() as d:
             token_path = os.path.join(d, ".yume_token")
             _state.API_TOKEN = "test-token-abc123"
             import argparse
+
             _args = argparse.Namespace(port=5001)
 
             # Patch _state.TOKEN_FILE so we know where it writes
@@ -1581,3 +1305,47 @@ class TestWriteTokenFile(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestModelLoadFailure(unittest.TestCase):
+    """A failed model load must be visible, not an endless 'loading'."""
+
+    def setUp(self):
+        self._orig = (_state.model, _state.load_error)
+
+    def tearDown(self):
+        _state.model, _state.load_error = self._orig
+
+    def _health(self):
+        req = MagicMock()
+        req.headers = {"Origin": "chrome-extension://abc"}
+        with (
+            patch.object(_fws, "request", req),
+            patch.object(_fws, "jsonify", lambda d=None, **kw: d),
+            patch.object(_fws._audio, "check_ytdlp", return_value=True),
+        ):
+            return _fws.health()
+
+    def test_loader_thread_publishes_error_instead_of_exiting(self):
+        _state.model, _state.load_error = None, ""
+        args = MagicMock(prewarm=False, port=5001)
+        with (
+            patch.object(_fws, "WhisperModel", side_effect=RuntimeError("CUDA out of memory")),
+            patch.object(_fws, "_set_low_priority"),
+            patch("builtins.print"),
+        ):
+            _fws._load_model(args)  # must not raise SystemExit
+        self.assertIn("out of memory", _state.load_error)
+
+    def test_health_reports_error_status(self):
+        _state.model, _state.load_error = None, "CUDA out of memory"
+        body, code = self._health()
+        self.assertEqual(code, 500)
+        self.assertEqual(body["status"], "error")
+        self.assertEqual(body["error"], "CUDA out of memory")
+
+    def test_health_reports_loading_without_error(self):
+        _state.model, _state.load_error = None, ""
+        body, code = self._health()
+        self.assertEqual(code, 503)
+        self.assertEqual(body["status"], "loading")

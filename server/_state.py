@@ -19,10 +19,12 @@ model_display_name = ""  # Friendly name for custom models (from config)
 device = "cuda"
 compute_type = "float16"
 
+# Set by the model-loader thread when loading fails; /health reports it as
+# status "error" instead of "loading" forever.
+load_error = ""
+
 # Prevent garbage collection of Windows console handler ctypes callback
 _win_console_handler_ref = None
-use_word_timestamps = True
-pause_threshold = 0.25  # seconds of silence to split segments
 
 # ── String constants (SonarCloud S1192 — no duplicated literals) ─────────────
 FFMPEG_PROTOCOL_WHITELIST = "file,http,https,tcp,tls,crypto"
@@ -31,28 +33,14 @@ YT_PLAYER_CLIENT_TV_WEB = "youtube:player_client=tv,web"
 ERR_REQUESTED_FORMAT = "requested format"
 ERR_NO_SUCH_FILE = "no such file"
 
-# ── Subtitle cache ────────────────────────────────────────────────────────────
-subtitle_cache: dict = {}
-SUBTITLE_CACHE_MAX = 2000
-prefetch_lock = threading.Lock()
-
-# ── Full audio cache ──────────────────────────────────────────────────────────
-# { video_id: { "path": str, "duration": float, "timestamp": float } }
-# bounded: max AUDIO_CACHE_MAX entries
-full_audio_cache: dict = {}
-AUDIO_CACHE_MAX = 50
-FULL_AUDIO_TTL = 600  # 10 minutes
-
-# ── Stream URL cache ──────────────────────────────────────────────────────────
+# ── Stream URL cache (yt-dlp --get-url results, for streaming previews) ───────
 # { video_url: {"stream_url": "...", "timestamp": float} }
-# bounded: max STREAM_URL_CACHE_MAX entries (~20 MB max)
 stream_url_cache: dict = {}
 STREAM_URL_CACHE_MAX = 100
 STREAM_URL_TTL = 300  # 5 minutes (YouTube stream URLs expire)
 
 # ── Thread locks ──────────────────────────────────────────────────────────────
-# Individual dict operations are GIL-atomic, but compound ops (check+insert,
-# evict+add) are not.  This lock serialises all cache mutations.
+# Serialises compound mutations of stream_url_cache.
 cache_lock = threading.Lock()
 
 # CRITICAL: Whisper model is NOT thread-safe.  Concurrent transcribe() calls
@@ -67,35 +55,45 @@ model_switch_lock = threading.Lock()
 youtube_auth_method = "cookies"  # "cookies" or "deno"
 cookies_browser = "chrome"
 
-# ── Translation server settings ───────────────────────────────────────────────
+# ── Translation server settings (the server calls the LLM itself) ─────────────
 translation_host = "127.0.0.1"
 translation_port = 5000
 translation_backend = "llamacpp"
-translation_prompt = ""  # Custom prompt forwarded to extension via /health
-romanization_prompt = ""  # Custom romanization prompt forwarded via /health
+translation_model = ""  # required by Ollama/LM Studio; llama.cpp serves one model
+translation_prompt = ""  # custom template with {src}/{tgt}; "" = built-in
+romanization_prompt = ""  # custom template with {src}/{sys}; "" = built-in
+
+# Config file the translation settings come from; re-read when it changes so
+# CLI edits (backend, address, model, prompts) apply without a restart.
+config_file = ""
+config_mtime = 0.0
+
+# ── Durable cache (set in main(): _store.Store) and job manager ───────────────
+store = None
+jobs = None
 
 # ── Session statistics ────────────────────────────────────────────────────────
 server_stats: dict = {
     "start_time": time.time(),
-    "chunks_transcribed": 0,
+    "regions_transcribed": 0,
     "segments_produced": 0,
     "hallucinations_filtered": 0,
     "total_audio_seconds": 0.0,
     "total_whisper_time": 0.0,
     "downloads_completed": 0,
-    "cache_hits": 0,
-    "cache_misses": 0,
+    "lines_translated": 0,
+    "translation_cache_hits": 0,
     "errors": 0,
-    "last_chunk_whisper_time": 0.0,
-    "last_chunk_segments": 0,
+    "last_region_whisper_time": 0.0,
+    "last_region_segments": 0,
 }
 stats_lock = threading.Lock()
 
 # ── Hallucination filter state ────────────────────────────────────────────────
-# Populated via /blacklist/update from the extension popup.
+# Single source of truth for the user blacklist (the CLI and the extension
+# popup both edit it through the server, or this file while it is down).
 user_blacklist: list = []
-# Persistence file (config/blacklist.json) — set in _apply_config. Survives
-# restarts and lets the CLI edit the list while the server is down.
+# Persistence file (config/blacklist.json) — set in _apply_config.
 blacklist_file: str = ""
 
 # ── API token ─────────────────────────────────────────────────────────────────

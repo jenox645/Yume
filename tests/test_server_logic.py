@@ -1,4 +1,5 @@
 """Tests for faster_whisper_server.py — standalone logic (no server/model needed)."""
+
 import sys
 from pathlib import Path
 
@@ -16,6 +17,7 @@ class TestURLValidation:
     def _validate_url(self, url):
         """Local copy of _validate_url for testing without Flask import."""
         from urllib.parse import urlparse
+
         if not url or not isinstance(url, str):
             return False, "Empty or invalid URL"
         url = url.strip()
@@ -116,11 +118,18 @@ class TestYouTubeURLDetection:
             return False
         try:
             from urllib.parse import urlparse
+
             parsed = urlparse(url)
             host = (parsed.hostname or "").lower()
-            yt_domains = {"youtube.com", "www.youtube.com", "youtu.be",
-                          "youtube-nocookie.com", "www.youtube-nocookie.com",
-                          "music.youtube.com", "m.youtube.com"}
+            yt_domains = {
+                "youtube.com",
+                "www.youtube.com",
+                "youtu.be",
+                "youtube-nocookie.com",
+                "www.youtube-nocookie.com",
+                "music.youtube.com",
+                "m.youtube.com",
+            }
             return host in yt_domains or host.endswith(".youtube.com")
         except Exception:
             return False
@@ -197,6 +206,7 @@ class TestVersionConsistency:
     def test_pocket_yume_version_format(self):
         content = Path(__file__).parent.parent.joinpath("pocket_yume.py").read_text(encoding="utf-8")
         import re
+
         match = re.search(r'VERSION\s*=\s*"(\d+\.\d+\.\d+)"', content)
         assert match, "VERSION not found in pocket_yume.py"
         version = match.group(1)
@@ -206,14 +216,15 @@ class TestVersionConsistency:
 
     def test_manifest_version_matches(self):
         import json
+
         content = Path(__file__).parent.parent.joinpath("pocket_yume.py").read_text(encoding="utf-8")
         import re
+
         match = re.search(r'VERSION\s*=\s*"(\d+\.\d+\.\d+)"', content)
         assert match, "VERSION not found in pocket_yume.py"
         py_version = match.group(1)
 
-        manifest = json.loads(
-            Path(__file__).parent.parent.joinpath("extension/manifest.json").read_text()
-        )
-        assert manifest["version"] == py_version, \
+        manifest = json.loads(Path(__file__).parent.parent.joinpath("extension/manifest.json").read_text())
+        assert manifest["version"] == py_version, (
             f"manifest.json ({manifest['version']}) != pocket_yume.py ({py_version})"
+        )
