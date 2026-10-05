@@ -5,9 +5,22 @@ cd /d "%~dp0"
 cls
 echo ============================================================
 echo   POCKET YUME -- Launcher
-echo   AI Subtitles for Japanese Videos
+echo   Local AI subtitles for videos
 echo ============================================================
 echo.
+
+REM Prefer a virtual environment that actually has Yume installed (the setup
+REM wizard recommends "yume-env"): packages installed there are invisible to
+REM the system Python. An empty venv is skipped.
+for %%V in (yume-env venv .venv) do (
+    if exist "%%V\Scripts\python.exe" (
+        "%%V\Scripts\python.exe" -c "import importlib.util,sys; sys.exit(importlib.util.find_spec('faster_whisper') is None)" >nul 2>&1
+        if not errorlevel 1 (
+            set "PY=%%V\Scripts\python.exe"
+            goto :run
+        )
+    )
+)
 
 REM Find Python: try "python" first, then the "py" launcher, which exists
 REM even when "Add to PATH" was left unchecked during installation.

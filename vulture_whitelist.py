@@ -9,20 +9,23 @@ frame         # server/faster_whisper_server.py — required second arg of signa
 
 # Flask route handlers (server/faster_whisper_server.py)
 _security_checks
-_cleanup_request_temps
+_add_cors_headers
 health
 stats
-switch_model
 get_config
+switch_model
 list_translation_models
-prepare
-prepare_direct
-transcribe_url
-transcribe
-clear_cache
-cache_status
-romanize
-romanize_batch
-update_blacklist
+create_job
+get_job
+job_options
+job_export
+library
+library_export
+library_delete
 get_blacklist
-get_hallucination_patterns
+update_blacklist
+blacklist_add
+blacklist_remove
+translation_health
+translation_test
+clear_cache

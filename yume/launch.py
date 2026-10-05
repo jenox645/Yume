@@ -43,25 +43,140 @@ _log = logging.getLogger("pocket_yume")
 _BACKEND_INFO: dict = {}
 _VERSION: str = "0.1.0"
 
-# Estimated VRAM requirements in MB per Whisper model (float16 on GPU)
-_WHISPER_VRAM_MB: dict[str, int] = {
-    "tiny": 1_000,
-    "tiny.en": 1_000,
-    "base": 1_500,
-    "base.en": 1_500,
-    "small": 2_500,
-    "small.en": 2_500,
-    "medium": 5_000,
-    "medium.en": 5_000,
-    "large": 10_000,
-    "large-v1": 10_000,
-    "large-v2": 10_000,
-    "large-v3": 10_000,
-    "large-v3-turbo": 6_000,
-    "distil-large-v3": 6_000,
-    "distil-medium.en": 3_000,
-    "distil-small.en": 1_500,
-}
+# Ports belonging to each server process Yume starts. Only these are freed at
+# shutdown: an Ollama service or a server the user started is never killed.
+_PROC_PORT_KEYS = {"Whisper": "whisper_port", "Translation": "translation_port"}
+
+# Python packages llama-cpp-python's OpenAI server needs (one pinned list,
+# used by the launcher, the setup wizard and the installer).
+LLAMA_SERVER_DEPS = [
+    "uvicorn==0.42.0",
+    "fastapi==0.135.1",
+    "sse-starlette==3.3.3",
+    "starlette-context==0.5.1",
+    "pydantic-settings==2.13.1",
+]
+
+
+def build_server_env() -> dict:
+    """Environment for server processes: Yume's tools/ on PATH, AMD RDNA1 override."""
+    env = os.environ.copy()
+    tp = str(TOOLS_DIR)
+    if tp not in env.get("PATH", ""):
+        env["PATH"] = tp + os.pathsep + env.get("PATH", "")
+    if not IS_WIN and "HSA_OVERRIDE_GFX_VERSION" not in env and detect_gpu().get("has_amd"):
+        try:
+            out = _run(["rocminfo"], timeout=10)
+            if out.returncode == 0:
+                arches = re.findall(r"gfx(\d+)", out.stdout)
+                if any(a in ("1010", "1011", "1012") for a in arches):
+                    env["HSA_OVERRIDE_GFX_VERSION"] = "10.3.0"
+        except Exception as e:
+            _log.debug("[build_server_env] rocm-detect failed: %s", e)
+    return env
+
+
+def resolve_whisper_device(cfg: dict) -> tuple[str, str]:
+    """(device, compute_type) with "auto" resolved for this machine."""
+    dev = cfg["whisper_device"]
+    comp = cfg["whisper_compute_type"]
+    gpu = detect_gpu()
+    if dev == "auto":
+        dev = "cuda" if gpu["has_nvidia"] or (gpu.get("has_amd") and not IS_WIN) else "cpu"
+    if comp == "auto":
+        comp = (
+            "float16"
+            if dev == "cuda" and gpu.get("vram_mb", 0) >= 8000
+            else ("int8_float16" if dev == "cuda" else "int8")
+        )
+    return dev, comp
+
+
+def whisper_command(cfg: dict) -> list | None:
+    """Command line for the Whisper server, or None if the script is missing."""
+    from config import CONFIG_FILE
+
+    ss = SERVER_DIR / "faster_whisper_server.py"
+    if not ss.exists():
+        return None
+    dev, comp = resolve_whisper_device(cfg)
+    cmd = [sys.executable, str(ss), "--model", cfg["whisper_model"], "--device", dev,
+           "--compute-type", comp, "--port", str(cfg["whisper_port"])]  # fmt: skip
+    if CONFIG_FILE.exists():
+        cmd.extend(["--config", str(CONFIG_FILE)])
+    return cmd
+
+
+def llamacpp_command(cfg: dict, gguf_path: str, port: int) -> list:
+    """Command line for the llama.cpp translation server: llama.cpp's own
+    llama-server when installed (prebuilt for the GPU), else llama-cpp-python."""
+    from yume import llama_server
+
+    if llama_server.server_path():
+        gpu_build = llama_server.installed_build().get("variant", "cpu") != "cpu"
+        return llama_server.command(gguf_path, cfg.get("translation_host", "127.0.0.1"), port, gpu_build)
+    cmd = [
+        sys.executable, "-m", "llama_cpp.server", "--model", gguf_path,
+        "--host", cfg.get("translation_host", "127.0.0.1"), "--port", str(port),
+        # Batch translation requests up to ~2k output tokens on top of the
+        # prompt — a 2048 context leaves no room for long sections.
+        "--n_ctx", "4096",
+    ]  # fmt: skip
+    gpu = detect_gpu()
+    if gpu["has_nvidia"] or (gpu["has_amd"] and not IS_WIN):
+        cmd.extend(["--n_gpu_layers", "-1"])
+    return cmd
+
+
+def resolve_gguf(cfg: dict) -> str | None:
+    """Configured GGUF path, or the first model in models/translation/ (saved)."""
+    gp = cfg.get("gguf_model_path", "")
+    if gp and Path(gp).exists():
+        return gp
+    gfs = find_gguf_models()
+    if not gfs:
+        return None
+    from config import save_config
+
+    cfg["gguf_model_path"] = str(gfs[0])
+    save_config(cfg)
+    return str(gfs[0])
+
+
+def _offer_llama_server() -> bool:
+    """When llama-cpp-python would translate on the CPU although a GPU is
+    there, offer llama.cpp's prebuilt GPU server instead (much faster)."""
+    gpu = detect_gpu()
+    if not (gpu["has_nvidia"] or gpu["has_amd"]):
+        return False
+    try:
+        import llama_cpp.llama_cpp as _lib  # type: ignore[import]
+
+        if callable(getattr(_lib, "ggml_backend_cuda_reg", None)):
+            return False  # llama-cpp-python already runs on the GPU
+    except ImportError:
+        pass
+    warn("The translator would run on the CPU (llama-cpp-python has no GPU support here).")
+    info("llama.cpp's own GPU server translates ~10x faster — about 200-700 MB to download.")
+    if not ask_yn("Install it now?", True):
+        return False
+    from yume import llama_server
+
+    return llama_server.install(gpu)
+
+
+def _free_our_ports(cfg: dict, procs: list) -> None:
+    """After stopping our processes, free the ports they held if a child lingers
+    (and the PO-token server the Whisper server started, see stop_bgutil_server)."""
+    if any(name == "Whisper" for name, _p in procs):
+        from yume.ports import stop_bgutil_server
+
+        stop_bgutil_server()
+    for name, _p in procs:
+        key = _PROC_PORT_KEYS.get(name)
+        port = cfg.get(key) if key else None
+        if port and not is_port_free(port):
+            kill_port_process(port, interactive=False)
 
 
 def set_launch_context(backend_info: dict, version: str) -> None:
@@ -127,16 +242,24 @@ def _check_resources(cfg: dict) -> bool:
     whisper_dev = cfg.get("whisper_device", "auto")
     using_nvidia = gpu.get("has_nvidia", False) if whisper_dev in ("auto", "cuda") else False
 
+    whisper_vram = 0
     if using_nvidia:
+        from yume.hardware import WHISPER_MODEL_VRAM_MB
+
         model_name = cfg.get("whisper_model", "large-v3")
-        required_vram = _WHISPER_VRAM_MB.get(model_name, 10_000)
+        required_vram = WHISPER_MODEL_VRAM_MB.get(model_name, 4_500)  # custom paths: assume large
+        if cfg.get("whisper_compute_type", "auto") in ("int8", "int8_float16"):
+            required_vram = int(required_vram * 0.65)
+        whisper_vram = required_vram
         avail_vram = _get_available_vram_mb()
         if avail_vram > 0 and avail_vram < required_vram:
-            issues.append((
-                "vram",
-                f"Whisper '{model_name}' needs ~{required_vram / 1024:.1f} GB VRAM, "
-                f"but only {avail_vram / 1024:.1f} GB is free.",
-            ))
+            issues.append(
+                (
+                    "vram",
+                    f"Whisper '{model_name}' needs ~{required_vram / 1024:.1f} GB VRAM, "
+                    f"but only {avail_vram / 1024:.1f} GB is free.",
+                )
+            )
 
     # ── RAM/VRAM check for GGUF translation model (file size × 1.2) ─────────
     # llama.cpp uses --n_gpu_layers -1 when a GPU is present, so the model
@@ -150,20 +273,27 @@ def _check_resources(cfg: dict) -> bool:
             has_gpu = gpu.get("has_nvidia", False) or gpu.get("has_amd", False)
             if has_gpu:
                 avail_vram_mb = _get_available_vram_mb()
-                if avail_vram_mb > 0 and avail_vram_mb < required_mb:
-                    issues.append((
-                        "vram",
-                        f"Translation model ({Path(gp).name}) needs ~{required_mb / 1024:.1f} GB VRAM, "
-                        f"but only {avail_vram_mb / 1024:.1f} GB is free.",
-                    ))
+                # Both models end up on the same GPU: check them together
+                together = required_mb + whisper_vram
+                if avail_vram_mb > 0 and avail_vram_mb < together:
+                    both = f" (plus ~{whisper_vram / 1024:.1f} GB for Whisper)" if whisper_vram else ""
+                    issues.append(
+                        (
+                            "vram",
+                            f"Translation model ({Path(gp).name}) needs ~{required_mb / 1024:.1f} GB VRAM{both}, "
+                            f"but only {avail_vram_mb / 1024:.1f} GB is free.",
+                        )
+                    )
             else:
                 avail_ram_mb = _get_available_ram_mb()
                 if avail_ram_mb > 0 and avail_ram_mb < required_mb:
-                    issues.append((
-                        "ram",
-                        f"Translation model ({Path(gp).name}) needs ~{required_mb / 1024:.1f} GB RAM, "
-                        f"but only {avail_ram_mb / 1024:.1f} GB is available.",
-                    ))
+                    issues.append(
+                        (
+                            "ram",
+                            f"Translation model ({Path(gp).name}) needs ~{required_mb / 1024:.1f} GB RAM, "
+                            f"but only {avail_ram_mb / 1024:.1f} GB is available.",
+                        )
+                    )
 
     if not issues:
         return True
@@ -261,11 +391,7 @@ def launch_services(cfg: dict) -> None:
                 lh.close()
             except OSError:
                 pass
-        # Verify ports are actually freed
-        for key in ["whisper_port", "translation_port"]:
-            port = cfg.get(key)
-            if port and not is_port_free(port):
-                kill_port_process(port)
+        _free_our_ports(cfg, procs)
 
     try:
         _launch_inner(cfg, procs, lhs)
@@ -319,7 +445,8 @@ def _launch_inner(cfg: dict, procs: list, lhs: list) -> None:
             info(f"Change ports manually in: {C.CYAN}python pocket_yume.py settings{C.RESET}")
             pause()
             return
-    if not is_port_free(wport):
+    bk = cfg.get("translation_backend", "llamacpp")
+    if not existing.get("whisper") and not is_port_free(wport):
         info(f"Port {wport} is busy. Another Yume instance or other app may be using it.")
         wport = ensure_port_free(wport, cfg, "whisper", exclude={tport})
         if wport is None:
@@ -327,7 +454,9 @@ def _launch_inner(cfg: dict, procs: list, lhs: list) -> None:
             info(f"Change the port in: {C.CYAN}python pocket_yume.py settings{C.RESET}")
             pause()
             return
-    if not is_port_free(tport):
+    # Only llama.cpp is started by Yume on the translation port; for Ollama /
+    # LM Studio / custom servers that port is SUPPOSED to be in use.
+    if bk == "llamacpp" and not existing.get("translation") and not is_port_free(tport):
         info(f"Port {tport} is busy. Another Yume instance or other app may be using it.")
         tport = ensure_port_free(tport, cfg, "translation", exclude={wport})
         if tport is None:
@@ -336,33 +465,27 @@ def _launch_inner(cfg: dict, procs: list, lhs: list) -> None:
             pause()
             return
 
+    # Missing server packages: things still run (pypinyin → slower LLM pinyin,
+    # waitress → Flask's dev server), so warn and offer the install, don't block
+    from yume.utils import missing_requirements
+
+    miss = missing_requirements()
+    if miss:
+        warn(f"Missing server packages: {', '.join(miss)}")
+        if ask_yn("Install them now?", True):
+            from yume.installers import install_python_deps
+
+            install_python_deps()
+
     # Pre-flight resource check
     if not _check_resources(cfg):
         return
 
-    # Build PATH with our tools
-    env = os.environ.copy()
-    tp = str(TOOLS_DIR)
-    if tp not in env.get("PATH", ""):
-        env["PATH"] = tp + os.pathsep + env.get("PATH", "")
+    env = build_server_env()
+    if env.get("HSA_OVERRIDE_GFX_VERSION") and "HSA_OVERRIDE_GFX_VERSION" not in os.environ:
+        warn("AMD RDNA1 GPU detected. Setting HSA_OVERRIDE_GFX_VERSION=10.3.0")
+        info("Add 'export HSA_OVERRIDE_GFX_VERSION=10.3.0' to ~/.bashrc to make this permanent.")
 
-    # AMD GPU: auto-detect if HSA_OVERRIDE_GFX_VERSION is needed
-    if not IS_WIN and "HSA_OVERRIDE_GFX_VERSION" not in env:
-        gpu = detect_gpu()
-        if gpu.get("has_amd"):
-            try:
-                out = _run(["rocminfo"], timeout=10)
-                if out.returncode == 0:
-                    arches = re.findall(r"gfx(\d+)", out.stdout)
-                    rdna1 = [a for a in arches if a in ("1010", "1011", "1012")]
-                    if rdna1:
-                        env["HSA_OVERRIDE_GFX_VERSION"] = "10.3.0"
-                        warn(f"AMD RDNA1 GPU detected (gfx{rdna1[0]}). Setting HSA_OVERRIDE_GFX_VERSION=10.3.0")
-                        info("Add 'export HSA_OVERRIDE_GFX_VERSION=10.3.0' to ~/.bashrc to make this permanent.")
-            except Exception as e:
-                _log.debug("[_launch_inner] rocm-detect failed: %s", e)
-
-    bk = cfg.get("translation_backend", "llamacpp")
     bi = _BACKEND_INFO.get(bk, _BACKEND_INFO.get("custom", {"hp": "/health"}))
 
     # --- START TRANSLATION BACKEND ---
@@ -399,27 +522,28 @@ def _start_llamacpp(cfg: dict, procs: list, lhs: list, bi: dict, env: dict, tpor
     """Start llama.cpp translation server."""
     from yume.installers import install_llamacpp_python
 
-    gp = cfg.get("gguf_model_path", "")
-    if not gp or not Path(gp).exists():
-        gfs = find_gguf_models()
-        if gfs:
-            from config import save_config
+    configured = cfg.get("gguf_model_path", "")
+    gp = resolve_gguf(cfg)
+    if gp is None:
+        from yume.utils import GGUF_DIR
 
-            gp = str(gfs[0])
-            cfg["gguf_model_path"] = gp
-            save_config(cfg)
-            info(f"Auto-selected GGUF: {gfs[0].name}")
-        else:
-            from yume.utils import GGUF_DIR
+        error("No .gguf model found in models/translation/")
+        info("Fix: Main Menu → Tools → Download GGUF Model")
+        info(f"Or: place a .gguf file in {GGUF_DIR}")
+        pause()
+        return
+    if gp != configured:
+        info(f"Auto-selected GGUF: {Path(gp).name}")
 
-            error("No .gguf model found in models/translation/")
-            info("Fix: Main Menu → Tools → Download GGUF Model")
-            info(f"Or: place a .gguf file in {GGUF_DIR}")
-            pause()
-            return
+    from yume import llama_server
+
+    native = llama_server.server_path() is not None
+    if not native and _offer_llama_server():
+        native = llama_server.server_path() is not None
 
     try:
-        import llama_cpp  # noqa: F401
+        if not native:
+            import llama_cpp  # noqa: F401
     except ImportError:
         error("llama-cpp-python not installed! This is the translation engine.")
         info(f"You can also install it manually: {C.CYAN}pip install llama-cpp-python{C.RESET}")
@@ -430,26 +554,15 @@ def _start_llamacpp(cfg: dict, procs: list, lhs: list, bi: dict, env: dict, tpor
         return
 
     try:
-        import uvicorn  # noqa: F401
-        import fastapi  # noqa: F401
+        if not native:
+            import uvicorn  # noqa: F401
+            import fastapi  # noqa: F401
     except ImportError:
         warn("Server dependencies missing (uvicorn/fastapi)")
         info("Installing them now...")
         try:
             _run(
-                [
-                    sys.executable,
-                    "-m",
-                    "pip",
-                    "install",
-                    "uvicorn==0.42.0",
-                    "fastapi==0.135.1",
-                    "sse-starlette==3.3.3",
-                    "starlette-context==0.5.1",
-                    "pydantic-settings==2.13.1",
-                    "-q",
-                    "--no-warn-script-location",
-                ],
+                [sys.executable, "-m", "pip", "install", *LLAMA_SERVER_DEPS, "-q", "--no-warn-script-location"],
                 timeout=300,
                 env=env,
             )
@@ -465,11 +578,17 @@ def _start_llamacpp(cfg: dict, procs: list, lhs: list, bi: dict, env: dict, tpor
         success("llama.cpp server already running!")
         return
 
-    kill_port_process(port)
+    if not kill_port_process(port):
+        error(f"Port {port} is still in use — cannot start the translation server.")
+        pause()
+        return
     info(f"Starting llama.cpp server with {Path(gp).name}...")
     gpu = detect_gpu()
     using_gpu_layers = gpu["has_nvidia"] or (gpu["has_amd"] and not IS_WIN)
-    if using_gpu_layers:
+    if native:
+        build = llama_server.installed_build()
+        info(f"Engine: llama-server {build.get('tag', '')} ({build.get('variant', '?')})")
+    elif using_gpu_layers:
         try:
             import llama_cpp.llama_cpp as _lib  # type: ignore[import]
 
@@ -483,23 +602,7 @@ def _start_llamacpp(cfg: dict, procs: list, lhs: list, bi: dict, env: dict, tpor
             warn("Run: python pocket_yume.py setup → reinstall packages to fix this.")
     else:
         info("No supported GPU found — running translation model on CPU")
-    cmd = [
-        sys.executable,
-        "-m",
-        "llama_cpp.server",
-        "--model",
-        gp,
-        "--host",
-        cfg.get("translation_host", "127.0.0.1"),
-        "--port",
-        str(port),
-        "--n_ctx",
-        "2048",
-    ]
-    if gpu["has_nvidia"]:
-        cmd.extend(["--n_gpu_layers", "-1"])
-    elif gpu["has_amd"] and not IS_WIN:
-        cmd.extend(["--n_gpu_layers", "-1"])
+    cmd = llamacpp_command(cfg, gp, port)
 
     lp = LOGS_DIR / "translation_server.log"
     lh = _open_rotating_log("translation_server.log")
@@ -574,71 +677,41 @@ def _start_ollama(cfg: dict, procs: list, env: dict) -> bool:
             return False
     else:
         success("Ollama already running")
+    if not cfg.get("translation_model") or cfg["translation_model"].endswith(".gguf"):
+        # Empty (or a leftover GGUF filename from llama.cpp): Ollama needs a real
+        # model name in every request, so pick the default instead of failing later.
+        from config import save_config
+
+        cfg["translation_model"] = "qwen2.5:7b"
+        save_config(cfg)
+        info("Translation model set to qwen2.5:7b (change it in Settings → Translation settings)")
+    model = cfg["translation_model"]
     ms = check_ollama_models(cfg["translation_host"], cfg["translation_port"])
-    mb = cfg.get("translation_model", "qwen2.5:7b").split(":")[0]
-    if not any(mb in m for m in ms):
-        warn(f"Model {cfg['translation_model']} not found. Pulling...")
-        pull_ollama_model(cfg.get("translation_model", "qwen2.5:7b"))
+    if model not in ms and f"{model}:latest" not in ms:
+        warn(f"Model {model} not found in Ollama. Pulling...")
+        pull_ollama_model(model)
     return True
 
 
 def _start_whisper(cfg: dict, procs: list, lhs: list, env: dict) -> bool:
     """Start Whisper server. Returns False if startup failed."""
-    from config import CONFIG_FILE
-
     ws = check_server(cfg["whisper_host"], cfg["whisper_port"], "/health")
     if ws["up"]:
         success("Whisper already running!")
         return True
 
-    kill_port_process(cfg["whisper_port"])
+    if not kill_port_process(cfg["whisper_port"]):
+        error(f"Port {cfg['whisper_port']} is still in use — cannot start the Whisper server.")
+        pause()
+        return False
     info("Starting Whisper server...")
-    ss = SERVER_DIR / "faster_whisper_server.py"
-    if not ss.exists():
-        from yume.utils import BASE_DIR
-
-        ss = BASE_DIR / "faster_whisper_server.py"
-    if not ss.exists():
-        error("Whisper server script not found in server/ or root")
+    cmd = whisper_command(cfg)
+    if cmd is None:
+        error("Whisper server script not found in server/")
         info("Fix: Re-extract Yume or run Setup again")
         pause()
         return False
-
-    dev = cfg["whisper_device"]
-    comp = cfg["whisper_compute_type"]
-    gpu = detect_gpu()
-    if dev == "auto":
-        if gpu["has_nvidia"]:
-            dev = "cuda"
-        elif gpu.get("has_amd") and not IS_WIN:
-            dev = "cuda"
-        else:
-            dev = "cpu"
-    if comp == "auto":
-        comp = (
-            "float16"
-            if dev == "cuda" and gpu.get("vram_mb", 0) >= 8000
-            else ("int8_float16" if dev == "cuda" else "int8")
-        )
-
-    cmd = [
-        sys.executable,
-        str(ss),
-        "--model",
-        cfg["whisper_model"],
-        "--device",
-        dev,
-        "--compute-type",
-        comp,
-        "--port",
-        str(cfg["whisper_port"]),
-        "--pause-threshold",
-        str(cfg["pause_threshold"]),
-    ]
-    if not cfg.get("word_timestamps"):
-        cmd.append("--no-word-timestamps")
-    if CONFIG_FILE.exists():
-        cmd.extend(["--config", str(CONFIG_FILE)])
+    dev, comp = resolve_whisper_device(cfg)
 
     lp = LOGS_DIR / "whisper_server.log"
     lh = _open_rotating_log("whisper_server.log")
@@ -649,20 +722,29 @@ def _start_whisper(cfg: dict, procs: list, lhs: list, env: dict) -> bool:
     p = subprocess.Popen(cmd, stdout=lh, stderr=subprocess.STDOUT, env=env)
     procs.append(("Whisper", p))
 
+    load_error: dict = {}
+
     def _whisper_ready() -> bool | None:
+        """True = ready, False = keep waiting, None = gave up (exited or load failed)."""
         if p.poll() is not None:
             return None
         st = check_server(cfg["whisper_host"], cfg["whisper_port"], "/health")
+        if st["data"].get("status") == "error":
+            load_error["msg"] = st["data"].get("error") or "unknown error"
+            return None
         return st["up"] and st["data"].get("status") == "ready"
 
     ready = spin_wait(
-        lambda: _whisper_ready() is True,
+        lambda: _whisper_ready() is not False,
         f"Loading Whisper model ({cfg['whisper_model']})...",
         timeout=240,
         interval=2,
     )
-    if p.poll() is not None:
-        error("Whisper server crashed!")
+    if p.poll() is not None or load_error:
+        if load_error:
+            error(f"Whisper failed to load the model: {load_error['msg']}")
+        else:
+            error("Whisper server crashed!")
         crash_log = ""
         try:
             with open(lp, encoding="utf-8", errors="replace") as f:
@@ -743,6 +825,15 @@ def _runtime_menu(cfg: dict, procs: list, lhs: list, bk: str) -> None:
 
     def _stop_all() -> None:
         print(f"\n  {C.YELLOW}Shutting down...{C.RESET}")
+        if not procs:
+            # Servers this menu did not start: if the background service runs
+            # them (one-click start), stop it; otherwise leave them alone.
+            from yume.service import read_state, request_stop
+
+            if read_state()["state"] != "stopped":
+                success("Background Yume stopped" if request_stop() else "Asked background Yume to stop")
+            else:
+                info("These servers were started elsewhere — they keep running.")
         for n, p in procs:
             try:
                 p.terminate()
@@ -759,10 +850,7 @@ def _runtime_menu(cfg: dict, procs: list, lhs: list, bk: str) -> None:
                 lh.close()
             except OSError:
                 pass
-        for port_key in ["whisper_port", "translation_port"]:
-            port = cfg.get(port_key)
-            if port and not is_port_free(port):
-                kill_port_process(port)
+        _free_our_ports(cfg, procs)
 
     def _show_logs() -> None:
         section("Recent Logs")
@@ -773,17 +861,15 @@ def _runtime_menu(cfg: dict, procs: list, lhs: list, bk: str) -> None:
                 try:
                     with open(lp, encoding="utf-8", errors="replace") as f:
                         lines = f.readlines()
+                    lines = lines[-2000:]  # logs reach 5 MB; only the tail matters
                     yume_lines = [
                         ln
                         for ln in lines
                         if "[Yume]" in ln or "error" in ln.lower() or "fail" in ln.lower() or "warn" in ln.lower()
                     ]
                     access_lines = [ln for ln in lines if "HTTP/" in ln and "/health" not in ln]
-                    other_lines = [
-                        ln
-                        for ln in lines
-                        if ln not in yume_lines and ln not in access_lines and "GET /health" not in ln
-                    ]
+                    seen = set(yume_lines) | set(access_lines)
+                    other_lines = [ln for ln in lines if ln not in seen and "GET /health" not in ln]
                     shown = yume_lines[-10:] + access_lines[-5:] + other_lines[-5:]
                     if not shown:
                         shown = lines[-15:]
@@ -802,10 +888,12 @@ def _runtime_menu(cfg: dict, procs: list, lhs: list, bk: str) -> None:
                 dead = [(n, p) for n, p in procs if p.poll() is not None]
                 for name, p in dead:
                     error(f"{name} exited with code {p.returncode}")
-                if ask_yn("Restart crashed server(s)?", default=True):
-                    info("Restarting... (use Launch from main menu for full restart)")
+                info(f"Its log: {C.CYAN}{LOGS_DIR}{C.RESET}")
+                if ask_yn("Stop the other servers and go back to the main menu (choose Launch to restart)?", True):
                     _stop_all()
                     return
+                for item in dead:  # keep going with what still runs; don't ask again
+                    procs.remove(item)
 
             ws_up = check_server(cfg["whisper_host"], cfg["whisper_port"], "/health")["up"]
             ts_up = check_translation_server(cfg["translation_host"], cfg["translation_port"], bi)["up"]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -26,9 +27,6 @@ KiB = 1024
 MiB = 1024**2
 GiB = 1024**3
 
-# Injected at runtime by pocket_yume.py — avoids importing VERSION from there
-VERSION = "0.1.0"
-
 
 def _run(cmd: list, timeout: int = 30, **kw) -> subprocess.CompletedProcess:
     """subprocess.run wrapper: forces UTF-8 encoding to prevent Windows cp1252 crash."""
@@ -37,6 +35,13 @@ def _run(cmd: list, timeout: int = 30, **kw) -> subprocess.CompletedProcess:
     if kw.get("capture_output") or kw.get("stdout") == subprocess.PIPE:
         kw.setdefault("encoding", "utf-8")
         kw.setdefault("errors", "replace")
+        # Decoding as UTF-8 is only half of it: a Python child on a cp932/cp1252
+        # console ENCODES its output in the locale codepage (or crashes on
+        # characters it can't represent). Make Python children write UTF-8 too.
+        env = dict(kw.get("env") or os.environ)
+        env.setdefault("PYTHONUTF8", "1")
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        kw["env"] = env
     if not cmd:
         return subprocess.CompletedProcess(cmd, returncode=127, stdout="", stderr="Empty command")
     try:
@@ -70,34 +75,46 @@ def _try_import(module_name: str) -> bool:
         return False
 
 
+def missing_requirements() -> list[str]:
+    """Pinned server packages (server/requirements.txt) that are not installed,
+    as "name==version" strings. A wrong installed version is not reported: the
+    pins are what setup installs, not a hard runtime requirement."""
+    from importlib import metadata
+
+    req = BASE_DIR / "server" / "requirements.txt"
+    missing = []
+    try:
+        lines = req.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return missing
+    for line in lines:
+        spec = line.split("#", 1)[0].strip()
+        if not spec:
+            continue
+        name = spec.split("==")[0].split(">=")[0].split("[")[0].strip()
+        try:
+            metadata.version(name)
+        except metadata.PackageNotFoundError:
+            missing.append(spec)
+    return missing
+
+
+def hf_hub_dir() -> Path:
+    """HuggingFace hub cache (where faster-whisper models are downloaded)."""
+    if os.environ.get("HF_HUB_CACHE"):
+        return Path(os.environ["HF_HUB_CACHE"])
+    if os.environ.get("HF_HOME"):
+        return Path(os.environ["HF_HOME"]) / "hub"
+    return Path.home() / ".cache" / "huggingface" / "hub"
+
+
 def find_gguf_models() -> list[Path]:
     """Return list of .gguf files in models/translation/."""
     GGUF_DIR.mkdir(parents=True, exist_ok=True)
     return list(GGUF_DIR.glob("*.gguf"))
 
 
-def rotate_logs(max_size_mb: int = 10, keep: int = 3) -> None:
-    """Rotate log files if they exceed max_size_mb. Keep N backups."""
-    for name in ["whisper_server.log", "translation_server.log"]:
-        lp = LOGS_DIR / name
-        if not lp.exists():
-            continue
-        size_mb = lp.stat().st_size / MiB
-        if size_mb < max_size_mb:
-            continue
-        for i in range(keep, 0, -1):
-            old = LOGS_DIR / f"{name}.{i}"
-            new = LOGS_DIR / f"{name}.{i + 1}"
-            if old.exists():
-                if i == keep:
-                    old.unlink()
-                else:
-                    old.rename(new)
-        lp.rename(LOGS_DIR / f"{name}.1")
-        _log.debug("[rotate_logs] Rotated %s (%.1f MB)", name, size_mb)
-
-
-def check_for_updates(version: str = VERSION) -> tuple[str | None, str | None]:
+def check_for_updates(version: str) -> tuple[str | None, str | None]:
     """Check GitHub for newer Yume releases. Returns (latest_version, url) or (None, None)."""
     try:
         req = urllib.request.Request(

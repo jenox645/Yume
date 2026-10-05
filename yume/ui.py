@@ -213,7 +213,13 @@ def enable_ansi() -> None:
 
 
 def clear() -> None:
-    os.system("cls" if IS_WIN else "clear")
+    import subprocess
+
+    if IS_WIN:
+        subprocess.run(["cmd", "/c", "cls"], check=False)  # nosec B603 B607
+    else:
+        sys.stdout.write("\033[2J\033[H")  # ANSI clear + home — no shell, no `clear` binary needed
+        sys.stdout.flush()
 
 
 def tw() -> int:

@@ -90,7 +90,19 @@ def health_check(cfg: dict) -> None:
         except ImportError:
             return (name, False, "not installed")
 
+    def _chk_requirements():
+        from yume.utils import missing_requirements
+
+        miss = missing_requirements()
+        return ("Server packages", not miss, "all installed" if not miss else "missing: " + ", ".join(miss))
+
     def _chk_llama_cuda():
+        from yume import llama_server
+
+        if llama_server.server_path():
+            build = llama_server.installed_build()
+            variant = build.get("variant", "?")
+            return ("Translation engine", True, f"llama-server {build.get('tag', '')} ({variant})")
         gpu = detect_gpu()
         if not (gpu.get("has_nvidia") or gpu.get("has_amd")):
             return None  # not relevant on CPU-only machines
@@ -123,36 +135,50 @@ def health_check(cfg: dict) -> None:
         rows = [
             ("Config loadable", bool(c), "OK" if c else "corrupted"),
             ("Ports different", wp != tp, f"whisper:{wp} translation:{tp}"),
-            (f"Whisper port {wp} free", is_port_free(wp), "available" if is_port_free(wp) else "in use"),
-            (f"Translation port {tp} free", is_port_free(tp), "available" if is_port_free(tp) else "in use"),
         ]
         return rows, c, wp, tp
 
+    def _port_row(label, port, responding, launched_by_yume):
+        """A busy port is only a problem when something OTHER than the expected
+        server holds it (the old check failed whenever Yume was running)."""
+        if is_port_free(port):
+            ok = launched_by_yume  # free is fine if Yume will start it; an external LLM should be up
+            return (f"{label} port {port}", ok, "free — starts on Launch" if ok else "nothing listening")
+        if responding:
+            return (f"{label} port {port}", True, "in use by the running server")
+        pid, name = get_port_process(port)
+        return (f"{label} port {port}", False, f"held by {name or 'unknown'} (PID {pid or '?'}), not by the server")
+
     def _chk_whisper_srv(c, wp):
-        if is_port_free(wp):
-            return None
-        ws = check_server(c.get("whisper_host", "127.0.0.1"), wp, "/health")
-        if ws["up"]:
-            status = ws.get("data", {}).get("status", "unknown")
-            return ("Whisper server responding", True, f"port {wp} — status: {status}")
-        return (
-            "Whisper server responding",
-            False,
-            f"port {wp} in use but /health failed — restart with: python pocket_yume.py launch",
-        )
+        ws = check_server("127.0.0.1", wp, "/health")
+        status = ws["data"].get("status")
+        rows = [_port_row("Whisper", wp, bool(status), True)]
+        if status:
+            ok = status in ("ready", "loading")
+            detail = f"status: {status}" + (f" — {ws['data'].get('error')}" if status == "error" else "")
+            rows.append(("Whisper server responding", ok, detail))
+            if status == "ready":
+                rows.append(_chk_end_to_end())
+        return rows
+
+    def _chk_end_to_end():
+        """Translate a sentence THROUGH the Whisper server, exactly like subtitles do."""
+        from yume.network import server_post
+
+        r = server_post("127.0.0.1", wp, "/translation/test", {"text": "今日はいい天気ですね"}, timeout=150)
+        if r.get("success"):
+            return ("Translation end-to-end", True, f"今日はいい天気ですね → {r.get('translation', '')[:50]}")
+        return ("Translation end-to-end", False, (r.get("error") or "failed")[:90])
 
     def _chk_translation_srv(c, tp):
-        if is_port_free(tp):
-            return None
-        bi = _BI.get(c.get("translation_backend", "llamacpp"), _BI.get("custom", {"hp": "/health"}))
+        bk = c.get("translation_backend", "llamacpp")
+        bi = _BI.get(bk, _BI.get("custom", {"hp": "/health"}))
         ts = check_translation_server(c.get("translation_host", "127.0.0.1"), tp, bi)
+        busy = ts["data"].get("status") == "busy"
+        rows = [_port_row("Translation", tp, ts["up"], bk == "llamacpp")]
         if ts["up"]:
-            return ("Translation server responding", True, f"port {tp} — OK")
-        return (
-            "Translation server responding",
-            False,
-            f"port {tp} in use but not responding — check if your LLM backend is running",
-        )
+            rows.append(("Translation server responding", True, "busy (generating)" if busy else "OK"))
+        return rows
 
     # ── Run all checks in parallel ─────────────────────────────────────────────
     with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
@@ -164,9 +190,13 @@ def health_check(cfg: dict) -> None:
         f_pip = ex.submit(_chk_pip)
         f_fw = ex.submit(_chk_pkg, "faster_whisper", "faster-whisper")
         f_flask = ex.submit(_chk_pkg, "flask", "Flask")
-        f_cors = ex.submit(_chk_pkg, "flask_cors", "Flask-CORS")
-        f_llama = ex.submit(_chk_pkg, "llama_cpp", "llama-cpp-python")
-        f_llama_cuda = ex.submit(_chk_llama_cuda)
+        f_reqs = ex.submit(_chk_requirements)
+        uses_llamacpp = cfg.get("translation_backend", "llamacpp") == "llamacpp"
+        from yume import llama_server
+
+        native = llama_server.server_path() is not None  # llama-server replaces llama-cpp-python
+        f_llama = ex.submit(_chk_pkg, "llama_cpp", "llama-cpp-python") if uses_llamacpp and not native else None
+        f_llama_cuda = ex.submit(_chk_llama_cuda) if uses_llamacpp else None
         f_kakasi = ex.submit(_chk_roma, "pykakasi", "Japanese romaji (kanji→reading)")
         f_pinyin = ex.submit(_chk_roma, "pypinyin", "Chinese pinyin")
         f_config = ex.submit(_chk_config)
@@ -187,11 +217,13 @@ def health_check(cfg: dict) -> None:
         results.append(f_pip.result())
         results.append(f_fw.result())
         results.append(f_flask.result())
-        results.append(f_cors.result())
-        results.append(f_llama.result())
-        llama_cuda = f_llama_cuda.result()
-        if llama_cuda is not None:
-            results.append(llama_cuda)
+        results.append(f_reqs.result())
+        if f_llama is not None:
+            results.append(f_llama.result())
+        if f_llama_cuda is not None:
+            llama_cuda = f_llama_cuda.result()
+            if llama_cuda is not None:
+                results.append(llama_cuda)
 
         roma_results = [f_kakasi.result(), f_pinyin.result()]
         roma_installed = sum(1 for _, ok, detail in roma_results if ok and "not installed" not in detail)
@@ -203,12 +235,8 @@ def health_check(cfg: dict) -> None:
 
         results.extend(config_rows)
 
-        ws_result = f_wsrv.result()
-        if ws_result:
-            results.append(ws_result)
-        ts_result = f_tsrv.result()
-        if ts_result:
-            results.append(ts_result)
+        results.extend(f_tsrv.result())
+        results.extend(f_wsrv.result())
 
     # 7. Server files (fast, no need to parallelize)
     ss = SERVER_DIR / "faster_whisper_server.py"
@@ -254,13 +282,23 @@ def health_check(cfg: dict) -> None:
                     if "yt-dlp" in tool
                     else f"  Or download manually: {C.CYAN}https://ffmpeg.org/download.html{C.RESET}"
                 )
+            elif fname == "Server packages":
+                info(f"{C.BOLD}{fname}{C.RESET} -> {fail_details.get(fname, '')}")
+                info(f"  Install: {C.CYAN}{sys.executable} -m pip install -r server/requirements.txt{C.RESET}")
+                info("  Or: Main Menu → Tools & Fonts → Python Dependencies")
             elif "faster-whisper" in fname or "Flask" in fname or "llama-cpp" in fname:
                 info(f"{C.BOLD}{fname}{C.RESET} -> Run: {C.CYAN}python pocket_yume.py setup{C.RESET}")
-            elif "port" in fname.lower() and "free" in fname.lower():
+            elif " port " in fname:
                 port_num = re.search(r"\d+", fname)
                 pn = port_num.group() if port_num else "?"
-                info(f"{C.BOLD}{fname}{C.RESET} -> Port {pn} in use. Another Yume instance may be running.")
-                info(f"  Run {C.CYAN}python pocket_yume.py launch{C.RESET} to auto-detect a free port.")
+                info(f"{C.BOLD}{fname}{C.RESET} -> {fail_details.get(fname, '')}")
+                info(
+                    f"  Free port {pn} or change it in: {C.CYAN}python pocket_yume.py{C.RESET} → Settings → Server addresses"
+                )
+            elif "end-to-end" in fname:
+                info(f"{C.BOLD}{fname}{C.RESET} -> The Whisper server could not translate through your LLM:")
+                info(f"  {fail_details.get(fname, '')}")
+                info("  Check Settings → Translation settings (backend, address, model name).")
             elif "Whisper server responding" in fname:
                 info(f"{C.BOLD}{fname}{C.RESET} -> Restart: {C.CYAN}python pocket_yume.py launch{C.RESET}")
                 info(f"  Or check logs: {C.CYAN}logs/whisper_server.log{C.RESET}")
@@ -285,7 +323,6 @@ def health_check(cfg: dict) -> None:
             elif "Disk" in fname:
                 info(f"{C.BOLD}{fname}{C.RESET} -> Free up disk space. Yume needs ~5-10 GB for models and tools.")
         print()
-        _ = fail_details  # referenced above for potential future use
 
     # Quick perf estimate
     gpu = detect_gpu()
@@ -356,7 +393,7 @@ def show_status(cfg: dict) -> None:
     for pkg, display in [
         ("faster_whisper", "faster-whisper"),
         ("flask", "Flask"),
-        ("flask_cors", "Flask-CORS"),
+        ("waitress", "Waitress"),
         ("llama_cpp", "llama-cpp-python"),
     ]:
         try:
@@ -530,7 +567,7 @@ def detect_fonts() -> None:
     info("")
     info("To add a custom font that isn't installed system-wide:")
     info("  1. Copy the .ttf or .otf file into the extension/fonts/ folder")
-    info("  2. Open extension/popup.js, find the BUNDLED_FONTS list near the top")
+    info("  2. Open extension/js/bundled-fonts.js and find the BUNDLED_FONTS list")
     info("  3. Add your font: { file: 'MyFont.ttf', name: 'My Font' }")
     info("  4. Reload the extension in chrome://extensions")
     info("  The font will appear with '(bundled)' next to its name in the dropdown")

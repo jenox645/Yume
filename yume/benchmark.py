@@ -7,52 +7,46 @@ import os
 import time
 from pathlib import Path
 
-from yume.hardware import IS_WIN, detect_gpu, recommend_whisper_model
+from yume.hardware import IS_WIN, WHISPER_MODELS, detect_gpu, recommend_whisper_model
 from yume.ui import C, ask_input, ask_yn, error, header, info, pause, section, success, table, warn
 from yume.utils import LOGS_DIR, find_tool, _run
 
 _log = logging.getLogger("pocket_yume")
 
 WHISPER_SAMPLE_RATE = 16000
-KiB = 1024
-GiB = 1024**3
+# Whisper always processes 30 s windows: a 5 s clip costs a whole window, so
+# timing 5 s of audio made every model look ~6x slower than it is.
+TEST_SECONDS = 30
 
-WHISPER_MODELS_INFO = [
-    # (name, params, vram, user-friendly description)
-    ("tiny", "39M params", "~1 GB", "Fastest, low accuracy"),
-    ("base", "74M params", "~1 GB", "Fast, decent accuracy"),
-    ("small", "244M params", "~2 GB", "Good balance of speed and accuracy"),
-    ("medium", "769M params", "~5 GB", "High accuracy, slower"),
-    ("large-v2", "1550M params", "~10 GB", "Very high accuracy"),
-    ("large-v3", "1550M params", "~10 GB", "Best accuracy (recommended if VRAM allows)"),
-    ("large-v3-turbo", "809M params", "~6 GB", "Near-v3 accuracy at 2x speed (best mid-range)"),
-    ("distil-large-v2", "756M params", "~4 GB", "Compressed v2 -- 2x faster, similar accuracy"),
-    ("distil-large-v3", "756M params", "~4 GB", "Compressed v3 -- 2x faster, similar accuracy"),
-]
+# Accuracy order (most accurate first) for the post-benchmark suggestion
+_ACCURACY_RANK = ["large-v3", "large-v2", "large-v3-turbo", "medium", "small", "base", "tiny"]
+
+# (name, params, vram label, description) — derived from the shared table
+WHISPER_MODELS_INFO = [(n, f"{p} params", f"~{v / 1000:g} GB", d) for n, p, v, d in WHISPER_MODELS]
 
 
 def _is_whisper_model_cached(model_name: str) -> bool:
     """Check if a Whisper model is already downloaded in the HuggingFace cache."""
     try:
-        cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
+        from yume.utils import hf_hub_dir
+
+        cache_dir = hf_hub_dir()
         if not cache_dir.exists():
             return False
-        patterns = [
-            f"models--Systran--faster-whisper-{model_name}",
-            f"models--guillaumekln--faster-whisper-{model_name}",
-            f"models--openai--whisper-{model_name}",
-            f"models--mobiuslabsgmbh--faster-whisper-{model_name}",
-        ]
-        for entry in cache_dir.iterdir():
-            for pat in patterns:
-                if pat.lower() in entry.name.lower():
-                    return True
+        # Exact names: a substring test reported "large-v3" as downloaded when
+        # only "large-v3-turbo" was
+        names = {
+            n.lower()
+            for n in (
+                f"models--Systran--faster-whisper-{model_name}",
+                f"models--guillaumekln--faster-whisper-{model_name}",
+                f"models--mobiuslabsgmbh--faster-whisper-{model_name}",
+            )
+        }
+        if any(entry.name.lower() in names for entry in cache_dir.iterdir()):
+            return True
         ct2_cache = Path.home() / ".cache" / "faster_whisper"
-        if ct2_cache.exists():
-            for entry in ct2_cache.iterdir():
-                if model_name in entry.name:
-                    return True
-        return False
+        return ct2_cache.exists() and any(entry.name == model_name for entry in ct2_cache.iterdir())
     except Exception:
         return False
 
@@ -88,7 +82,10 @@ def benchmark_whisper(cfg: dict) -> None:
     info(f"Recommended: {rec} ({reason})")
     print()
 
-    # Generate test audio using ffmpeg (5s of speech-like noise)
+    # Generate test audio with ffmpeg (TEST_SECONDS of tone); always regenerate —
+    # a leftover file from an older version may have a different length
+    test_wav_old = LOGS_DIR / "_benchmark_test.wav"
+    test_wav_old.unlink(missing_ok=True)
     ffmpeg = find_tool("ffmpeg")
     test_wav = LOGS_DIR / "_benchmark_test.wav"
     if ffmpeg:
@@ -100,7 +97,7 @@ def benchmark_whisper(cfg: dict) -> None:
                     "-f",
                     "lavfi",
                     "-i",
-                    "sine=frequency=300:duration=5",
+                    f"sine=frequency=300:duration={TEST_SECONDS}",
                     "-ar",
                     str(WHISPER_SAMPLE_RATE),
                     "-ac",
@@ -119,7 +116,7 @@ def benchmark_whisper(cfg: dict) -> None:
             import wave
 
             sr = WHISPER_SAMPLE_RATE
-            dur = 5
+            dur = TEST_SECONDS
             samples = []
             for i in range(sr * dur):
                 t = i / sr
@@ -130,7 +127,7 @@ def benchmark_whisper(cfg: dict) -> None:
                 wf.setsampwidth(2)
                 wf.setframerate(sr)
                 wf.writeframes(struct.pack(f"<{len(samples)}h", *samples))
-            success("Generated test audio (5s)")
+            success(f"Generated test audio ({TEST_SECONDS}s)")
         except Exception as e:
             error(f"Could not create test audio: {e}")
             pause()
@@ -140,11 +137,7 @@ def benchmark_whisper(cfg: dict) -> None:
     gpu_has = gpu.get("has_nvidia") or gpu.get("has_amd")
     vram = gpu.get("vram_mb", 0) if gpu_has else 0
     available = []
-    for name, params, vram_req, desc in WHISPER_MODELS_INFO:
-        try:
-            req_mb = int(vram_req.replace("~", "").replace("GB", "").strip()) * KiB
-        except (ValueError, AttributeError):
-            req_mb = 0
+    for (name, params, vram_req, desc), (_n, _p, req_mb, _d) in zip(WHISPER_MODELS_INFO, WHISPER_MODELS):
         fits = True
         if gpu_has and vram > 0 and req_mb > vram:
             fits = False
@@ -153,7 +146,7 @@ def benchmark_whisper(cfg: dict) -> None:
         available.append((name, params, vram_req, desc, fits))
 
     info("Select models to benchmark:")
-    info("  'distil' models = compressed versions (same accuracy, 2x faster, half the size)")
+    info("  'distil' models are distilled on English only — they cannot transcribe JA/ZH/KO/RU/AR")
     info("  'turbo' = optimized large-v3 (near-full accuracy at much higher speed)")
     info("  VRAM = your GPU's video memory — models marked [fits] will work on your hardware")
     print()
@@ -243,7 +236,7 @@ def benchmark_whisper(cfg: dict) -> None:
             load_time = time.time() - t0
             success(f"Loaded in {load_time:.1f}s")
 
-            info(f"{C.DIM}Running 3 transcription passes (5s test audio each)...{C.RESET}")
+            info(f"{C.DIM}Running 3 transcription passes ({TEST_SECONDS}s test audio each)...{C.RESET}")
             times = []
             segments_count = 0
             for _ in range(3):
@@ -260,8 +253,8 @@ def benchmark_whisper(cfg: dict) -> None:
                 segments_count = len(seg_list)
 
             median_time = sorted(times)[len(times) // 2]
-            rtf = median_time / 5.0
-            speed = 5.0 / median_time if median_time > 0 else 0
+            rtf = median_time / TEST_SECONDS
+            speed = TEST_SECONDS / median_time if median_time > 0 else 0
 
             results.append(
                 {
@@ -274,7 +267,7 @@ def benchmark_whisper(cfg: dict) -> None:
                     "status": "OK",
                 }
             )
-            success(f"Median: {median_time:.3f}s for 5s audio ({speed:.1f}x realtime)")
+            success(f"Median: {median_time:.3f}s for {TEST_SECONDS}s audio ({speed:.1f}x realtime)")
 
             del model
             try:
@@ -329,7 +322,7 @@ def benchmark_whisper(cfg: dict) -> None:
                         load_time = time.time() - t0
                         success(f"Loaded on CPU in {load_time:.1f}s")
 
-                        info(f"{C.DIM}Running 3 transcription passes (5s test audio each)...{C.RESET}")
+                        info(f"{C.DIM}Running 3 transcription passes ({TEST_SECONDS}s test audio each)...{C.RESET}")
                         cpu_times = []
                         for _ in range(3):
                             t0 = time.time()
@@ -340,19 +333,19 @@ def benchmark_whisper(cfg: dict) -> None:
                             cpu_times.append(time.time() - t0)
 
                         median_time = sorted(cpu_times)[len(cpu_times) // 2]
-                        speed = 5.0 / median_time if median_time > 0 else 0
+                        speed = TEST_SECONDS / median_time if median_time > 0 else 0
                         results.append(
                             {
                                 "model": f"{model_name} (CPU)",
                                 "load_s": round(load_time, 1),
                                 "median_s": round(median_time, 3),
-                                "rtf": round(median_time / 5.0, 3),
+                                "rtf": round(median_time / TEST_SECONDS, 3),
                                 "speed_x": round(speed, 1),
                                 "segments": 0,
                                 "status": "OK",
                             }
                         )
-                        success(f"CPU median: {median_time:.3f}s for 5s audio ({speed:.1f}x realtime)")
+                        success(f"CPU median: {median_time:.3f}s for {TEST_SECONDS}s audio ({speed:.1f}x realtime)")
                         del cpu_model
                     except Exception as e2:
                         error(f"CPU fallback also failed: {str(e2)[:60]}")
@@ -398,7 +391,7 @@ def benchmark_whisper(cfg: dict) -> None:
     # Display results
     print()
     section("Benchmark Results")
-    info(f"Device: {device} | Precision: {compute} | Test: 5s audio, 3 runs (median)")
+    info(f"Device: {device} | Precision: {compute} | Test: {TEST_SECONDS}s audio, 3 runs (median)")
     if gpu.get("has_nvidia"):
         info(f"GPU: {gpu['name']} ({gpu['vram_mb']} MB VRAM)")
     print()
@@ -423,7 +416,7 @@ def benchmark_whisper(cfg: dict) -> None:
             rows.append([r["model"], "-", "-", "-", f"{C.RED}{r['status']}{C.RESET}"])
 
     table(
-        ["Model", "Load", "5s Audio", "Speed", ""],
+        ["Model", "Load", f"{TEST_SECONDS}s Audio", "Speed", ""],
         rows,
         col_styles=[C.CYAN, C.RESET, C.RESET, C.GREEN, C.RESET],
         title="Whisper Benchmark",
@@ -445,10 +438,15 @@ def benchmark_whisper(cfg: dict) -> None:
                 mins_per_min = 60.0 / fastest["speed_x"]
                 info(f"  {C.DIM}→ A 4-minute song would be transcribed in ~{mins_per_min * 4:.1f} seconds{C.RESET}")
 
-            if fastest["model"] != cfg.get("whisper_model"):
+            # Suggest the MOST ACCURATE model that is still comfortably real-time,
+            # not the fastest one (that is always tiny, the least accurate).
+            usable = [r["model"] for r in ok_results if r["speed_x"] >= 5 and r["model"] in _ACCURACY_RANK]
+            pick = min(usable, key=_ACCURACY_RANK.index) if usable else None
+            if pick and pick != cfg.get("whisper_model"):
                 print()
-                if ask_yn(f"Switch to {fastest['model']}?", default=False):
-                    cfg["whisper_model"] = fastest["model"]
+                info(f"Most accurate model running at 5x+ realtime here: {C.BOLD}{pick}{C.RESET}")
+                if ask_yn(f"Switch to {pick}?", default=False):
+                    cfg["whisper_model"] = pick
                     save_config(cfg)
-                    success(f"Config updated to {fastest['model']}")
+                    success(f"Config updated to {pick}")
     pause()

@@ -4,6 +4,7 @@ Tests are designed to run without network access, GPU, or running servers.
 Functions that launch subprocesses, display UI, or read interactive input
 are tested only at the module-import and pure-logic level.
 """
+
 from __future__ import annotations
 
 import socket
@@ -19,34 +20,40 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # yume.utils
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestRun:
     """_run() — subprocess wrapper that never uses shell=True."""
 
     def test_successful_command(self):
         from yume.utils import _run
+
         r = _run([sys.executable, "-c", "print('ok')"])
         assert r.returncode == 0
         assert "ok" in r.stdout
 
     def test_nonexistent_command_returns_127(self):
         from yume.utils import _run
+
         r = _run(["__no_such_binary_xyz__"])
         assert r.returncode == 127
         assert "Not found" in r.stderr
 
     def test_empty_command_returns_127(self):
         from yume.utils import _run
+
         r = _run([])
         assert r.returncode == 127
 
     def test_timeout_returns_124(self):
         from yume.utils import _run
+
         r = _run([sys.executable, "-c", "import time; time.sleep(10)"], timeout=1)
         assert r.returncode == 124
 
     def test_utf8_output_decoded(self):
         """Must not crash on non-ASCII output."""
         from yume.utils import _run
+
         r = _run([sys.executable, "-c", "print('héllo')"])
         assert r.returncode == 0
         assert "h" in r.stdout
@@ -55,27 +62,32 @@ class TestRun:
 class TestTryImport:
     def test_stdlib_module_found(self):
         from yume.utils import _try_import
+
         assert _try_import("os") is True
         assert _try_import("json") is True
 
     def test_missing_module_returns_false(self):
         from yume.utils import _try_import
+
         assert _try_import("__no_such_module_xyz__") is False
 
 
 class TestFindTool:
     def test_returns_none_for_unknown_tool(self):
         from yume.utils import find_tool
+
         assert find_tool("__no_such_tool_xyz__") is None
 
     def test_finds_python_on_path(self):
         """python3 (or equivalent) must be findable via PATH."""
         from yume.utils import find_tool
+
         result = find_tool("python3") or find_tool("python")
         assert result is not None
 
     def test_returns_string_or_none(self):
         from yume.utils import find_tool
+
         r = find_tool("ffmpeg")
         assert r is None or isinstance(r, str)
 
@@ -83,15 +95,18 @@ class TestFindTool:
 class TestPathConstants:
     def test_base_dir_exists(self):
         from yume.utils import BASE_DIR
+
         assert BASE_DIR.exists()
         assert BASE_DIR.is_dir()
 
     def test_tools_dir_is_child_of_base(self):
         from yume.utils import BASE_DIR, TOOLS_DIR
+
         assert TOOLS_DIR.parent == BASE_DIR
 
     def test_gguf_dir_path_correct(self):
         from yume.utils import GGUF_DIR
+
         assert "models" in str(GGUF_DIR)
         assert "translation" in str(GGUF_DIR)
 
@@ -99,11 +114,13 @@ class TestPathConstants:
 class TestFindGgufModels:
     def test_returns_list(self):
         from yume.utils import find_gguf_models
+
         result = find_gguf_models()
         assert isinstance(result, list)
 
     def test_all_results_are_gguf(self):
         from yume.utils import find_gguf_models
+
         for p in find_gguf_models():
             assert p.suffix == ".gguf"
 
@@ -112,6 +129,7 @@ class TestCheckForUpdates:
     def test_returns_two_tuple(self):
         """Must return a 2-tuple regardless of network."""
         from yume.utils import check_for_updates
+
         result = check_for_updates("0.0.0")
         assert isinstance(result, tuple)
         assert len(result) == 2
@@ -119,6 +137,7 @@ class TestCheckForUpdates:
     def test_no_update_when_network_fails(self):
         """If network is unavailable, should return (None, None) silently."""
         from yume.utils import check_for_updates
+
         with patch("urllib.request.urlopen", side_effect=Exception("no network")):
             ver, url = check_for_updates("0.0.0")
             assert ver is None
@@ -126,6 +145,7 @@ class TestCheckForUpdates:
 
     def test_no_update_when_already_latest(self):
         from yume.utils import check_for_updates
+
         fake_data = b'{"tag_name": "v0.0.0", "html_url": "http://example.com"}'
         mock_resp = MagicMock()
         mock_resp.__enter__ = lambda s: s
@@ -137,6 +157,7 @@ class TestCheckForUpdates:
 
     def test_returns_update_when_newer(self):
         from yume.utils import check_for_updates
+
         fake_data = b'{"tag_name": "v9.9.9", "html_url": "http://example.com/rel"}'
         mock_resp = MagicMock()
         mock_resp.__enter__ = lambda s: s
@@ -152,9 +173,11 @@ class TestCheckForUpdates:
 # yume.network
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestSetVersion:
     def test_version_updated(self):
         import yume.network as net
+
         original = net._VERSION
         try:
             net.set_version("1.2.3")
@@ -166,6 +189,7 @@ class TestSetVersion:
 class TestCheckServer:
     def test_returns_dict_with_up_key(self):
         from yume.network import check_server
+
         # Port 1 is privileged and will be refused — always "down"
         result = check_server("127.0.0.1", 1, "/health")
         assert isinstance(result, dict)
@@ -174,6 +198,7 @@ class TestCheckServer:
 
     def test_unreachable_server_returns_up_false(self):
         from yume.network import check_server
+
         result = check_server("127.0.0.1", 19999, "/health")
         assert result["up"] is False
         assert result["data"] == {}
@@ -181,6 +206,7 @@ class TestCheckServer:
     def test_mock_responding_server(self):
         from yume.network import check_server
         import json as _json
+
         fake_body = _json.dumps({"status": "ok"}).encode()
         mock_resp = MagicMock()
         mock_resp.__enter__ = lambda s: s
@@ -196,17 +222,21 @@ class TestCheckServer:
 class TestCheckTranslationServer:
     def test_unreachable_returns_up_false(self):
         from yume.network import check_translation_server
+
         result = check_translation_server("127.0.0.1", 19998)
         assert result["up"] is False
 
     def test_socket_busy_returns_up_true(self):
         """If HTTP fails but socket accepts a connection, server is 'busy'."""
         from yume.network import check_translation_server
+
         # Bind a real socket so the connection succeeds
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
             srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             srv.bind(("127.0.0.1", 0))
-            srv.listen(1)
+            # Backlog > 1: the HTTP probe's connection is never accepted and holds
+            # a slot; with listen(1) Windows refuses the follow-up socket probe.
+            srv.listen(8)
             port = srv.getsockname()[1]
             result = check_translation_server("127.0.0.1", port)
         assert result["up"] is True
@@ -216,6 +246,7 @@ class TestCheckTranslationServer:
 class TestServerGet:
     def test_no_server_returns_none(self):
         from yume.network import server_get
+
         result = server_get("127.0.0.1", 19997, "/health", timeout=1)
         assert result is None
 
@@ -223,6 +254,7 @@ class TestServerGet:
 class TestServerPost:
     def test_no_server_returns_error_dict(self):
         from yume.network import server_post
+
         result = server_post("127.0.0.1", 19996, "/transcribe", data={}, timeout=1)
         assert isinstance(result, dict)
         assert "error" in result
@@ -232,26 +264,32 @@ class TestServerPost:
 # yume.ports
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestIsPortFree:
     def test_invalid_port_zero(self):
         from yume.ports import is_port_free
+
         assert is_port_free(0) is False
 
     def test_invalid_port_negative(self):
         from yume.ports import is_port_free
+
         assert is_port_free(-1) is False
 
     def test_invalid_port_too_large(self):
         from yume.ports import is_port_free
+
         assert is_port_free(65536) is False
 
     def test_invalid_port_string(self):
         from yume.ports import is_port_free
+
         assert is_port_free("abc") is False  # type: ignore[arg-type]
 
     def test_bound_port_is_not_free(self):
         """A port with an open socket should not be free."""
         from yume.ports import is_port_free
+
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind(("127.0.0.1", 0))
@@ -266,6 +304,7 @@ class TestIsPortFree:
         This is extremely unlikely in practice but acknowledged here.
         """
         from yume.ports import is_port_free
+
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(("127.0.0.1", 0))
             port = s.getsockname()[1]
@@ -276,17 +315,20 @@ class TestIsPortFree:
 class TestFindFreePort:
     def test_returns_int_or_none(self):
         from yume.ports import find_free_port
+
         result = find_free_port(10000)
         assert result is None or isinstance(result, int)
 
     def test_returned_port_is_free(self):
         from yume.ports import find_free_port, is_port_free
+
         port = find_free_port(10000)
         if port is not None:
             assert is_port_free(port)
 
     def test_exclude_set_respected(self):
         from yume.ports import find_free_port
+
         # Find two successive ports; exclude the first
         p1 = find_free_port(10100)
         if p1 is not None:
@@ -298,15 +340,18 @@ class TestFindFreePort:
 class TestPortConstants:
     def test_defaults_are_correct(self):
         from yume.ports import DEFAULT_TRANSLATION_PORT, DEFAULT_WHISPER_PORT
+
         assert DEFAULT_TRANSLATION_PORT == 5000
         assert DEFAULT_WHISPER_PORT == 5001
 
     def test_min_port_is_one(self):
         from yume.ports import MIN_PORT
+
         assert MIN_PORT == 1
 
     def test_max_port_is_65535(self):
         from yume.ports import MAX_PORT
+
         assert MAX_PORT == 65535
 
 
@@ -314,19 +359,23 @@ class TestPortConstants:
 # yume.benchmark
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestWhisperModelsCatalogue:
     def test_models_info_is_list(self):
         from yume.benchmark import WHISPER_MODELS_INFO
+
         assert isinstance(WHISPER_MODELS_INFO, list)
         assert len(WHISPER_MODELS_INFO) > 0
 
     def test_each_entry_has_four_fields(self):
         from yume.benchmark import WHISPER_MODELS_INFO
+
         for entry in WHISPER_MODELS_INFO:
             assert len(entry) == 4, f"Expected 4 fields, got {len(entry)}: {entry}"
 
     def test_known_models_present(self):
         from yume.benchmark import WHISPER_MODELS_INFO
+
         names = [entry[0] for entry in WHISPER_MODELS_INFO]
         for model in ("tiny", "base", "small", "large-v3"):
             assert model in names, f"Expected model '{model}' in catalogue"
@@ -335,16 +384,28 @@ class TestWhisperModelsCatalogue:
 class TestIsWhisperModelCached:
     def test_returns_bool(self):
         from yume.benchmark import _is_whisper_model_cached
+
         result = _is_whisper_model_cached("tiny")
         assert isinstance(result, bool)
 
     def test_nonexistent_model_returns_false(self):
         from yume.benchmark import _is_whisper_model_cached
+
         assert _is_whisper_model_cached("__no_such_model_xyz__") is False
+
+    def test_exact_names_only(self, tmp_path, monkeypatch):
+        """large-v3 is not "downloaded" just because large-v3-turbo is."""
+        from yume.benchmark import _is_whisper_model_cached
+
+        (tmp_path / "models--mobiuslabsgmbh--faster-whisper-large-v3-turbo").mkdir()
+        monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+        assert _is_whisper_model_cached("large-v3-turbo") is True
+        assert _is_whisper_model_cached("large-v3") is False
 
     def test_exception_returns_false(self):
         """If the cache lookup raises an OS error, must return False (not crash)."""
         from yume.benchmark import _is_whisper_model_cached
+
         with patch("pathlib.Path.exists", side_effect=OSError("permission denied")):
             result = _is_whisper_model_cached("tiny")
         assert result is False
@@ -354,9 +415,11 @@ class TestIsWhisperModelCached:
 # yume.health
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestSetBackendInfo:
     def test_injection_stores_value(self):
         import yume.health as h
+
         original = h._BI
         try:
             h.set_backend_info({"test_key": "test_val"})
@@ -366,6 +429,7 @@ class TestSetBackendInfo:
 
     def test_injection_replaces_old_value(self):
         import yume.health as h
+
         original = h._BI
         try:
             h.set_backend_info({"a": 1})
@@ -380,9 +444,11 @@ class TestSetBackendInfo:
 # yume.hardware
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestDetectGpu:
     def test_returns_expected_shape(self):
         from yume.hardware import detect_gpu
+
         gpu = detect_gpu()
         assert isinstance(gpu, dict)
         for key in ("has_nvidia", "has_amd", "name", "vram_mb", "vendor"):
@@ -390,11 +456,13 @@ class TestDetectGpu:
 
     def test_has_nvidia_is_bool(self):
         from yume.hardware import detect_gpu
+
         gpu = detect_gpu()
         assert isinstance(gpu["has_nvidia"], bool)
 
     def test_vram_mb_is_int(self):
         from yume.hardware import detect_gpu
+
         gpu = detect_gpu()
         assert isinstance(gpu["vram_mb"], int)
 
@@ -402,6 +470,7 @@ class TestDetectGpu:
 class TestDetectRamGb:
     def test_returns_positive_float(self):
         from yume.hardware import detect_ram_gb
+
         ram = detect_ram_gb()
         assert isinstance(ram, float)
         assert ram > 0
@@ -409,12 +478,14 @@ class TestDetectRamGb:
     def test_at_least_1gb(self):
         """Any machine running these tests should have ≥ 1 GB RAM."""
         from yume.hardware import detect_ram_gb
+
         assert detect_ram_gb() >= 1.0
 
 
 class TestDiskFreeGb:
     def test_returns_positive_float(self):
         from yume.hardware import disk_free_gb
+
         free = disk_free_gb()
         assert isinstance(free, float)
         assert free >= 0.0
@@ -423,6 +494,7 @@ class TestDiskFreeGb:
 class TestRecommendWhisperModel:
     def test_returns_two_tuple(self):
         from yume.hardware import detect_gpu, recommend_whisper_model
+
         gpu = detect_gpu()
         model, reason = recommend_whisper_model(gpu)
         assert isinstance(model, str)
@@ -432,6 +504,7 @@ class TestRecommendWhisperModel:
 
     def test_cpu_mode_picks_small_or_base(self):
         from yume.hardware import recommend_whisper_model
+
         cpu_gpu = {"has_nvidia": False, "has_amd": False, "vram_mb": 0, "name": None, "vendor": "none"}
         model, _ = recommend_whisper_model(cpu_gpu)
         assert model in ("tiny", "base", "small"), f"Expected small model for CPU, got {model}"
@@ -441,9 +514,11 @@ class TestRecommendWhisperModel:
 # yume.setup
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestSetSetupContext:
     def test_injection_stores_values(self):
         import yume.setup as s
+
         original_bi = s._BACKEND_INFO
         original_models = s._MODELS_DIR
         original_gguf = s._GGUF_DIR
@@ -465,9 +540,11 @@ class TestSetSetupContext:
 # yume.launch
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestSetLaunchContext:
     def test_injection_stores_values(self):
         import yume.launch as lnch
+
         original_bi = lnch._BACKEND_INFO
         original_ver = lnch._VERSION
         try:
@@ -483,33 +560,157 @@ class TestSetLaunchContext:
 # yume.menus — module-level injection
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestMenusSetBackendInfo:
     def test_injection_stores_dict(self):
         import yume.menus as m
-        original = m._BI
+        from yume.menus import _shared
+
+        original = _shared.BI
         try:
             m.set_backend_info({"x": 42})
-            assert m._BI["x"] == 42
+            assert _shared.BI["x"] == 42  # every menu module reads it from here
         finally:
-            m._BI = original
+            _shared.BI = original
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # yume.ui — pure helpers (no terminal I/O)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestColourConstants:
     """Test that yume.ui.C colour/style constants are properly defined."""
 
     def test_colour_constants_are_strings(self):
         from yume.ui import C
+
         assert isinstance(C.RED, str)
         assert isinstance(C.GREEN, str)
         assert isinstance(C.RESET, str)
 
     def test_colour_constants_non_empty(self):
         from yume.ui import C
+
         # Codes are set at import time — at least one should be non-empty
         # (empty only if the terminal doesn't support ANSI)
         for attr in ("RED", "GREEN", "RESET", "BOLD"):
             assert hasattr(C, attr)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# yume.network — download integrity
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class _FakeResp:
+    def __init__(self, body: bytes, length: bool = True):
+        self._body = body
+        self.headers = {"content-length": str(len(body))} if length else {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self, n=-1):
+        out, self._body = (self._body, b"") if n < 0 else (self._body[:n], self._body[n:])
+        return out
+
+
+class TestDownloadIntegrity:
+    SHA_A = "a" * 64
+
+    def _sums(self, text):
+        from yume.network import fetch_published_sha256
+
+        with patch("urllib.request.urlopen", return_value=_FakeResp(text.encode())):
+            return fetch_published_sha256("https://x/sums", "yt-dlp.exe")
+
+    def test_parses_sha256sums_list(self):
+        assert self._sums(f"{'b' * 64}  yt-dlp_linux\n{self.SHA_A}  yt-dlp.exe\n") == self.SHA_A
+
+    def test_parses_powershell_get_filehash_output(self):
+        # Deno's Windows *.sha256sum is PowerShell Format-List output
+        text = f"\nAlgorithm : SHA256\nHash      : {self.SHA_A.upper()}\nPath      : D:/a/deno.zip\n"
+        assert self._sums(text) == self.SHA_A
+
+    def test_ambiguous_list_without_name_returns_none(self):
+        assert self._sums(f"{'b' * 64}  other1\n{'c' * 64}  other2\n") is None
+
+    def test_mismatch_deletes_file_and_fails(self, tmp_path):
+        import hashlib
+
+        from yume.network import download_file
+
+        body = b"binary-content"
+        dest = tmp_path / "tool.exe"
+        with patch("urllib.request.urlopen", return_value=_FakeResp(body)):
+            assert download_file("https://x/tool.exe", dest, "t", sha256="0" * 64) is False
+        assert not dest.exists() and not (tmp_path / "tool.exe.part").exists()
+        with patch("urllib.request.urlopen", return_value=_FakeResp(body)):
+            assert download_file("https://x/tool.exe", dest, "t", sha256=hashlib.sha256(body).hexdigest()) is True
+        assert dest.read_bytes() == body
+
+    def test_truncated_download_never_lands(self, tmp_path):
+        from yume.network import download_file
+
+        class Short(_FakeResp):
+            def __init__(self):
+                super().__init__(b"12345")
+                self.headers = {"content-length": "999"}
+
+        dest = tmp_path / "model.gguf"
+        with patch("urllib.request.urlopen", return_value=Short()):
+            assert download_file("https://x/model.gguf", dest, "m") is False
+        assert not dest.exists()
+
+
+class TestYumeProcessDetection:
+    """Only Yume's own servers are killed without asking (CLAUDE.md)."""
+
+    def test_unrelated_python_is_not_yume(self):
+        from yume import ports
+
+        with patch.object(ports, "_process_cmdline", return_value="python -m flask run --port 5000"):
+            assert ports.is_yume_process(123, "python.exe") is False
+
+    def test_yume_python_servers(self):
+        from yume import ports
+
+        for cmd in ("python server/faster_whisper_server.py --port 5001", "python -m llama_cpp.server --model x"):
+            with patch.object(ports, "_process_cmdline", return_value=cmd):
+                assert ports.is_yume_process(123, "python.exe") is True
+
+    def test_backend_binaries_and_others(self):
+        from yume import ports
+
+        assert ports.is_yume_process(1, "ollama.exe") is True
+        assert ports.is_yume_process(1, "ControlCenter") is False
+        assert ports.is_yume_process(1, None) is False
+
+    def test_kill_refuses_unrelated_python_non_interactive(self):
+        from yume import ports
+
+        with (
+            patch.object(ports, "is_port_free", return_value=False),
+            patch.object(ports, "get_port_process", return_value=(4242, "python.exe")),
+            patch.object(ports, "_process_cmdline", return_value="python my_app.py"),
+            patch("yume.utils._run") as run,
+        ):
+            assert ports.kill_port_process(5000, interactive=False) is False
+            run.assert_not_called()
+
+    def test_listener_detected_by_connect(self):
+        import socket
+
+        from yume.ports import is_port_free
+
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        try:
+            assert is_port_free(srv.getsockname()[1]) is False
+        finally:
+            srv.close()

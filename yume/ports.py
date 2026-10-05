@@ -8,7 +8,8 @@ import socket as _socket
 import sys
 import time
 
-from yume.ui import C, ask_arrow, ask_input, error, info, success, warn
+from config import DEFAULT_TRANSLATION_PORT, DEFAULT_WHISPER_PORT
+from yume.ui import C, ask_arrow, ask_input, ask_yn, error, info, success, warn
 
 _log = logging.getLogger("pocket_yume")
 
@@ -19,13 +20,54 @@ MAX_PORT = 65535
 FIRST_UNPRIVILEGED_PORT = 1024
 IANA_EPHEMERAL_START = 49152
 
-DEFAULT_TRANSLATION_PORT = 5000
-DEFAULT_WHISPER_PORT = 5001
+# What Yume itself runs on its ports. Ollama / llama-server are their own
+# binaries; Whisper and llama-cpp-python are Python, and "python" alone is not
+# enough — the user's own Flask app or notebook on port 5000 is Python too — so
+# a Python process must also have one of Yume's scripts on its command line.
+# Anything else (e.g. macOS AirPlay Receiver on 5000) is never killed silently.
+_YUME_PROCESS_HINTS = ("llama", "ollama")
+_YUME_CMDLINE_HINTS = ("faster_whisper_server", "llama_cpp.server", "pocket_yume")
+
+
+def _process_cmdline(pid: int) -> str:
+    """Full command line of a process ("" if unknown)."""
+    from yume.utils import _run
+
+    try:
+        if IS_WIN:
+            r = _run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                 f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}').CommandLine"],
+                timeout=20,
+            )  # fmt: skip
+        else:
+            r = _run(["ps", "-p", str(int(pid)), "-o", "args="], timeout=5)
+        return (r.stdout or "").strip() if r.returncode == 0 else ""
+    except Exception as e:
+        _log.debug("[_process_cmdline] %s", e)
+        return ""
+
+
+def is_yume_process(pid: int, name: str | None) -> bool:
+    label = (name or "").lower()
+    if any(h in label for h in _YUME_PROCESS_HINTS):
+        return True
+    if "python" in label:
+        cmd = _process_cmdline(pid).lower()
+        return any(h in cmd for h in _YUME_CMDLINE_HINTS)
+    return False
 
 
 def is_port_free(port: int, host: str = "127.0.0.1") -> bool:
     if not isinstance(port, int) or port < 1 or port > 65535:
         return False
+    # Something accepting connections means busy, even when bind() below would
+    # succeed (Windows lets 127.0.0.1 bind next to a listener on 0.0.0.0).
+    try:
+        with _socket.create_connection((host, port), timeout=0.3):
+            return False
+    except OSError:
+        pass
     s = None
     try:
         s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
@@ -77,7 +119,9 @@ def get_port_process(port: int) -> tuple[int | None, str | None]:
                                     break
                         return pid, name
         else:
-            r = _run(["lsof", "-ti", f":{port}"], timeout=10)
+            # LISTEN only: plain "lsof -ti :PORT" also lists CLIENTS connected to
+            # the port (e.g. the browser), which would then be killed.
+            r = _run(["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"], timeout=10)
             if r.returncode == 0 and r.stdout and r.stdout.strip():
                 pid_str = r.stdout.strip().split("\n")[0].strip()
                 if pid_str.isdigit():
@@ -99,27 +143,32 @@ def get_port_process(port: int) -> tuple[int | None, str | None]:
     return None, None
 
 
-def kill_port_process(port: int) -> bool:
-    """Kill whatever process is using a port. Returns True if freed."""
+def kill_port_process(port: int, interactive: bool = True) -> bool:
+    """Kill the process listening on a port. Returns True if freed.
+
+    Only processes that look like Yume's own servers are killed without asking.
+    Anything else is killed only after the user confirms (interactive=True);
+    with interactive=False it is left alone.
+    """
     from yume.utils import _run
 
+    if is_port_free(port):
+        return True
     pid, name = get_port_process(port)
     if pid is None:
-        if not IS_WIN:
-            try:
-                r = _run(["fuser", f"{port}/tcp"], timeout=5)
-                if r.returncode == 0 and r.stdout.strip():
-                    for p in r.stdout.strip().split():
-                        p = p.strip()
-                        if p.isdigit():
-                            _run(["kill", "-9", p], timeout=5)
-                    time.sleep(0.5)
-                    if is_port_free(port):
-                        success(f"Freed port {port}")
-                        return True
-            except Exception as e:
-                _log.debug("[kill_port_process] fuser-kill failed: %s", e)
+        warn(f"Port {port} is busy but its owner could not be identified — not killing anything.")
         return False
+
+    label = name or "unknown process"
+    if not is_yume_process(pid, name):
+        if not interactive:
+            warn(f"Port {port} is used by {label} (PID {pid}) — leaving it alone.")
+            return False
+        warn(f"Port {port} is used by {C.BOLD}{label}{C.RESET} (PID {pid}), which is not a Yume server.")
+        if not ask_yn(f"Kill {label} to free port {port}?", False):
+            info("Left it running. Change the port in Settings → Server addresses.")
+            return False
+
     try:
         if IS_WIN:
             _run(["taskkill", "/F", "/PID", str(pid)], timeout=10)
@@ -127,15 +176,35 @@ def kill_port_process(port: int) -> bool:
             _run(["kill", "-9", str(pid)], timeout=10)
         time.sleep(1)
         if is_port_free(port):
-            info(f"Killed {name or 'process'} (PID {pid}) on port {port}")
+            info(f"Killed {label} (PID {pid}) on port {port}")
             return True
-        if not IS_WIN:
-            _run(["fuser", "-k", f"{port}/tcp"], timeout=5)
-            time.sleep(0.5)
         return is_port_free(port)
     except Exception as e:
         warn(f"Could not kill PID {pid}: {e}")
         return False
+
+
+BGUTIL_PORT = 4416  # PO-token server (Deno) the Whisper server starts for YouTube auth
+
+
+def stop_bgutil_server() -> None:
+    """Stop the Deno PO-token server after stopping the Whisper server. The
+    Whisper server stops it at exit — but not when it is terminated, which is
+    how Yume stops it (TerminateProcess on Windows skips exit handlers)."""
+    from yume.utils import _run
+
+    if is_port_free(BGUTIL_PORT):
+        return
+    pid, name = get_port_process(BGUTIL_PORT)
+    if not pid or "deno" not in (name or "").lower():
+        return  # not ours
+    try:
+        if IS_WIN:
+            _run(["taskkill", "/F", "/PID", str(pid)], timeout=10)
+        else:
+            _run(["kill", str(pid)], timeout=10)
+    except Exception as e:
+        _log.debug("[stop_bgutil_server] %s", e)
 
 
 def ensure_port_free(port: int, cfg: dict, key_prefix: str, exclude: set | None = None) -> int | None:
@@ -177,6 +246,8 @@ def ensure_port_free(port: int, cfg: dict, key_prefix: str, exclude: set | None 
             cfg[f"{key_prefix}_port"] = new_port
             save_config(cfg)
             success(f"Reassigned to port {new_port}")
+            if key_prefix == "whisper":
+                warn(f"Set the Whisper port to {new_port} in the browser extension popup (Server Settings) too.")
             return new_port
         error("No free port found")
         return None

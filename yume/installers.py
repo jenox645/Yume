@@ -28,6 +28,41 @@ _pip_venv_warned = False
 # Download URLs are supplied by pocket_yume at runtime to avoid duplication
 _DOWNLOAD_URLS: dict = {}
 
+# Published checksum files next to "latest" release assets. Verified when
+# available; a mismatch aborts the install. (Same origin as the binary, so this
+# guards against corrupted/truncated downloads, not a compromised release.)
+_YTDLP_SUMS = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS"
+_BTBN_SUMS = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/checksums.sha256"
+
+
+def _expected_sha256(url: str) -> str | None:
+    """Published SHA-256 for a tool download URL, or None if none is published."""
+    from yume.network import fetch_published_sha256
+
+    name = url.rsplit("/", 1)[-1]
+    if "github.com/yt-dlp/yt-dlp/" in url:
+        sums = _YTDLP_SUMS
+    elif "github.com/BtbN/FFmpeg-Builds/" in url:
+        sums = _BTBN_SUMS
+    elif "github.com/denoland/deno/" in url:
+        sums = url + ".sha256sum"
+    else:
+        return None
+    sha = fetch_published_sha256(sums, name)
+    if sha is None:
+        warn(f"Could not fetch the published checksum for {name} — downloading without verification.")
+    return sha
+
+
+def _download_verified(key: str, dest, label: str) -> bool:
+    from yume.network import download_file
+
+    url = _DOWNLOAD_URLS.get(key, "")
+    sha = _expected_sha256(url) if url else None
+    if sha:
+        info(f"{C.DIM}Verifying against the published SHA-256 checksum{C.RESET}")
+    return download_file(url, dest, label, sha256=sha)
+
 
 def _safe_extractall(zf: zipfile.ZipFile, target_dir: "os.PathLike[str]") -> None:
     """Extract zip archive with zip-slip path-traversal protection."""
@@ -40,7 +75,7 @@ def _safe_extractall(zf: zipfile.ZipFile, target_dir: "os.PathLike[str]") -> Non
             member_resolved.relative_to(target_resolved)
         except ValueError as exc:
             raise ValueError(f"Unsafe path in archive member: {member!r}") from exc
-    zf.extractall(target_dir)
+    zf.extractall(target_dir)  # nosec B202 — every member validated above
 
 
 def set_download_urls(urls: dict) -> None:
@@ -80,7 +115,9 @@ def _check_pip() -> bool:
         if IS_WIN and sys.version_info >= (3, 13):
             info(f"  {C.DIM}Python {sys.version_info.major}.{sys.version_info.minor} may lack prebuilt CUDA wheels.")
             info(f"  {C.DIM}Use Python 3.12 for guaranteed CUDA support:{C.RESET}")
-            info(f"  {C.CYAN}py -3.12 -m venv yume-env{C.RESET}  {C.DIM}(install 3.12 from python.org if missing){C.RESET}")
+            info(
+                f"  {C.CYAN}py -3.12 -m venv yume-env{C.RESET}  {C.DIM}(install 3.12 from python.org if missing){C.RESET}"
+            )
             info(f"  {C.CYAN}yume-env\\Scripts\\activate{C.RESET}")
         else:
             info(f"  {sys.executable} -m venv yume-env")
@@ -142,11 +179,10 @@ def _install_build_tools() -> bool:
 
 
 def install_ytdlp() -> bool:
-    from yume.network import download_file
 
     TOOLS_DIR.mkdir(parents=True, exist_ok=True)
     dest = TOOLS_DIR / ("yt-dlp.exe" if IS_WIN else "yt-dlp")
-    ok = download_file(_DOWNLOAD_URLS.get("yt-dlp", ""), dest, "yt-dlp")
+    ok = _download_verified("yt-dlp", dest, "yt-dlp")
     if ok and not IS_WIN:
         os.chmod(dest, UNIX_EXEC_MODE)
     return ok
@@ -158,7 +194,7 @@ def install_ffmpeg() -> bool:
     TOOLS_DIR.mkdir(parents=True, exist_ok=True)
     if IS_WIN:
         zp = TOOLS_DIR / "ffmpeg.zip"
-        if not download_file(_DOWNLOAD_URLS.get("ffmpeg", ""), zp, "FFmpeg"):
+        if not _download_verified("ffmpeg", zp, "FFmpeg"):
             return False
         print(f"  {C.CYAN}...{C.RESET}  Extracting...", end="", flush=True)
         try:
@@ -187,7 +223,7 @@ def install_ffmpeg() -> bool:
 
     elif IS_LIN:
         tp = TOOLS_DIR / "ffmpeg.tar.xz"
-        if not download_file(_DOWNLOAD_URLS.get("ffmpeg", ""), tp, "FFmpeg"):
+        if not _download_verified("ffmpeg", tp, "FFmpeg"):
             return False
         print(f"  {C.CYAN}...{C.RESET}  Extracting...", end="", flush=True)
         try:
@@ -219,7 +255,7 @@ def install_ffmpeg() -> bool:
             return False
         try:
             with zipfile.ZipFile(zp) as zf:
-                _safe_extractall(zf, TOOLS_DIR)
+                _safe_extractall(zf, TOOLS_DIR)  # nosec B202 — zip-slip checked inside
             zp.unlink(missing_ok=True)
             for b in (TOOLS_DIR / "ffmpeg", TOOLS_DIR / "ffprobe"):
                 if b.exists():
@@ -235,11 +271,11 @@ def install_deno() -> bool:
 
     TOOLS_DIR.mkdir(parents=True, exist_ok=True)
     zp = TOOLS_DIR / "deno.zip"
-    if not download_file(_DOWNLOAD_URLS.get("deno", ""), zp, "Deno"):
+    if not _download_verified("deno", zp, "Deno"):
         return False
     try:
         with zipfile.ZipFile(zp) as zf:
-            _safe_extractall(zf, TOOLS_DIR)
+            _safe_extractall(zf, TOOLS_DIR)  # nosec B202 — zip-slip checked inside
         zp.unlink(missing_ok=True)
         de = TOOLS_DIR / f"deno{EXE}"
         if de.exists() and not IS_WIN:
@@ -249,13 +285,17 @@ def install_deno() -> bool:
         error(f"Failed: {e}")
         return False
 
-    info("Installing YouTube PO token plugin (bgutil-ytdlp-pot-provider)...")
+    info("Installing YouTube PO token plugin (bgutil-ytdlp-pot-provider) + yt-dlp (pip)...")
     info(f"{C.DIM}This plugin uses Deno to solve YouTube's bot-detection challenges.{C.RESET}")
+    info(f"{C.DIM}yt-dlp is left unpinned on purpose: YouTube changes break old versions within weeks.{C.RESET}")
     try:
         r = _run(
-            [sys.executable, "-m", "pip", "install", "-q", "--no-warn-script-location", "bgutil-ytdlp-pot-provider"],
-            timeout=120,
-        )
+            [
+                sys.executable, "-m", "pip", "install", "-q", "--no-warn-script-location", "-U",
+                "yt-dlp", "bgutil-ytdlp-pot-provider==1.3.1",
+            ],
+            timeout=180,
+        )  # fmt: skip
         if r.returncode == 0:
             success("PO token plugin installed")
         else:
@@ -276,7 +316,7 @@ def install_deno() -> bool:
         if download_file(zip_url, zip_path, "bgutil server"):
             try:
                 with zipfile.ZipFile(zip_path) as zf:
-                    _safe_extractall(zf, TOOLS_DIR)
+                    _safe_extractall(zf, TOOLS_DIR)  # nosec B202 — zip-slip checked inside
                 zip_path.unlink(missing_ok=True)
                 extracted = TOOLS_DIR / "bgutil-ytdlp-pot-provider-1.3.1"
                 if extracted.exists():
@@ -355,7 +395,8 @@ def install_ollama() -> bool:
             if not download_file(_DOWNLOAD_URLS.get("ollama", ""), script, "Ollama install script"):
                 return False
             script.chmod(UNIX_EXEC_MODE)
-            r = _run(["bash", str(script)], timeout=300)
+            # Not captured: the script asks for the sudo password
+            r = _run(["bash", str(script)], timeout=900, capture_output=False)
             script.unlink(missing_ok=True)
             return r.returncode == 0
         except Exception as e:
@@ -370,16 +411,10 @@ def install_python_deps() -> bool:
     if not _check_pip():
         return False
 
-    SERVER_DIR = BASE_DIR / "server"
-    req = SERVER_DIR / "requirements.txt"
+    req = BASE_DIR / "server" / "requirements.txt"
     if not req.exists():
-        req = BASE_DIR / "requirements.txt"
-    if not req.exists():
-        SERVER_DIR.mkdir(parents=True, exist_ok=True)
-        req.write_text(
-            "faster-whisper==1.2.1\nflask==3.1.3\nwaitress==3.0.2\nnumpy==2.4.3\n"
-            "pykakasi==2.3.0\npypinyin==0.55.0\nuvicorn==0.34.3\nfastapi==0.115.12\n"
-        )
+        error(f"{req} is missing — re-extract Yume.")
+        return False
 
     if IS_WIN and not _has_build_tools():
         warn("C++ build tools not detected.")
@@ -498,6 +533,10 @@ def install_llamacpp_python() -> bool:
                     "install",
                     "llama-cpp-python",
                     "--force-reinstall",
+                    # Without --only-binary pip falls back to PyPI's source package
+                    # when the CUDA index has no wheel for this Python, and spends
+                    # ~10 minutes compiling a CPU-only build before we notice.
+                    "--only-binary=llama-cpp-python",
                     "--extra-index-url",
                     "https://abetlen.github.io/llama-cpp-python/whl/cu124",
                     "-q",
@@ -510,8 +549,7 @@ def install_llamacpp_python() -> bool:
                 [
                     sys.executable,
                     "-c",
-                    "from llama_cpp import llama_cpp as l; "
-                    "print(hasattr(l, 'ggml_backend_cuda_reg'))",
+                    "from llama_cpp import llama_cpp as l; print(hasattr(l, 'ggml_backend_cuda_reg'))",
                 ],
                 timeout=15,
             )
@@ -585,6 +623,7 @@ def install_llamacpp_python() -> bool:
                 "pip",
                 "install",
                 "llama-cpp-python",
+                "--only-binary=llama-cpp-python",
                 "--extra-index-url",
                 "https://abetlen.github.io/llama-cpp-python/whl/cpu",
                 "-q",
@@ -602,22 +641,12 @@ def install_llamacpp_python() -> bool:
             )
 
     if installed:
+        from yume.launch import LLAMA_SERVER_DEPS
+
         info("Installing server dependencies (uvicorn, fastapi)...")
         try:
             r = _run(
-                [
-                    sys.executable,
-                    "-m",
-                    "pip",
-                    "install",
-                    "uvicorn==0.42.0",
-                    "fastapi==0.135.1",
-                    "sse-starlette==3.3.3",
-                    "starlette-context==0.5.1",
-                    "pydantic-settings==2.13.1",
-                    "-q",
-                    "--no-warn-script-location",
-                ],
+                [sys.executable, "-m", "pip", "install", *LLAMA_SERVER_DEPS, "-q", "--no-warn-script-location"],
                 timeout=300,
             )
             if r.returncode == 0:
@@ -631,9 +660,10 @@ def install_llamacpp_python() -> bool:
 
 
 def pull_ollama_model(name: str) -> bool:
-    info(f"Pulling {name}...\n")
+    info(f"Pulling {name} (several GB on first download)...\n")
     try:
-        p = _run(["ollama", "pull", name], timeout=3600)
+        # Not captured: the user needs ollama's progress bar for a multi-GB pull
+        p = _run(["ollama", "pull", name], timeout=3600, capture_output=False)
         if p.returncode == 0:
             success(f"{name} ready!")
             return True

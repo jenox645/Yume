@@ -13,7 +13,7 @@ from pathlib import Path
 from yume.hardware import IS_WIN, detect_gpu, detect_ram_gb, disk_free_gb, recommend_whisper_model
 from yume.network import HEALTH_PATH_OLLAMA, check_server
 from yume.ui import C, ask_arrow, ask_yn, center, error, header, info, pause, section, success, warn
-from yume.utils import BASE_DIR, EXE, LOGS_DIR, SERVER_DIR, TOOLS_DIR, _run, _try_import, find_gguf_models, find_tool
+from yume.utils import BASE_DIR, EXE, LOGS_DIR, TOOLS_DIR, _run, _try_import, find_gguf_models, find_tool
 
 _log = logging.getLogger("pocket_yume")
 
@@ -37,6 +37,10 @@ def set_setup_context(backend_info: dict, models_dir: Path, gguf_dir: Path, vers
 
 
 _TOTAL_STEPS = 5
+
+
+class _SkipCheck(Exception):
+    """Internal: skip a component check that does not apply to this setup."""
 
 
 def _step(n: int, name: str) -> None:
@@ -108,15 +112,35 @@ def _extension_guide() -> None:
     print(f"    3. Click {C.BOLD}Load unpacked{C.RESET} and select this folder:")
     print(f"       {C.BOLD}{EXT_DIR}{C.RESET}")
     print(f"    4. Open any video, click the Yume icon in the toolbar, press {C.BOLD}Enable{C.RESET}")
+    print(f"       {C.DIM}(with one-click start on, Yume starts by itself — otherwise launch it here first){C.RESET}")
     print()
     info(
-        f"{C.DIM}Firefox instead: about:debugging -> This Firefox -> Load Temporary Add-on"
-        f" -> select extension/manifest_firefox.json{C.RESET}"
+        f"{C.DIM}Firefox (121+): about:debugging -> This Firefox -> Load Temporary Add-on"
+        f" -> select extension/manifest.json (the same manifest works in both browsers){C.RESET}"
     )
     print()
     if ask_yn("Open the extension folder now (so it's ready to select in step 3)?", True):
         if not _open_folder(EXT_DIR):
             info(f"Could not open it automatically — the folder is: {EXT_DIR}")
+
+
+def _offer_one_click() -> None:
+    """Offer to let the extension start Yume by itself (native messaging)."""
+    from yume import native_host
+
+    print()
+    section("One-click start")
+    info("Yume can start by itself when you press Enable in the extension —")
+    info("no need to open this launcher first. It stops on its own when you stop watching.")
+    if native_host.registered_browsers():
+        success("Already on.")
+        return
+    if ask_yn("Turn on one-click start?", True):
+        try:
+            done = native_host.register()
+            success(f"On for: {', '.join(done) or 'no browser found'}")
+        except Exception as e:
+            warn(f"Could not turn it on ({e}) — try again later in Settings → One-click start.")
 
 
 def setup_wizard(cfg: dict) -> dict:
@@ -125,7 +149,6 @@ def setup_wizard(cfg: dict) -> dict:
     from yume.installers import (
         install_deno,
         install_ffmpeg,
-        install_llamacpp_python,
         install_ollama,
         install_python_deps,
         install_ytdlp,
@@ -235,41 +258,43 @@ def setup_wizard(cfg: dict) -> dict:
         warn("faster-whisper: missing")
         missing.append("python_deps")
 
-    try:
-        import llama_cpp  # noqa: F401
+    uses_llamacpp = cfg.get("translation_backend", "llamacpp") == "llamacpp"
+    from yume import llama_server
 
-        has_gpu_hw = gpu.get("has_nvidia") or (gpu.get("has_amd") and not IS_WIN)
-        if has_gpu_hw:
-            try:
-                import llama_cpp.llama_cpp as _lib
-                cuda_ok = callable(getattr(_lib, "ggml_backend_cuda_reg", None))
-            except Exception:
-                cuda_ok = False
-            if cuda_ok:
-                success("llama-cpp-python: installed (CUDA — GPU offloading enabled)")
+    if not uses_llamacpp:
+        info(f"Translation engine: not needed ({cfg.get('translation_backend')} backend)")
+    elif llama_server.server_path():
+        build = llama_server.installed_build()
+        success(f"Translation engine: llama-server {build.get('tag', '')} ({build.get('variant', '?')})")
+    else:
+        # llama.cpp's prebuilt server is the engine Yume installs. An existing
+        # llama-cpp-python is kept only when it already runs on the GPU (or
+        # there is no GPU to use): CUDA wheels lag behind new Pythons, and the
+        # source build needs the CUDA Toolkit and a C++ compiler.
+        try:
+            import llama_cpp.llama_cpp as _lib  # noqa: F401
+            import uvicorn  # noqa: F401
+            import fastapi  # noqa: F401
+
+            has_gpu_hw = gpu.get("has_nvidia") or gpu.get("has_amd")
+            if not has_gpu_hw or callable(getattr(_lib, "ggml_backend_cuda_reg", None)):
+                success("Translation engine: llama-cpp-python")
             else:
-                warn("llama-cpp-python: CPU-only build — GPU offloading disabled")
-                missing.append("llama_cpp_cuda")
-        else:
-            success("llama-cpp-python: installed")
-    except ImportError:
-        warn("llama-cpp-python: missing")
-        missing.append("llama_cpp")
-
-    try:
-        import uvicorn  # noqa: F401
-        import fastapi  # noqa: F401
-
-        success("Server deps (uvicorn/fastapi): installed")
-    except ImportError:
-        warn("Server deps (uvicorn/fastapi): missing")
-        missing.append("server_deps")
+                warn("Translation engine: llama-cpp-python runs on the CPU only — slow")
+                missing.append("llama_server")
+        except ImportError:
+            warn("Translation engine: missing")
+            missing.append("llama_server")
 
     gf = find_gguf_models()
-    if gf:
+    if not uses_llamacpp:
+        pass  # Ollama / LM Studio / custom manage their own models
+    elif gf:
         success(f"GGUF models: {len(gf)} found")
-        cfg["gguf_model_path"] = str(gf[0])
-        cfg["translation_model"] = gf[0].name
+        # Keep the user's choice on a re-run; only fill in a missing/stale path
+        if not cfg.get("gguf_model_path") or not Path(cfg["gguf_model_path"]).exists():
+            cfg["gguf_model_path"] = str(gf[0])
+            cfg["translation_model"] = gf[0].name
     else:
         warn("No GGUF translation model found")
         missing.append("gguf_model")
@@ -287,6 +312,7 @@ def setup_wizard(cfg: dict) -> dict:
         success(f"\n  {C.BOLD}Everything ready!{C.RESET}")
         cfg["first_run_complete"] = True
         save_config(cfg)
+        _offer_one_click()
         _extension_guide()
         pause()
         return cfg
@@ -296,9 +322,7 @@ def setup_wizard(cfg: dict) -> dict:
             "yt-dlp": "yt-dlp",
             "ffmpeg": "FFmpeg",
             "python_deps": "faster-whisper",
-            "llama_cpp": "llama-cpp-python",
-            "llama_cpp_cuda": "llama-cpp-python (needs CUDA reinstall)",
-            "server_deps": "uvicorn/fastapi",
+            "llama_server": "translation engine (llama.cpp)",
             "gguf_model": "GGUF translation model",
         }
         labels = [_MISSING_LABELS.get(m, m) for m in missing]
@@ -395,55 +419,13 @@ def setup_wizard(cfg: dict) -> dict:
             if not ae or ask_yn("Install Python packages?"):
                 _install_with_retry("Python packages", install_python_deps)
 
-        if "llama_cpp" in missing:
-            if not ae or ask_yn("Install llama-cpp-python (translation engine)?"):
+        if "llama_server" in missing:
+            if not ae or ask_yn("Install the translation engine (llama.cpp, prebuilt for your GPU)?"):
                 _install_with_retry(
-                    "llama-cpp-python",
-                    install_llamacpp_python,
-                    f"Install manually: {C.CYAN}pip install llama-cpp-python{C.RESET}",
-                )
-
-        if "llama_cpp_cuda" in missing:
-            print()
-            info("llama-cpp-python is installed but built without CUDA — GPU offloading won't work.")
-            pyver = f"{sys.version_info.major}.{sys.version_info.minor}"
-            if sys.version_info >= (3, 13):
-                warn(f"Python {pyver}: no prebuilt CUDA wheel exists yet.")
-                info("The installer will attempt a source build (needs CUDA Toolkit + Visual Studio C++).")
-                info(f"{C.DIM}If source build fails, install Python 3.12 for reliable prebuilt support.{C.RESET}")
-            if not ae or ask_yn("Reinstall llama-cpp-python with CUDA support?"):
-                _install_with_retry(
-                    "llama-cpp-python (CUDA)",
-                    install_llamacpp_python,
-                    f"{C.DIM}Manual: set CMAKE_ARGS=-DGGML_CUDA=on && pip install llama-cpp-python --force-reinstall{C.RESET}",
-                )
-
-        if "server_deps" in missing and "llama_cpp" not in missing and "llama_cpp_cuda" not in missing:
-            if not ae or ask_yn("Install server dependencies (uvicorn, fastapi)?"):
-                def _install_server_deps():
-                    r = _run(
-                        [
-                            sys.executable,
-                            "-m",
-                            "pip",
-                            "install",
-                            "uvicorn==0.42.0",
-                            "fastapi==0.135.1",
-                            "sse-starlette==3.3.3",
-                            "starlette-context==0.5.1",
-                            "pydantic-settings==2.13.1",
-                            "-q",
-                            "--no-warn-script-location",
-                        ],
-                        timeout=300,
-                    )
-                    return r.returncode == 0
-
-                info("Installing server dependencies...")
-                _install_with_retry(
-                    "Server dependencies",
-                    _install_server_deps,
-                    f"Install manually: {C.CYAN}pip install uvicorn fastapi sse-starlette{C.RESET}",
+                    "llama.cpp server",
+                    llama_server.install,
+                    f"Download it manually from {C.CYAN}https://github.com/ggml-org/llama.cpp/releases{C.RESET}"
+                    f" and unzip it into {llama_server.LLAMA_DIR}",
                 )
 
         # ── Step 5: Translation Model ──────────────────────────────────────────
@@ -511,7 +493,9 @@ def setup_wizard(cfg: dict) -> dict:
         ("faster-whisper", _try_import("faster_whisper")),
     ]
     if bk == "llamacpp":
-        checks.append(("llama-cpp-python", _try_import("llama_cpp")))
+        from yume import llama_server as _ls
+
+        checks.append(("Translation engine", _ls.server_path() is not None or _try_import("llama_cpp")))
         checks.append(("GGUF model", len(find_gguf_models()) > 0))
     elif bk == "ollama":
         checks.append(
@@ -534,6 +518,7 @@ def setup_wizard(cfg: dict) -> dict:
         info("Run 'python pocket_yume.py health' to see details.")
         info("Missing components can be installed from the Tools menu.")
 
+    _offer_one_click()
     _extension_guide()
     pause()
     return cfg
@@ -551,13 +536,16 @@ def uninstall_yume() -> None:
     warn("This will remove all Yume data from your system.")
     print()
     info("What will be removed:")
+    from yume.utils import hf_hub_dir
+
+    hf_hub = hf_hub_dir()
+    whisper_caches = sorted(hf_hub.glob("models--*faster*whisper*")) if hf_hub.exists() else []
     dirs = [
         ("Tools (yt-dlp, ffmpeg, deno)", TOOLS_DIR),
         ("Translation models (downloaded AI model files)", _GGUF_DIR),
-        ("Server files", SERVER_DIR),
-        ("Configuration", CONFIG_DIR),
+        ("Configuration, blacklist, saved subtitles", CONFIG_DIR),
         ("Logs", LOGS_DIR),
-    ]
+    ] + [(f"Whisper model {d.name.split('--')[-1]}", d) for d in whisper_caches]
     for label, d in dirs:
         sz = 0
         if d.exists():
@@ -572,16 +560,21 @@ def uninstall_yume() -> None:
         print(f"    {marker} {label:40s} {mb:>8.1f} MB  {d}")
     print()
 
+    # Exactly what Yume installs (server/requirements.txt + llama.cpp server +
+    # Deno auth). Shared libraries like numpy are left alone.
     pip_pkgs = [
         "faster-whisper",
-        "llama-cpp-python",
         "flask",
-        "flask-cors",
+        "waitress",
+        "pykakasi",
+        "pypinyin",
+        "llama-cpp-python",
         "uvicorn",
         "fastapi",
         "sse-starlette",
         "starlette-context",
         "pydantic-settings",
+        "bgutil-ytdlp-pot-provider",
     ]
     info("Pip packages that can be removed:")
     print(f"    {', '.join(pip_pkgs)}")
@@ -612,6 +605,13 @@ def uninstall_yume() -> None:
         return
 
     if remove_data:
+        from yume import native_host
+        from yume.service import request_stop
+
+        request_stop()
+        native_host.unregister()
+        for stray in (BASE_DIR / ".yume_token", BASE_DIR / "yume_config_post_setup.json"):
+            stray.unlink(missing_ok=True)
         for label, d in dirs:
             if d.exists():
                 try:

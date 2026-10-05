@@ -68,8 +68,8 @@ def _guide_quickstart(cfg: dict) -> None:
     info(f"{C.DIM}Pick source language and translation language in the extension popup first{C.RESET}")
     info(f"{C.DIM}if the video isn't Japanese → English (the defaults).{C.RESET}")
     print()
-    info(f"{C.DIM}Fully processed videos are saved for 30 days — reopening one shows{C.RESET}")
-    info(f"{C.DIM}subtitles instantly with no GPU work (popup → History).{C.RESET}")
+    info(f"{C.DIM}Transcripts and translations are saved on the Yume server — reopening a video{C.RESET}")
+    info(f"{C.DIM}shows its subtitles instantly with no GPU work (popup → History).{C.RESET}")
     pause()
 
 
@@ -102,7 +102,7 @@ def _guide_youtube(cfg: dict) -> None:
         f"{C.BOLD}Switch to Deno{C.RESET} — solves YouTube's bot challenge without any account.\n"
         f"       {C.DIM}Settings → YouTube auth → Deno (downloads ~35 MB once){C.RESET}",
         f"{C.BOLD}Last resort: paste the stream URL directly{C.RESET} — works on any site yt-dlp\n"
-        f"       can't handle. In the video tab: DevTools (F12) → Network → filter \"m3u8\" →\n"
+        f'       can\'t handle. In the video tab: DevTools (F12) → Network → filter "m3u8" →\n'
         f"       copy the URL → extension popup → Server Settings → Custom Stream URL.",
     )
     pause()
@@ -121,15 +121,17 @@ def _guide_models(cfg: dict) -> None:
     section("Whisper (speech → text) — accuracy vs. VRAM")
     bullet(f"tiny / base      ~1 GB   {C.DIM}fastest, weakest — okay for clear speech{C.RESET}")
     bullet(f"small            ~2 GB   {C.DIM}decent for podcasts and vlogs{C.RESET}")
-    bullet(f"distil-large-v3  ~4 GB   {C.DIM}near large quality, half the size{C.RESET}")
     bullet(f"large-v3-turbo   ~6 GB   {C.DIM}best speed/quality balance on 8 GB GPUs{C.RESET}")
     bullet(f"large-v3         ~10 GB  {C.DIM}most accurate — music, mumbling, noise{C.RESET}")
+    info(f"{C.DIM}Avoid distil-* models: they are English-only and can't transcribe JA/ZH/KO/RU/AR.{C.RESET}")
     info(f"{C.DIM}Switch any time: Settings → Whisper settings, or live from the runtime menu.{C.RESET}")
 
     section("Translation model (GGUF) — quality vs. VRAM")
     bullet(f"7B  Q4_K_M  ~4.4 GB → fits {C.GREEN}6 GB{C.RESET} VRAM  {C.DIM}(good default: Qwen2.5-7B){C.RESET}")
     bullet(f"7B  Q8_0    ~7.7 GB → needs {C.YELLOW}8 GB{C.RESET} VRAM  {C.DIM}(slightly better, 2x size){C.RESET}")
-    bullet(f"14B Q4_K_M  ~8.7 GB → needs {C.YELLOW}10 GB{C.RESET} VRAM  {C.DIM}(noticeably better translations){C.RESET}")
+    bullet(
+        f"14B Q4_K_M  ~8.7 GB → needs {C.YELLOW}10 GB{C.RESET} VRAM  {C.DIM}(noticeably better translations){C.RESET}"
+    )
     info(f"{C.DIM}Rule of thumb: pick the biggest model that fits your VRAM with ~1 GB spare,{C.RESET}")
     info(f"{C.DIM}and prefer Q4_K_M quantization. Download: Tools & Fonts → Download Translation Model.{C.RESET}")
     print()
@@ -147,8 +149,8 @@ def _guide_quality(cfg: dict) -> None:
         f"       jump). See the {C.BOLD}Pick the right models{C.RESET} guide.",
         f"{C.BOLD}Tune the translation prompt{C.RESET} — Settings → Translation prompt has ready\n"
         f"       templates: keep anime honorifics, poetic song lyrics, formal, casual...",
-        f"{C.BOLD}Report hallucinations{C.RESET} — phantom lines like \"Thanks for watching\":\n"
-        f"       popup → Hallucination Filter → Report Current Subtitle → Update Server.",
+        f'{C.BOLD}Report hallucinations{C.RESET} — phantom lines like "Thanks for watching":\n'
+        f"       popup → Hallucination Filter → Report Current Subtitle (applies everywhere at once).",
         f"{C.BOLD}Use a larger Whisper model{C.RESET} — bad translations often start as bad\n"
         f"       transcriptions. large-v3 hears music and noisy audio far better than small.",
     )
@@ -163,11 +165,11 @@ def _guide_export(cfg: dict) -> None:
         f"Click {C.BOLD}Export SRT{C.RESET} (players, editors) or {C.BOLD}Export VTT{C.RESET} (web players).",
         "The file downloads with original text + translation + romanization lines.",
     )
-    info(f"{C.DIM}Older videos: popup → History lists everything processed in the last 30 days —{C.RESET}")
+    info(f"{C.DIM}Older videos: popup → History lists the saved videos (newest 200) —{C.RESET}")
     info(f"{C.DIM}each entry has its own SRT button, no need to reopen the video.{C.RESET}")
     print()
-    info(f"{C.DIM}Tip: export reflects processed chunks — let the ✓ appear in the subtitle{C.RESET}")
-    info(f"{C.DIM}window's counter to capture the whole video.{C.RESET}")
+    info(f"{C.DIM}Tip: export includes what has been processed so far — let the ✓ appear in the{C.RESET}")
+    info(f"{C.DIM}subtitle window's counter to capture the whole video.{C.RESET}")
     pause()
 
 
@@ -185,9 +187,10 @@ def _guide_troubleshoot(cfg: dict) -> None:
     section("Red dots in the extension popup")
     bullet(f"Servers not started — use {C.BOLD}Launch Yume{C.RESET} and keep the window open.")
     bullet(
-        f"Wrong ports — popup → Server Settings must match "
-        f"{C.CYAN}{cfg['whisper_host']}:{cfg['whisper_port']}{C.RESET} (Whisper) and "
-        f"{C.CYAN}{cfg['translation_host']}:{cfg['translation_port']}{C.RESET} (translation)."
+        f"Wrong port — popup → Server Settings → Whisper Port must be "
+        f"{C.CYAN}{cfg['whisper_port']}{C.RESET}. (The extension never talks to the translation\n"
+        f"    server directly — Whisper does; a red Translation dot means {C.CYAN}"
+        f"{cfg['translation_host']}:{cfg['translation_port']}{C.RESET} is down or misconfigured.)"
     )
 
     section("Port already in use at launch")

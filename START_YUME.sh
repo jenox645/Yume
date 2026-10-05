@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pocket Yume -- Linux Launcher
-# AI Subtitles for Japanese Videos
+# Local AI subtitles for videos
 
 set -e
 
@@ -9,12 +9,25 @@ cd "$SCRIPT_DIR" || { echo "ERROR: Cannot cd to script directory"; exit 1; }
 
 echo "============================================================"
 echo "  POCKET YUME -- Launcher"
-echo "  AI Subtitles for Japanese Videos"
+echo "  Local AI subtitles for videos"
 echo "============================================================"
 echo ""
 
-# Check Python 3
-if command -v python3 &>/dev/null; then
+# Prefer a virtual environment that actually has Yume installed (the setup
+# wizard recommends "yume-env"): packages installed there are invisible to the
+# system Python. An empty venv is skipped.
+PY=""
+for v in yume-env venv .venv; do
+    if [ -x "$v/bin/python" ] && "$v/bin/python" -c "import importlib.util,sys; sys.exit(importlib.util.find_spec('faster_whisper') is None)" 2>/dev/null; then
+        PY="$v/bin/python"
+        break
+    fi
+done
+
+# Otherwise Python 3 from PATH
+if [ -n "$PY" ]; then
+    :
+elif command -v python3 &>/dev/null; then
     PY=python3
 elif command -v python &>/dev/null; then
     PY=python
@@ -26,7 +39,7 @@ else
     exit 1
 fi
 
-echo "Python: $($PY --version)"
+echo "Python: $("$PY" --version)"
 echo ""
 
 # Check script
@@ -37,4 +50,4 @@ if [ ! -f "pocket_yume.py" ]; then
 fi
 
 # Launch
-$PY pocket_yume.py "$@"
+"$PY" pocket_yume.py "$@"
