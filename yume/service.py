@@ -128,7 +128,15 @@ def _spawn_detached_cmd(cmd: list[str]) -> int:
 
     flags = _DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP | _CREATE_NO_WINDOW
     try:
-        return subprocess.Popen(cmd, creationflags=flags | _CREATE_BREAKAWAY_FROM_JOB, **common).pid  # nosec B603
+        p = subprocess.Popen(cmd, creationflags=flags | _CREATE_BREAKAWAY_FROM_JOB, **common)  # nosec B603
+        # A breakaway can "succeed" and still leave the child in a job: a venv's
+        # python.exe redirector runs the real interpreter in a job with SILENT
+        # breakaway, so the child leaves that job but stays in the browser's,
+        # and dies with the native host. Only a child outside every job is safe.
+        if not _in_job(p.pid):
+            return p.pid
+        _log.info("[spawn_detached] child still inside a job — using WMI")
+        p.kill()
     except OSError as e:
         _log.info("[spawn_detached] breakaway refused (%s) — using WMI", e)
     try:
@@ -136,6 +144,26 @@ def _spawn_detached_cmd(cmd: list[str]) -> int:
     except Exception as e:
         _log.warning("[spawn_detached] WMI spawn failed (%s) — starting as a plain child", e)
     return subprocess.Popen(cmd, creationflags=flags, **common).pid  # nosec B603
+
+
+def _in_job(pid: int) -> bool:
+    """True if the process belongs to any Windows job object (False if unknown)."""
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    k32.IsProcessInJob.argtypes = (wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL))
+    k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    h = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return False
+    try:
+        result = wintypes.BOOL()
+        return bool(k32.IsProcessInJob(h, None, ctypes.byref(result))) and bool(result.value)
+    finally:
+        k32.CloseHandle(h)
 
 
 def _spawn_wmi(cmd: list[str]) -> int:
