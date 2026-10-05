@@ -22,9 +22,9 @@ Transcription · Translation · Romanization
 
 https://github.com/user-attachments/assets/48ee3790-7635-4321-8246-308689e53210
 
-Yume captures audio from any video in your browser, transcribes it with [faster-whisper](https://github.com/SYSTRAN/faster-whisper), translates it with a local LLM, and overlays subtitles. Everything runs on your machine — no API keys, no subscriptions, no data leaves your computer.
+Yume fetches the audio of the video you are watching (via [yt-dlp](https://github.com/yt-dlp/yt-dlp)), transcribes it with [faster-whisper](https://github.com/SYSTRAN/faster-whisper), translates it with a local LLM, and overlays subtitles in your browser. Everything runs on your machine — no API keys, no subscriptions, no data leaves your computer except the audio download itself.
 
-**Tested sites:** YouTube, NicoNico, Bilibili, Twitch, Crunchyroll. Other sites may work via [yt-dlp](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md), but are not guaranteed — authentication, bot protection, and DRM vary widely.
+**Tested sites:** YouTube, NicoNico, Bilibili, Twitch. Other sites may work via [yt-dlp](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md), but are not guaranteed — authentication and bot protection vary widely, and DRM-protected services (Netflix, Crunchyroll, most paid streaming) cannot be downloaded at all.
 
 **Source languages:** Japanese · Chinese · Korean · Russian · Arabic
 
@@ -48,7 +48,7 @@ Yume captures audio from any video in your browser, transcribes it with [faster-
 | Linux    | `./START_YUME.sh` |
 | macOS    | Double-click `START_YUME.command` |
 
-The setup wizard runs on first launch — detects your hardware, installs dependencies (yt-dlp, FFmpeg, faster-whisper, translation model), and configures everything.
+The setup wizard runs on first launch — detects your hardware, installs dependencies (yt-dlp, FFmpeg, faster-whisper, translation model), and configures everything. At the end it offers **one-click start**: say yes and you never need to open the launcher again — the extension starts Yume by itself (see step 3).
 
 **2. Install the Extension**
 
@@ -58,65 +58,38 @@ Chrome, Brave, Edge:
 3. Click **Load unpacked** → select the `extension/` folder
 4. Pin the Yume icon in the toolbar
 
-Firefox: open `about:debugging` → **This Firefox** → **Load Temporary Add-on** → select `extension/manifest_firefox.json`. Note: temporary add-ons unload when Firefox closes — re-load after each restart (Chrome/Edge/Brave installs persist).
+Firefox (121+): open `about:debugging` → **This Firefox** → **Load Temporary Add-on** → select `extension/manifest.json` (the same manifest works in every browser). Note: temporary add-ons unload when Firefox closes — re-load after each restart (Chrome/Edge/Brave installs persist).
 
 **3. Watch**
 
 1. Go to any video with speech
-2. Click the Yume icon → **Enable**
-3. Wait for the audio to download, then subtitles appear automatically
-4. Press **Alt+Y** to toggle without opening the popup
+2. Click the Yume icon → **Enable** (or press **Alt+Y**)
+3. With one-click start on, Yume starts in the background if it isn't running (the first start takes ~30 s while the models load); otherwise launch it with `START_YUME` first
+4. Subtitles appear as soon as the first section is transcribed
 
-> **Heads up:** Yume downloads the video's audio before transcribing. For a 4-minute video on a decent connection, expect ~10–20 seconds before the first subtitle appears. Longer videos take proportionally longer.
+**One-click start** (`python pocket_yume.py autostart on`, or **Settings → One-click start**) registers a small helper with Chrome, Edge, Brave and Firefox. When you press Enable and Yume is not running, the extension asks the helper to start it — no window, no terminal. It stops by itself after 30 minutes without a video (configurable; 0 = never), and the popup has **Start Yume** / **Stop Yume** buttons. Background logs are in `logs/service.log`. Turn it off with `python pocket_yume.py autostart off`.
+
+> **Heads up:** Yume downloads the video's audio before transcribing. The first 30 seconds are transcribed straight from the stream while the full download runs, so the first subtitles usually appear within ~10–20 seconds. Videos you have already watched load instantly from the cache.
 
 ---
 
 ## How It Works
 
 ```mermaid
-graph TD
-
-    %% MAIN FLOW
-    A([Extension Start]) --> B["Get video URL + settings<br/>background.js"]
-    B --> C["Capture audio stream<br/>audio-capture.js"]
-    C --> D["Whisper Server (5001)<br/>Transcribe audio"]
-    D --> E{"Text received?"}
-
-    %% DECISION AS NODES
-    E --> Y([Yes]) --> F["Translate via LLM (5000)<br/>Translation server"]
-    E --> N([No]) --> G["Mark empty"]
-
-    F --> H["Send subtitles to overlay<br/>subtitle-window.js"]
-    G --> H
-
-    H --> M{"More audio<br/>chunks?"}
-
-    M --> Y2([Yes]) --> C
-    M --> N2([No]) --> J([Done])
-
-    %% PARALLEL PATH AS NODE
-    C -.-> P([Parallel]) -.-> K["Transcribe next chunk"]
-    K -.-> H
-
-    %% COLORS
-    style A fill:#f59e0b,stroke:#d97706,color:#fff
-    style B fill:#60a5fa,stroke:#2563eb,color:#fff
-    style C fill:#3b82f6,stroke:#1d4ed8,color:#fff
-    style D fill:#7c3aed,stroke:#5b21b6,color:#fff
-    style F fill:#16a34a,stroke:#15803d,color:#fff
-    style G fill:#94a3b8,stroke:#475569,color:#fff
-    style H fill:#4ade80,stroke:#16a34a,color:#fff
-    style J fill:#22c55e,stroke:#16a34a,color:#fff
-
-    %% Decision Nodes (Yes, No, Parallel)
-    style Y fill:#0284c7,stroke:#0369a1,color:#fff
-    style N fill:#475569,stroke:#334155,color:#fff
-    style Y2 fill:#0284c7,stroke:#0369a1,color:#fff
-    style N2 fill:#475569,stroke:#334155,color:#fff
-    style P fill:#0ea5e9,stroke:#0369a1,color:#fff
+graph LR
+    EXT["Browser extension<br/>(renders subtitles)"] -- "create job, poll every 1 s<br/>with the playhead" --> SRV
+    subgraph SRV ["Yume server (port 5001)"]
+        DL["Download audio once<br/>yt-dlp / ffmpeg"] --> RG["Split at quiet points<br/>~25 s regions"]
+        RG --> WH["Whisper<br/>region under the playhead first"]
+        WH --> FL["Hallucination filter<br/>+ your blacklist"]
+        FL --> TR["Translate in batches<br/>(local LLM, JSON output)"]
+        FL --> RO["Romanize<br/>pykakasi / pypinyin / built-in"]
+        TR --> DB[("SQLite cache<br/>transcripts, translations")]
+    end
+    TR -- "OpenAI-compatible API" --> LLM["llama.cpp / Ollama /<br/>LM Studio (port 5000)"]
 ```
 
-To reduce perceived latency, Yume transcribes chunk N+1 while translating chunk N — Whisper and the LLM run in parallel rather than sequentially.
+The extension only renders: it asks the server for a job for the current video and polls it. The server does everything else and caches it, so reopening a video — in any browser — shows its subtitles instantly. Whisper and the LLM run in parallel (section N+1 is transcribed while section N is translated), and both start at whatever part of the video you are watching, so seeking re-prioritises the work.
 
 ---
 
@@ -126,13 +99,13 @@ Real-world numbers on an **RTX 3060 12 GB VRAM** (a mid-range card):
 
 | Step | Time | Details |
 |------|------|---------|
-| Whisper model load | ~15 s | `large-v3` (~3 GB download, ~10 GB VRAM) — one-time on launch |
+| Whisper model load | ~15 s | `large-v3` (~3 GB download, ~4.5 GB VRAM in float16) — one-time on launch |
 | Translation model load | ~12 s | ~10 GB GGUF file — one-time on launch |
-| Chunk (dialogue-heavy) | ~25 s | 30 s of audio with dense speech: transcribe + translate + romanize |
+| Section (dialogue-heavy) | ~25 s | ~25 s of audio with dense speech: transcribe + translate + romanize |
 
-After both models are loaded, a typical chunk with moderate dialogue processes in under 25 seconds. Chunks with silence or sparse speech are faster. The parallel pipeline means chunk N+1 is already being transcribed while chunk N is being translated, so perceived delay is lower than the raw per-chunk time.
+After both models are loaded, a section with moderate dialogue processes in under 25 seconds. Sections with silence or sparse speech are faster. Section N+1 is already being transcribed while section N is being translated, so perceived delay is lower than the raw per-section time.
 
-Smaller models are significantly faster — a 3B translation model and `small` Whisper cut per-chunk time roughly in half, at the cost of some accuracy. Use `python pocket_yume.py benchmark` to measure your own hardware, and `python pocket_yume.py recommend` to get a model suggestion based on your GPU.
+Smaller models are significantly faster — a 3B translation model and `small` Whisper cut per-section time roughly in half, at the cost of some accuracy. Use `python pocket_yume.py benchmark` to measure your own hardware, and `python pocket_yume.py recommend` to get a model suggestion based on your GPU.
 
 ---
 
@@ -146,7 +119,7 @@ Smaller models are significantly faster — a 3B translation model and `small` W
 | Shisa-v2-Nemo-12B-Q6 | ~10 GB | Slow | Excellent | Best translation quality |
 | Qwen2.5-14B-Q4 | ~9 GB | Slow | Excellent | Premium CJK quality |
 
-Note: large models (12B+) take 10–20 seconds per chunk on consumer GPUs. Use a 3B or 7B model if subtitle delay is a concern.
+Note: large models (12B+) take 10–20 seconds per section on consumer GPUs. Use a 3B or 7B model if subtitle delay is a concern. The Whisper model and the translation model share your GPU's VRAM.
 
 Download via CLI: **Tools → Download Translation Model**
 
@@ -154,10 +127,12 @@ Download via CLI: **Tools → Download Translation Model**
 
 | Backend | Setup | Notes |
 |---------|-------|-------|
-| **llama.cpp** (default) | Auto-installed by wizard | Runs GGUF models directly |
-| **Ollama** | [ollama.com](https://ollama.com) | One-click install, model management |
+| **llama.cpp** (default) | Auto-installed by wizard | Runs GGUF models directly with llama.cpp's prebuilt server — CUDA, Vulkan, Metal or CPU build picked for your hardware (**Tools → Translation Engine** to update) |
+| **Ollama** | [ollama.com](https://ollama.com) | One-click install, model management (0.5+ for structured output) |
 | **LM Studio** | [lmstudio.ai](https://lmstudio.ai) | GUI with model browser |
 | **Custom** | Your endpoint | Any OpenAI-compatible API |
+
+For every backend except llama.cpp, set the model name in **Settings → Translation settings → Manage model** — Ollama and LM Studio need it in every request.
 
 ---
 
@@ -183,12 +158,16 @@ Download via CLI: **Tools → Download Translation Model**
 ```bash
 python pocket_yume.py                # Interactive menu
 python pocket_yume.py launch         # Start servers + runtime menu
+python pocket_yume.py serve          # Start servers in the background (no window, auto-stops when idle)
+python pocket_yume.py stop           # Stop the background servers
+python pocket_yume.py autostart on   # Let the extension start/stop Yume by itself (off / status)
 python pocket_yume.py status         # Hardware, tools, packages, ports
 python pocket_yume.py health         # Full end-to-end diagnostics
 python pocket_yume.py benchmark      # Compare Whisper model speeds
 python pocket_yume.py recommend      # Suggest best model for your GPU
 python pocket_yume.py fonts          # Detect installed subtitle fonts
 python pocket_yume.py setup          # Re-run setup wizard
+python pocket_yume.py settings       # Settings menu
 python pocket_yume.py help           # All commands
 ```
 
@@ -216,32 +195,53 @@ YouTube blocks automated downloads to prevent bots. Yume supports two methods:
 | "YouTube requires sign-in" | Settings > YouTube Auth > Browser Cookies > pick your browser |
 | Port already in use | `python pocket_yume.py ports` |
 | Whisper too slow | `python pocket_yume.py recommend` |
-| Extension can't connect | Check both dots are green in the popup |
+| Extension can't connect | Check both dots are green in the popup; the Whisper port there must match the CLI's |
+| Translation dot red | The Whisper server can't reach your LLM — check Settings → Translation settings, then `python pocket_yume.py health` (it translates a test sentence end-to-end) |
 | "Server not reachable" on start | Normal — server loads the model first, extension retries automatically |
+| "Yume is not running — start it with START_YUME" | One-click start is off (or the extension was loaded before it was turned on): `python pocket_yume.py autostart on`, then reload the extension |
+| "Yume could not start: …" | The background start failed — the message says why; details in `logs/service.log`, `logs/whisper_server.log`, `logs/translation_server.log` |
 | `cublas64_12.dll not found` | Install CUDA Toolkit from [nvidia.com](https://developer.nvidia.com/cuda-downloads) or run `pip install nvidia-cublas-cu12`. Yume auto-falls back to CPU. |
 
 ### Known Limitations
 
 - **Startup wait time** — Yume downloads audio before transcribing, so there's a delay before the first subtitle appears. Duration depends on connection speed and video length.
 - **Whisper misses soft vocals** — Whisper's voice activity detection isn't tuned for singing. Quiet vocals over instrumentation (especially in the first 10–15 seconds) may be missed.
-- **Large models are slow** — A 12B model takes 10–20 seconds per chunk on consumer GPUs. Use a smaller model if latency matters.
+- **Large models are slow** — A 12B model takes 10–20 seconds per section on consumer GPUs. Use a smaller model if latency matters.
+- **Only sites yt-dlp can download** — DRM-protected streams (Netflix, most paid services) cannot be subtitled. For sites with plain HLS/MP4 streams, the popup's *Custom Stream URL* field accepts the media URL directly.
 - **Non-YouTube site support is best-effort** — yt-dlp handles extraction, but bot protection, authentication, and DRM vary by site. Only the sites listed above are regularly tested.
-- **`word_timestamps` and `pause_threshold` config keys have no effect** — Values are hardcoded server-side for music optimization. This is tracked as known technical debt.
 
 ---
 
 ## Security
 
-- **Per-session API token** — random 32-byte token required for all endpoints
+- **Per-session API token** — random 32-byte token required for all endpoints except `/health`
 - **DNS rebinding protection** — Host header validation blocks non-localhost requests
+- **Extension-only CORS** — only browser-extension origins get CORS headers; web pages (including ones on localhost) cannot obtain the token or read responses
 - **URL sanitization** — all URLs validated before subprocess calls
-- **Extension-only token** — web pages cannot obtain the API token
+- **Isolated overlay** — the subtitle window lives in a closed Shadow DOM; nothing is injected into page styles
 - **Cookie access** — read-only, never modified
+- **One-click start helper** — only the Yume extension's ID may call it, and it can do nothing but start/stop Yume's own servers
+
+See [docs/SECURITY.md](docs/SECURITY.md) for the threat model.
 
 ---
 
 <details>
 <summary><strong>Changelog</strong></summary>
+
+### Unreleased
+
+- **Translation on the GPU without compiling anything:** Yume now installs llama.cpp's official prebuilt `llama-server` (CUDA build matched to your driver, Vulkan for AMD/Intel, Metal on Apple Silicon) instead of llama-cpp-python, whose GPU wheels lag behind new Python versions and usually ended up CPU-only. On an RTX 3060 a batch of 10 lines went from ~26 s to ~5 s; a whole song is translated in seconds. Existing llama-cpp-python setups keep working.
+- **Live-test fixes (two real songs):** yt-dlp keeps itself up to date (a 7-month-old one got HTTP 403 on every video); unreadable browser cookies (Chrome/Brave/Edge on Windows) are tried once instead of six times, and the first-30-s stream preview retries without them; Whisper loops ("I don't want to lose you" ×5, a phrase repeated 150× in one line) are hidden/cut (decided on the raw line: a line that is only a loop, like a 30-second "Azumoto-Azumoto-…" over an instrumental intro, is hidden); the first lines and the lines near the playhead are translated in small batches so they are ready in seconds, and the translator prompt keeps a stable prefix for llama.cpp's cache; the progress badge says what it counts ("Listening 3/11", "Translating 11/32"); ALL-CAPS translations are sentence-cased; romaji doubles consonants after っ (hashitte, not "hashitsu te"); switching videos no longer flashes the previous video's subtitles; the timing offset now goes the direction the popup says (+ = later); blacklisting from the popup hides the line at once; missing server packages are reported by the health check and the launcher.
+- **Audit fixes:** credits filter no longer hides real lines containing words like "video", "mix", "piano" or "作曲"; the launcher only kills a Python process on its ports when it is really a Yume server; a missing cuBLAS/cuDNN is detected at startup (CPU fallback) instead of every section failing; switching the Whisper model from the popup is remembered; pressing Enable again retries sections that failed; long downloads no longer retry 5× after a timeout; Japanese/other non-ASCII yt-dlp output no longer breaks downloads on Windows; the PO-token helper no longer stalls after a while; a corrupt cache database is set aside instead of stopping the server; `python pocket_yume.py settings` (suggested in many hints) now exists.
+- **One-click start:** press Enable in the extension and Yume starts by itself in the background (native messaging helper, registered by the setup wizard or `python pocket_yume.py autostart on`); it stops after 30 idle minutes. New `serve` / `stop` commands, popup Start/Stop buttons. The extension now has a fixed ID (manifest `key`).
+- **The pipeline now runs on the server.** The extension creates a job and polls it; the server downloads, transcribes, translates and romanizes. Removed ~3,800 lines of extension code (chunk scheduling, overlap de-duplication, three translation retry layers, client-side caches).
+- **No more 5 s overlap:** audio is cut into ~25 s sections at quiet points, so there are no duplicated boundary lines and no de-duplication heuristics.
+- **Structured translation:** batches use a JSON schema with exactly N lines (llama.cpp, Ollama 0.5+, LM Studio); falls back to numbered lines for older backends. Ollama/LM Studio now receive the model name (Ollama translation never worked before).
+- **Durable cache:** transcripts and translations live in `config/yume_cache.db` — they survive restarts and are shared by every browser. The History panel lists them.
+- **One blacklist:** the server holds it; the popup and the CLI edit the same list, and edits apply to subtitles already on screen.
+- **Fixes:** long Russian/Korean/Arabic lines were dropped as "hallucinations"; switching language replayed the old language's subtitles; a failed model load showed "loading" forever; prompts told the model "never output Japanese" when translating *to* Japanese; English-only distil models were recommended; the launcher could kill unrelated programs on its ports; the subtitle CSS leaked into every website; interrupted model downloads left corrupt files; multi-GPU NVIDIA systems were detected as CPU-only; `wmic` (removed from Windows 11) was used for detection.
+- **One manifest** for Chrome, Edge, Brave and Firefox.
 
 ### v0.1.0
 
@@ -332,7 +332,7 @@ YouTube blocks automated downloads to prevent bots. Yume supports two methods:
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
+See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for development setup and guidelines.
 
 ## License
 

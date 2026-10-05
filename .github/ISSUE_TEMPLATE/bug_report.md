@@ -31,8 +31,10 @@ Run `python pocket_yume.py health` and paste the output here:
 (paste here)
 ```
 
-**Screenshots / Console logs**
-If applicable. For extension bugs, open the service worker console (chrome://extensions → Yume → Inspect views: service worker) and paste any errors.
+**Logs**
+- Extension: popup → Diagnostics & Export → **Download Log** (the server's job log for the video) — attach the file.
+- Server: the last lines of `logs/whisper_server.log` (and `logs/translation_server.log` for llama.cpp).
+- Screenshots of subtitle rendering issues are very helpful.
 
 **Additional context**
 Anything else that might help.

@@ -35,21 +35,18 @@ jobs:
           ruff check .
 
       - name: Ruff format check
-        run: ruff format --check pocket_yume.py config.py server/
+        run: ruff format --check .
 
       - name: JavaScript syntax check
         run: |
-          node --check extension/js/background.js
-          node --check extension/js/audio-capture.js
-          node --check extension/js/content.js
-          node --check extension/js/subtitle-window.js
-          node --check extension/js/debug-system.js
-          node --check extension/popup.js
+          for f in extension/js/*.js extension/popup.js; do node --check "$f"; done
+
+      - name: JavaScript unit tests
+        run: node --test tests/js/
 
       - name: JSON validity
         run: |
           python -c "import json; json.load(open('extension/manifest.json'))"
-          python -c "import json; json.load(open('extension/manifest_firefox.json'))"
 
       - name: Version consistency
         run: |
@@ -60,14 +57,16 @@ jobs:
           v = '$VERSION'
           m = json.load(open('extension/manifest.json'))
           assert m['version'] == v, f'manifest.json: {m[\"version\"]} != {v}'
-          mf = json.load(open('extension/manifest_firefox.json'))
-          assert mf['version'] == v, f'manifest_firefox.json: {mf[\"version\"]} != {v}'
           print('All version strings consistent')
           "
 
   test:
-    name: Tests + Coverage
-    runs-on: ubuntu-latest
+    name: Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -77,9 +76,12 @@ jobs:
           python-version: '3.11'
 
       - name: Install test deps
-        run: pip install pytest pytest-cov
+        # numpy: the region planner and audio loader work on numpy arrays
+        # (pinned to match server/requirements.txt)
+        run: pip install pytest pytest-cov numpy==2.4.3
 
       - name: Run tests with coverage
+        shell: bash
         run: |
           mkdir -p reports
           pytest tests/ -v --tb=short \
@@ -87,7 +89,7 @@ jobs:
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && matrix.os == 'ubuntu-latest'
         with:
           name: coverage-report
           path: reports/coverage.xml
@@ -131,7 +133,7 @@ jobs:
         run: pip install bandit pip-audit
 
       - name: Bandit security scan
-        run: bandit -r pocket_yume.py config.py server/ -ll -c pyproject.toml
+        run: bandit -r pocket_yume.py config.py server/ yume/ -ll -c pyproject.toml
 
       - name: Dependency audit
         run: pip-audit -r server/requirements.txt
@@ -182,4 +184,4 @@ jobs:
         run: npm install
 
       - name: Run ESLint
-        run: npx eslint extension/js/ extension/popup.js
+        run: npx eslint extension/ tests/js/
