@@ -567,6 +567,10 @@ def test_romaji_identical_to_the_line_is_not_repeated(pipeline):
         job.add_region(len(job.regions) - 1, [{"start": 601, "end": 603, "text": "One more kiss"}])
     seg = [s for s in job.segments.values() if s["text"] == "One more kiss"][0]
     assert seg["romaji"] == ""
+    # with or without the romanization libraries: nothing to do, no LLM call
+    assert _romanize.romanize("ja", "Living in a dream!") == ""
+    assert _romanize.romanize("ru", "Привет") == "Privet"  # Cyrillic is still romanized
+    assert _romanize.romanize("ar", "مرحبا") is None  # and Arabic still goes to the LLM
 
 
 def test_lines_at_the_playhead_are_translated_first_in_a_small_batch(pipeline):

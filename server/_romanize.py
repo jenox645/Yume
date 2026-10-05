@@ -9,6 +9,7 @@ scripts, or JA/ZH when the library is not installed.
 """
 
 import threading
+import unicodedata
 
 
 # ── pykakasi (Japanese kanji → romaji) ───────────────────────────────────────
@@ -172,14 +173,22 @@ _DETERMINISTIC = {
 _LLM_SCRIPTS = {"ar", "fa", "he", "el", "uk", "bg", "sr", "hi", "th", "ka", "hy"}
 
 
+def _latin_only(text):
+    """No letters outside the Latin script ("One more kiss", "Living in a dream")."""
+    return all(not ch.isalpha() or "LATIN" in unicodedata.name(ch, "") for ch in text)
+
+
 def romanize(lang, text):
     """Romanization of one line.
 
     Returns the romanized text, "" when there is nothing to do (Latin-script
-    language, empty line), or None when the LLM must do it: Arabic and other
-    non-Latin scripts, or JA/ZH when pykakasi/pypinyin are not installed.
+    language, a line already in Latin letters, empty line), or None when the
+    LLM must do it: Arabic and other non-Latin scripts, or JA/ZH when
+    pykakasi/pypinyin are not installed.
     """
-    if not text.strip():
+    # An English line in a Japanese song needs no romanization — without this
+    # it was shown twice, or cost an LLM call when pykakasi is not installed
+    if not text.strip() or _latin_only(text):
         return ""
     fn = _DETERMINISTIC.get(lang)
     if fn is not None:

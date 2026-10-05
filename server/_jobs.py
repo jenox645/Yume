@@ -119,8 +119,6 @@ class Job:
             roma = _romanize.romanize(self.language, s["text"]) if self.language else ""
             if roma is None and cache is not None:
                 roma = cache.get_romanization(self.lang_key, s["text"])  # LLM result from an earlier run
-            if roma and roma.strip().lower() == s["text"].strip().lower():
-                roma = ""  # already Latin (an English line in a Japanese song): no second copy
             seg = {
                 "id": self.next_sid,
                 "start": s["start"],
