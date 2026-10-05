@@ -4,7 +4,6 @@ export default [
     js.configs.recommended,
     {
         files: ["extension/**/*.js"],
-        ignores: ["extension/js/wanakana_min.js"],
         languageOptions: {
             ecmaVersion: 2022,
             sourceType: "script",
@@ -49,12 +48,11 @@ export default [
                 ReadableStream: "readonly",
                 history: "readonly",
                 CSS: "readonly",
+                confirm: "readonly",
                 // Extension script globals (injected via manifest)
-                DEBUG: "readonly",
-                AudioCapture: "readonly",
+                SubtitleSession: "readonly",
                 SubtitleWindow: "readonly",
-                // Vendored libraries
-                wanakana: "readonly",
+                BUNDLED_FONTS: "readonly",
             },
         },
         rules: {
@@ -66,6 +64,23 @@ export default [
         },
     },
     {
-        ignores: ["node_modules/", "extension/js/wanakana_min.js"],
+        // Unit tests run the extension scripts in Node VMs (node --test)
+        files: ["tests/js/**/*.mjs"],
+        languageOptions: {
+            ecmaVersion: 2022,
+            sourceType: "module",
+            globals: {
+                console: "readonly",
+                setTimeout: "readonly",
+                clearTimeout: "readonly",
+                setImmediate: "readonly",
+                URL: "readonly",
+                URLSearchParams: "readonly",
+                AbortController: "readonly",
+            },
+        },
+    },
+    {
+        ignores: ["node_modules/", "dev/", ".claude/"],
     },
 ];

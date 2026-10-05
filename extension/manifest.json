@@ -3,22 +3,31 @@
   "name": "Yume - AI Subtitles",
   "version": "0.1.0",
   "description": "You Understand More Easily - Real-time AI subtitles for any video, fully local",
-  
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuAdY8Brc8g8k5zqTTtMS6mEWGWkZpPUwD1DshMEVd1XzZLkueId+OfIr9n9V16F5rj6/7WuDuKv33z+Ry3WaWGxJvhDTTvvEsRF4esFh/Qkl1MW21N8ZsKejM2gdiEuqQ1MBgzkUtsYyF2HGIlXuxRO1SlgBOLzvzRJmD6hA8Po8Aszq2jxN3opJzfPhiwcG2kssuf8ZBLwCQ06SleQ1oHVfyT2iKYJhwQ2qqblbZiIx4DAk3sSusqmqX3wMamVArLlaHCspQA4Azd4sNLQP2qkVwbdqXV4zScMxQi1yfr8C+8eDqZKVwvQgJbz8FtbmqTvNC+nX3PCgJNZ0VJIHfwIDAQAB",
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "yume-subtitles@pocketyume",
+      "strict_min_version": "121.0"
+    }
+  },
+
   "permissions": [
     "activeTab",
-    "storage",
-    "scripting"
+    "nativeMessaging",
+    "storage"
   ],
-  
+
   "host_permissions": [
     "http://localhost/*",
     "http://127.0.0.1/*"
   ],
-  
+
   "background": {
-    "service_worker": "js/background.js"
+    "service_worker": "js/background.js",
+    "scripts": ["js/background.js"]
   },
-  
+
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
@@ -27,7 +36,7 @@
       "128": "icons/icon128.png"
     }
   },
-  
+
   "commands": {
     "toggle-subtitles": {
       "suggested_key": {
@@ -37,38 +46,31 @@
       "description": "Toggle subtitles on/off"
     }
   },
-  
+
   "content_scripts": [
     {
-      "matches": [
-        "https://www.youtube.com/*",
-        "https://youtube.com/*",
-        "http://*/*",
-        "https://*/*"
-      ],
+      "matches": ["http://*/*", "https://*/*"],
       "js": [
-        "js/debug-system.js",
-        "js/wanakana_min.js",
+        "js/bundled-fonts.js",
         "js/subtitle-window.js",
-        "js/audio-capture.js",
+        "js/session.js",
         "js/content.js"
       ],
-      "css": ["css/content.css"],
       "run_at": "document_end",
       "all_frames": false
     }
   ],
-  
+
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  
+
   "web_accessible_resources": [
     {
-      "resources": ["css/*", "icons/*", "fonts/*"],
-      "matches": ["<all_urls>"]
+      "resources": ["css/content.css", "fonts/*"],
+      "matches": ["http://*/*", "https://*/*"]
     }
   ]
 }

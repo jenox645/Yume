@@ -1,10 +1,15 @@
 // ============================================================================
-// SUBTITLE WINDOW v0.1.0 - Chunk counter, ready toast, per-line fonts
+// SUBTITLE WINDOW
+// Draggable/resizable overlay, progress badge, ready toast, per-line fonts.
+// Lives in a Shadow DOM: its CSS used to be injected into EVERY page, where
+// generic selectors like .close-btn or .resize-handle restyled the sites' own
+// elements (and site CSS leaked into the overlay).
 // ============================================================================
 
 // eslint-disable-next-line no-redeclare
 class SubtitleWindow {
   constructor() {
+    this.host       = null;   // <yume-subtitles> in the page; the overlay lives in its shadow root
     this.element    = null;
     this.isDragging = false;
     this.isResizing = false;
@@ -36,10 +41,10 @@ class SubtitleWindow {
     // If the fullscreen element is the <video> itself we can't inject children
     // into it — leave the window in body (hidden in fullscreen, same as before).
     // Most players (YouTube included) fullscreen a container div, which works.
-    const canHost = fsEl && fsEl.tagName !== 'VIDEO' && !this.element.contains(fsEl);
-    const host = canHost ? fsEl : document.body;
-    if (this.element.parentNode !== host) {
-      host.appendChild(this.element);
+    const canHost = fsEl && fsEl.tagName !== 'VIDEO' && !this.host.contains(fsEl);
+    const parent = canHost ? fsEl : document.documentElement;
+    if (this.host.parentNode !== parent) {
+      parent.appendChild(this.host);
       this._clampToViewport();
     }
   }
@@ -58,7 +63,13 @@ class SubtitleWindow {
       const p = result.windowPosition;
       if (p) {
         if (p.left)   this.element.style.left   = p.left;
-        if (p.top)    this.element.style.top     = p.top;
+        if (p.top) {
+          this.element.style.top = p.top;
+          // The stylesheet's default is bottom:80px; with both top and bottom set,
+          // a fixed element stretches between them — every window opened after a
+          // drag used to come up stretched to the bottom of the screen.
+          this.element.style.bottom = 'auto';
+        }
         if (p.width)  this.element.style.width   = p.width;
         if (p.height) this.element.style.height  = p.height;
         // A position saved on a larger screen (or after a stray drag) can land
@@ -96,16 +107,24 @@ class SubtitleWindow {
   }
 
   create() {
+    // Remove any orphaned prior overlay so we never stack two windows
+    // (a second construction without close() leaves a frozen, un-closable box).
+    document.querySelectorAll('yume-subtitles').forEach((el) => el.remove());
+    this.host = document.createElement('yume-subtitles');
+    const root = this.host.attachShadow({ mode: 'closed' });
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = chrome.runtime.getURL('css/content.css');
+    root.appendChild(css);
+
     this.element = document.createElement('div');
-    this.element.id = 'ai-subtitle-window';
     this.element.className = 'subtitle-window';
 
     this.element.innerHTML = `
       <div class="subtitle-header">
         <div class="subtitle-title"></div>
         <div class="subtitle-controls">
-          <div class="chunk-badge" style="display:none" title="Pipeline progress"></div>
-          <div class="roma-badge" style="display:none" title="Romanization progress"></div>
+          <div class="chunk-badge" style="display:none" title="Progress"></div>
           <button class="control-btn minimize-btn" title="Minimize">\u2212</button>
           <button class="control-btn close-btn" title="Close">\u00d7</button>
         </div>
@@ -124,29 +143,31 @@ class SubtitleWindow {
     this.element.querySelector('.subtitle-title').textContent =
       this.settings.windowTitle || 'Yume';
 
-    document.body.appendChild(this.element);
+    root.appendChild(this.element);
+    // documentElement, not body: some pages replace <body> on navigation
+    document.documentElement.appendChild(this.host);
     this._injectBundledFonts();
   }
 
   _injectBundledFonts() {
-    // Inject @font-face for any .ttf/.otf files placed in extension/fonts/
-    // Users can add custom fonts by placing files there and listing them in popup.js BUNDLED_FONTS
-    chrome.storage.local.get(['bundledFonts'], (result) => {
-      try {
-        const fonts = result.bundledFonts || [];
-        if (!fonts.length) return;
-        let css = '';
-        for (const f of fonts) {
-          const url = chrome.runtime.getURL('fonts/' + f.file);
-          css += `@font-face { font-family: "${f.name}"; src: url("${url}"); font-display: swap; }\n`;
-        }
-        if (css) {
-          const style = document.createElement('style');
-          style.textContent = css;
-          document.head.appendChild(style);
-        }
-      } catch (e) { console.warn('[Yume] Font injection failed:', e.message); }
-    });
+    // Inject @font-face for the fonts registered in js/bundled-fonts.js (the same
+    // list the popup offers). It used to read a 'bundledFonts' storage key that
+    // nothing ever wrote, so a selected bundled font never actually loaded.
+    if (document.getElementById('yume-bundled-fonts')) return;
+    try {
+      const fonts = typeof BUNDLED_FONTS !== 'undefined' ? BUNDLED_FONTS : [];
+      if (!fonts.length) return;
+      const clean = (v) => String(v).replace(/["'\\;<>]/g, '');
+      let css = '';
+      for (const f of fonts) {
+        const url = chrome.runtime.getURL('fonts/' + clean(f.file));
+        css += `@font-face { font-family: "${clean(f.name)}"; src: url("${url}"); font-display: swap; }\n`;
+      }
+      const style = document.createElement('style');
+      style.id = 'yume-bundled-fonts';
+      style.textContent = css;
+      document.head.appendChild(style);
+    } catch (e) { console.warn('[Yume] Font injection failed:', e.message); }
   }
 
   applyCustomStyles() {
@@ -164,8 +185,9 @@ class SubtitleWindow {
     if (s.windowShadow === false) this.element.style.boxShadow = 'none';
     else this.element.style.boxShadow = '';
 
-    // Corner radius — always applied (independent of glass effect)
-    const radius = s.glassRadius ?? 0;
+    // Corner radius — always applied (independent of glass effect).
+    // Default 20 matches the popup slider's default.
+    const radius = s.glassRadius ?? 20;
     this.element.style.borderRadius = radius > 0 ? `${radius}px` : '';
 
     // Glass effect — transparent blur behind subtitles
@@ -226,36 +248,25 @@ class SubtitleWindow {
 
     const header = this.element.querySelector('.subtitle-header');
     header.addEventListener('mousedown', (e) => this.startDrag(e));
-    document.addEventListener('mousemove', (e) => this.drag(e));
-    document.addEventListener('mouseup', () => this.stopDrag());
-
     const resizeHandle = this.element.querySelector('.resize-handle');
     resizeHandle.addEventListener('mousedown', (e) => this.startResize(e));
-    document.addEventListener('mousemove', (e) => this.resize(e));
-    document.addEventListener('mouseup', () => this.stopResize());
 
-    chrome.storage.onChanged.addListener((changes) => {
+    // Document/storage listeners outlive the element — kept as fields so close()
+    // can remove them (each enable creates a new window; they used to pile up).
+    this._onMouseMove = (e) => { this.drag(e); this.resize(e); };
+    this._onMouseUp = () => { this.stopDrag(); this.stopResize(); };
+    document.addEventListener('mousemove', this._onMouseMove);
+    document.addEventListener('mouseup', this._onMouseUp);
+
+    this._onStorageChanged = (changes) => {
       if (changes.settings) {
         this.settings = changes.settings.newValue || {};
         this.applyCustomStyles();
         const titleEl = this.element?.querySelector('.subtitle-title');
         if (titleEl) titleEl.textContent = this.settings.windowTitle || 'Yume';
 
-        // Immediately toggle chunk badge visibility on settings change
-        const badge = this.element?.querySelector('.chunk-badge');
-        if (badge) {
-          if (this.settings.showChunkCounter === false) {
-            badge.style.display = 'none';
-          } else if (this._lastProgress && !this._lastProgress.complete) {
-            const showTrans = this.settings.showEnglish !== false;
-            const cnt = showTrans ? (this._lastProgress.translated || 0) : this._lastProgress.fetched;
-            badge.textContent = `${cnt}/${this._lastProgress.total}`;
-            badge.className = 'chunk-badge active';
-            badge.style.display = '';
-          } else if (badge.classList.contains('active') || badge.classList.contains('complete')) {
-            badge.style.display = '';
-          }
-        }
+        // Badge visibility follows the counter setting immediately
+        if (this._lastProgress) this.updateChunkProgress(this._lastProgress);
 
         // Re-render the CURRENTLY displayed cue so show/hide toggles (original,
         // romaji, english), RTL, and confidence apply live to the line already on
@@ -265,74 +276,71 @@ class SubtitleWindow {
                               this.currentRomaji, this.currentConfidence);
         }
       }
-    });
+    };
+    chrome.storage.onChanged.addListener(this._onStorageChanged);
   }
 
   // ========================================================================
   // CHUNK PROGRESS BADGE
   // ========================================================================
 
+  // detail: {done, total, complete, lines, translated, status} (regions / lines)
   updateChunkProgress(detail) {
     if (!this.element) return;
-    const { fetched, total, complete, translated, romanized } = detail;
     const badge = this.element.querySelector('.chunk-badge');
-    const romaBadge = this.element.querySelector('.roma-badge');
     if (!badge) return;
-
     this._lastProgress = detail;
-    const hidden = this.settings.showChunkCounter === false;
+    if (this.settings.showChunkCounter === false) { badge.style.display = 'none'; return; }
+    const { done = 0, total = 0, complete, lines = 0, translated = 0, status } = detail;
 
-    // Use translated count as main progress when translation is enabled,
-    // otherwise use fetched (whisper-only). This ensures the counter only
-    // goes up when ALL enabled processing is done for a chunk.
-    const showTranslation = this.settings.showEnglish !== false;
-    const _mainCount = showTranslation ? (translated || 0) : fetched;
-    // Show as complete when all chunks are fetched — empty chunks (instrumental
-    // sections with no vocals) are legitimately done, not missing.
-    const allDone = complete;
-
-    if (allDone) {
+    if (complete) {
+      if (badge.classList.contains('complete')) return;  // already shown/fading
       badge.textContent = '\u2713';
+      badge.title = 'Done';
       badge.className = 'chunk-badge complete';
-      if (hidden) { badge.style.display = 'none'; }
-      else {
-        badge.style.display = '';
-        setTimeout(() => {
-          if (badge.classList.contains('complete')) {
-            badge.classList.add('fade-out');
-            setTimeout(() => { badge.style.display = 'none'; }, 600);
-          }
-        }, 3000);
-      }
-    } else {
-      badge.textContent = `${_mainCount}/${total}`;
-      badge.className = 'chunk-badge active';
-      badge.style.display = hidden ? 'none' : '';
-    }
-
-    // ── Roma badge (warm amber): romanization progress ──
-    if (romaBadge) {
-      const showRoma = this.settings.showRomaji === true && !hidden;
-      const romaCount = romanized || 0;
-
-      if (showRoma && fetched > 0) {
-        if (romaCount >= total && complete) {
-          romaBadge.textContent = '\u2713';
-          romaBadge.className = 'roma-badge complete';
-          romaBadge.style.display = '';
-          setTimeout(() => {
-            if (romaBadge.classList.contains('complete')) {
-              romaBadge.classList.add('fade-out');
-              setTimeout(() => { romaBadge.style.display = 'none'; }, 600);
-            }
-          }, 3000);
-        } else {
-          romaBadge.textContent = `${romaCount}R`;
-          romaBadge.className = 'roma-badge active';
-          romaBadge.style.display = '';
+      badge.style.display = '';
+      setTimeout(() => {
+        if (badge.classList.contains('complete')) {
+          badge.classList.add('fade-out');
+          setTimeout(() => { badge.style.display = 'none'; }, 600);
         }
+      }, 3000);
+      return;
+    }
+    // Say what is being counted: it switches from audio sections to translated
+    // lines once Whisper is done, and translations arrive a batch at a time
+    if (!total) {
+      badge.textContent = status === 'downloading' ? 'Downloading\u2026' : '\u2026';
+      badge.title = status === 'downloading' ? 'Downloading audio' : 'Starting';
+    } else if (status === 'translating') {
+      badge.textContent = `Translating ${translated}/${lines}`;
+      badge.title = 'Lines translated (the translator works through them in batches, lines near the playhead first)';
+    } else {
+      badge.textContent = `Listening ${done}/${total}`;
+      badge.title = 'Audio sections transcribed';
+    }
+    badge.className = 'chunk-badge active';
+    badge.style.display = '';
+  }
+
+  // Reset progress UI when a (new) pipeline run starts, so a previous run's stale
+  // "✓ complete" badge or "Ready ✓" toast doesn't linger through the next run's
+  // download + first-chunk wait. Shows an immediate "working" badge (…) so the user
+  // gets feedback that something is happening during that (often multi-second) gap
+  // instead of a frozen/blank window.
+  resetProgress() {
+    this._lastProgress = null;
+    if (!this.element) return;
+    const toast = this.element.querySelector('.ready-toast');
+    if (toast) { toast.classList.remove('fade-out'); toast.style.display = 'none'; }
+    const badge = this.element.querySelector('.chunk-badge');
+    if (badge) {
+      if (this.settings.showChunkCounter === false) {
+        badge.style.display = 'none';
       } else {
-        romaBadge.style.display = 'none';
+        badge.textContent = '…';  // … — "working, counting soon"
+        badge.className = 'chunk-badge active';
+        badge.style.display = '';
       }
     }
   }
@@ -365,13 +373,14 @@ class SubtitleWindow {
     if (statusEl) statusEl.style.display = 'none';
 
     const showJp = this.settings.showOriginal !== false;
-    // RTL support for Arabic source language
-    const isRTL = this.settings.sourceLanguage === 'ar';
-    // Align all subtitle lines consistently (center for LTR, right for RTL)
-    const align = isRTL ? 'right' : 'center';
-    const dir   = isRTL ? 'rtl' : 'ltr';
-    if (originalEl) { originalEl.style.direction = dir; originalEl.style.textAlign = align; }
-    if (englishEl)  englishEl.style.textAlign = align;
+    // RTL per line: the original is Arabic when the SOURCE is, the translation
+    // when the TARGET is (romanization is always Latin, LTR).
+    const srcRTL = this.settings.sourceLanguage === 'ar';
+    const tgtRTL = this.settings.targetLanguage === 'Arabic';
+    // Align all subtitle lines consistently (center for LTR, right for RTL source)
+    const align = srcRTL ? 'right' : 'center';
+    if (originalEl) { originalEl.style.direction = srcRTL ? 'rtl' : 'ltr'; originalEl.style.textAlign = align; }
+    if (englishEl)  { englishEl.style.direction = tgtRTL ? 'rtl' : 'ltr'; englishEl.style.textAlign = align; }
     if (romajiEl)   romajiEl.style.textAlign = align;
 
     const showEn = this.settings.showEnglish !== false;
@@ -429,8 +438,6 @@ class SubtitleWindow {
     }
   }
 
-  showBuffering() {}
-
   getCurrentText() {
     return { original: this.currentOriginal, english: this.currentEnglish, romaji: this.currentRomaji };
   }
@@ -440,7 +447,7 @@ class SubtitleWindow {
   // ========================================================================
 
   startDrag(e) {
-    if (e.target.closest('button') || e.target.closest('.chunk-badge') || e.target.closest('.roma-badge')) return;
+    if (e.target.closest('button') || e.target.closest('.chunk-badge')) return;
     const sel = window.getSelection();
     if (sel && sel.toString().length > 0) return;
     this.isDragging = true;
@@ -471,12 +478,16 @@ class SubtitleWindow {
   }
   toggleMinimize() { this.element.classList.toggle('minimized'); }
   close() {
+    if (this._onMouseMove) document.removeEventListener('mousemove', this._onMouseMove);
+    if (this._onMouseUp) document.removeEventListener('mouseup', this._onMouseUp);
+    if (this._onStorageChanged) chrome.storage.onChanged.removeListener(this._onStorageChanged);
+    this._onMouseMove = this._onMouseUp = this._onStorageChanged = null;
     if (this._onFullscreenChange) {
       document.removeEventListener('fullscreenchange', this._onFullscreenChange);
       document.removeEventListener('webkitfullscreenchange', this._onFullscreenChange);
       this._onFullscreenChange = null;
     }
-    if (this.element?.parentNode) this.element.remove();
+    if (this.host?.parentNode) this.host.remove();
     window.dispatchEvent(new CustomEvent('subtitle-window-closed'));
   }
   destroy() { this.close(); }

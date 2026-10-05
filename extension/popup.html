@@ -10,7 +10,7 @@
     <div class="yume-header">
       <div class="deco-line top-line"></div>
       <h1 class="yume-title">Yume</h1>
-      <div class="yume-subtitle">v0.1.0</div>
+      <div class="yume-subtitle" id="yumeVersion"></div>
       <div class="deco-line bottom-line"></div>
     </div>
 
@@ -49,12 +49,16 @@
             <div class="status-indicator" id="translationStatus" role="status" aria-label="Translation server status"></div>
             <div class="status-info">
               <div class="status-name">Translation</div>
-              <div class="status-port" id="translationInfo">localhost:5000</div>
+              <div class="status-port" id="translationInfo">via Whisper server</div>
             </div>
           </div>
         </div>
         <div id="serverHint" class="setting-hint" style="display:none;margin:4px 0"></div>
-        <button type="button" id="refreshStatus" class="yume-button secondary" aria-label="Refresh server status">Refresh</button>
+        <div class="button-row">
+          <button type="button" id="serviceStart" class="yume-button secondary" style="display:none">Start Yume</button>
+          <button type="button" id="serviceStop" class="yume-button secondary" style="display:none">Stop Yume</button>
+          <button type="button" id="refreshStatus" class="yume-button secondary" aria-label="Refresh server status">Refresh</button>
+        </div>
       </div>
     </div>
 
@@ -125,16 +129,6 @@
         </div>
         <div class="setting-card">
           <div class="setting-row">
-            <span class="setting-label">Chunk Duration</span>
-            <div class="setting-value-group">
-              <input type="number" id="chunkDuration" aria-label="Audio chunk duration in seconds" min="10" max="60" value="30" class="yume-input">
-              <span class="setting-unit">sec</span>
-            </div>
-          </div>
-          <div class="setting-hint">Seconds of audio processed per batch &mdash; 30 is a good default</div>
-        </div>
-        <div class="setting-card">
-          <div class="setting-row">
             <span class="setting-label">Show Progress Counter</span>
             <label class="yume-toggle"><input type="checkbox" id="showChunkCounter" checked aria-label="Show chunk counter"><span class="toggle-slider"></span></label>
           </div>
@@ -168,8 +162,8 @@
       <div class="section-body">
         <div class="setting-card">
           <div class="hallucination-info">
-            Seeing phantom subtitles? Click <b>Report</b> to capture the current text and add it to the blacklist.
-            Items are filtered instantly from display. Click <b>Update Server</b> to also filter at transcription time.
+            Seeing phantom subtitles? Click <b>Report</b> to block the line on screen. The blacklist lives
+            on the Yume server, so it applies everywhere at once &mdash; including the CLI and saved videos.
           </div>
         </div>
         <button type="button" id="reportHallucination" class="yume-button danger" aria-label="Report current subtitle as hallucination" style="margin-bottom:8px">
@@ -187,9 +181,6 @@
         </div>
         <div id="blacklistContainer" class="blacklist-container" style="display:none"></div>
         <div style="display:flex;gap:8px;margin-top:8px">
-          <button type="button" id="updateBlacklist" class="yume-button primary" style="flex:1;margin-top:0">
-            &#8635; Update Server
-          </button>
           <button type="button" id="clearBlacklist" class="yume-button secondary" style="flex:1;margin-top:0">
             Clear All
           </button>
@@ -363,15 +354,13 @@
           <div class="setting-row">
             <span class="setting-label">Switch to</span>
             <select id="whisperModelSelect" class="yume-select">
-              <option value="tiny">tiny (~1GB)</option>
-              <option value="base">base (~1GB)</option>
-              <option value="small">small (~2GB)</option>
-              <option value="medium">medium (~5GB)</option>
-              <option value="large-v2">large-v2 (~10GB)</option>
-              <option value="large-v3" selected>large-v3 (~10GB)</option>
-              <option value="large-v3-turbo">turbo (~6GB)</option>
-              <option value="distil-large-v2">distil-large-v2 (~4GB)</option>
-              <option value="distil-large-v3">distil-large-v3 (~4GB)</option>
+              <option value="tiny">tiny (~1 GB)</option>
+              <option value="base">base (~1 GB)</option>
+              <option value="small">small (~1.5 GB)</option>
+              <option value="medium">medium (~3 GB)</option>
+              <option value="large-v2">large-v2 (~4.5 GB)</option>
+              <option value="large-v3" selected>large-v3 (~4.5 GB)</option>
+              <option value="large-v3-turbo">turbo (~3 GB)</option>
             </select>
           </div>
         </div>
@@ -380,7 +369,9 @@
         </button>
         <div id="modelSwitchStatus" class="status-message" style="margin-top:4px"></div>
         <div class="hallucination-info" style="margin-top:6px">
-          Smaller models = faster but less accurate. Cache is cleared on switch.
+          Smaller models = faster but less accurate. Open videos are re-transcribed with the new model
+          (each model keeps its own saved transcripts). VRAM figures are for float16; the translation model
+          needs its own VRAM on top.
         </div>
       </div>
     </div>
@@ -414,19 +405,12 @@
             </div>
           </div>
         </div>
-        <div class="setting-card">
-          <div class="setting-row">
-            <span class="setting-label">Translation Port</span>
-            <div class="setting-value-group">
-              <input type="number" id="translationPort" min="1024" max="65535" value="5000" class="yume-input">
-            </div>
-          </div>
-        </div>
         <div style="display:flex;gap:8px;margin-top:8px">
-          <button type="button" id="savePorts" class="yume-button primary" style="flex:1;margin-top:0">Save Ports</button>
-          <button type="button" id="autoFreePorts" class="yume-button secondary" style="flex:1;margin-top:0">Auto Free Ports</button>
+          <button type="button" id="savePorts" class="yume-button primary" style="flex:1;margin-top:0">Save Port</button>
         </div>
         <div id="portsStatus" class="status-message" style="margin-top:4px"></div>
+        <div class="setting-hint">Must match the Whisper port in the Yume CLI (Settings &rarr; Server addresses).
+          The translation server is configured in the CLI only.</div>
         <!-- Custom Stream URL for m3u8 / direct media -->
         <div class="subsection-label" style="margin-top:12px">Custom Stream URL</div>
         <div class="setting-card">
@@ -461,7 +445,6 @@
         <div style="display:flex;gap:8px;margin-top:8px">
           <button type="button" id="exportSrt" class="yume-button primary" style="flex:1;margin-top:0">Export SRT</button>
           <button type="button" id="exportVtt" class="yume-button primary" style="flex:1;margin-top:0">Export VTT</button>
-          <button type="button" id="clearCache" class="yume-button danger" style="flex:1;margin-top:0">Clear Cache</button>
         </div>
         <div id="exportStatus" class="status-message" style="margin-top:4px"></div>
       </div>
@@ -474,13 +457,13 @@
       </div>
       <div class="section-body">
         <div class="hallucination-info" style="margin-bottom:6px">
-          Fully processed videos are kept for 30 days &mdash; reopening one restores
-          its subtitles instantly, no GPU work needed.
+          Transcripts and translations are saved on the Yume server (the newest 200 videos) &mdash;
+          reopening a video restores its subtitles instantly, in any browser, no GPU work needed.
         </div>
         <div id="historyList" class="diag-log"></div>
         <div style="display:flex;gap:8px;margin-top:8px">
           <button type="button" id="refreshHistory" class="yume-button secondary" style="flex:1;margin-top:0">Refresh</button>
-          <button type="button" id="clearHistory" class="yume-button danger" style="flex:1;margin-top:0">Clear All</button>
+          <button type="button" id="clearHistory" class="yume-button danger" style="flex:1;margin-top:0">Clear Cache</button>
         </div>
         <div id="historyStatus" class="status-message" style="margin-top:4px"></div>
       </div>
@@ -492,6 +475,7 @@
     </div>
   </div>
 
+  <script src="js/bundled-fonts.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>
