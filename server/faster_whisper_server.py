@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """
-Yume -- Faster-Whisper Server v0.1.0
-Word-level timestamps + pause re-splitting + security hardening
-Parallel startup: Flask starts before model loads. Prewarm inference on load.
-All output is ASCII-safe for Windows cp932/cp1252 locales.
+Yume -- Faster-Whisper Server
+
+Runs the whole subtitle pipeline for the browser extension: downloads a video's
+audio (yt-dlp/ffmpeg), transcribes it region by region with faster-whisper,
+translates and romanizes the lines through a local LLM, and caches everything
+in SQLite. The extension creates a job and polls it (see _jobs.py).
+
+Flask starts before the model loads; /health reports loading/ready/error.
 """
 
 import atexit
-import io
 import json
 import logging
+import math
 import os
 import platform
+import re
 import secrets
 import shutil
 import signal
@@ -22,15 +27,7 @@ import threading
 import time
 from pathlib import Path
 
-# === CRITICAL: Force UTF-8 stdout to avoid cp932 UnicodeEncodeError on Windows ===
-if sys.platform == "win32":
-    try:
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-
-from flask import Flask, g, jsonify, request
+from flask import Flask, jsonify, request
 
 try:
     from faster_whisper import WhisperModel
@@ -42,36 +39,30 @@ except ImportError:
 import _state
 import _audio
 import _bgutil
-import _filter
+import _jobs
 import _romanize
-import _transcribe
+import _store
+import _translate
 from _security import validate_url
+
+# Must match pocket_yume.VERSION and extension/manifest.json (tests check it)
+SERVER_VERSION = "0.1.0"
 
 # ── Flask app ─────────────────────────────────────────────────────────────────
 app = Flask(__name__)
+# Every endpoint takes small JSON (URLs, ids, text lines) — cap request bodies.
+app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
 
-# Trusted origins for CORS — only local servers and the browser extension.
-_CORS_ORIGINS = frozenset(
-    [
-        "chrome-extension://",  # prefix match — any Chrome/Edge/Brave/Opera extension
-        "moz-extension://",  # prefix match — any Firefox extension
-    ]
-)
+# Trusted origins for CORS — browser extensions only. Web pages, including ones
+# served from localhost, have no business calling this server.
+_CORS_ORIGINS = ("chrome-extension://", "moz-extension://")
 _CORS_HEADERS = "Content-Type, X-API-Token"
 _CORS_METHODS = "GET, POST, OPTIONS"
 
 
 def _is_trusted_origin(origin) -> bool:
-    """Return True for chrome-extension:// origins and all loopback origins."""
-    if not origin:
-        return False
-    if any(origin.startswith(pfx) for pfx in _CORS_ORIGINS):
-        return True
-    # Accept http://localhost:* and http://127.0.0.1:* (loopback only)
-    import urllib.parse
-
-    parsed = urllib.parse.urlparse(origin)
-    return parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1")
+    """True for browser-extension origins (any Chromium or Firefox extension)."""
+    return bool(origin) and origin.startswith(_CORS_ORIGINS)
 
 
 # ── Security: shared secret token ────────────────────────────────────────────
@@ -79,6 +70,12 @@ def _is_trusted_origin(origin) -> bool:
 _state.API_TOKEN = secrets.token_urlsafe(32)
 
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
+
+
+def _token_ok(token):
+    """Constant-time token check. Compares bytes: compare_digest raises
+    TypeError on non-ASCII str, which turned a bad header into a 500."""
+    return bool(token) and secrets.compare_digest(token.encode("utf-8"), _state.API_TOKEN.encode("utf-8"))
 
 
 @app.before_request
@@ -97,8 +94,7 @@ def _security_checks():
         return jsonify({"error": "Forbidden: invalid host"}), 403
 
     if request.path not in ("/health", "/favicon.ico"):
-        token = request.headers.get("X-API-Token", "")
-        if not secrets.compare_digest(token, _state.API_TOKEN):
+        if not _token_ok(request.headers.get("X-API-Token", "")):
             print(f"[Yume] BLOCKED: invalid/missing API token on {request.method} {request.path}")
             return jsonify({"error": "Forbidden: invalid token"}), 403
 
@@ -115,19 +111,6 @@ def _add_cors_headers(response):
         response.headers["Access-Control-Allow-Headers"] = _CORS_HEADERS
         response.headers["Vary"] = "Origin"
     return response
-
-
-@app.teardown_request
-def _cleanup_request_temps(_exception):
-    """Clean temp files created during this request (defence against unclean exits)."""
-    for path in getattr(g, "_temp_files", []):
-        try:
-            if os.path.isfile(path):
-                os.unlink(path)
-            elif os.path.isdir(path):
-                shutil.rmtree(path, ignore_errors=True)
-        except OSError:
-            pass
 
 
 # ── Startup cleanup ───────────────────────────────────────────────────────────
@@ -157,7 +140,6 @@ def _cleanup_stale_temps():
 def _shutdown_handler(signum, frame):
     """Handle SIGTERM/SIGINT — clean up and exit gracefully."""
     print(f"\n[Yume] Received signal {signum}, cleaning up...")
-    _audio.cleanup_all_audio()
     if _state.TOKEN_FILE and os.path.exists(_state.TOKEN_FILE):
         try:
             os.unlink(_state.TOKEN_FILE)
@@ -183,14 +165,22 @@ def _get_gpu_stats():
             timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():
-            parts = result.stdout.strip().split(", ")
+            # One line per GPU — report the first. Fields can read "[N/A]"
+            # (laptops, some drivers): those become None instead of failing.
+            parts = [p.strip() for p in result.stdout.strip().splitlines()[0].split(",", 4)]
             if len(parts) >= 5:
+
+                def _int(v):
+                    return int(v) if v.isdigit() else None
+
+                if _int(parts[0]) is None or _int(parts[1]) is None:
+                    return None
                 return {
-                    "vram_used_mb": int(parts[0].strip()),
-                    "vram_total_mb": int(parts[1].strip()),
-                    "gpu_util_pct": int(parts[2].strip()),
-                    "gpu_temp_c": int(parts[3].strip()),
-                    "gpu_name": parts[4].strip(),
+                    "vram_used_mb": _int(parts[0]),
+                    "vram_total_mb": _int(parts[1]),
+                    "gpu_util_pct": _int(parts[2]),
+                    "gpu_temp_c": _int(parts[3]),
+                    "gpu_name": parts[4],
                 }
     except Exception:
         pass
@@ -207,32 +197,34 @@ def health():
     safe_caller = (not origin) or origin.startswith("chrome-extension://") or origin.startswith("moz-extension://")
 
     is_ready = _state.model is not None
+    if _state.load_error:
+        status = "error"
+    else:
+        status = "ready" if is_ready else "loading"
     base = {
-        "status": "ready" if is_ready else "loading",
-        "version": "0.1.0",
-        "prepare_supported": True,
+        "status": status,
+        "version": SERVER_VERSION,
+        "api": 2,  # 2 = job API (/jobs); the old per-chunk API is gone
         "ytdlp_available": _audio.check_ytdlp(),
     }
+    if _state.load_error:
+        base["error"] = _state.load_error
     if safe_caller:
         base["api_token"] = _state.API_TOKEN
 
-    token = request.headers.get("X-API-Token", "")
-    if token == _state.API_TOKEN:
+    if _token_ok(request.headers.get("X-API-Token", "")):
         base.update(
             {
                 "model": _state.model_name,
                 "device": _state.device,
                 "compute_type": _state.compute_type,
-                "vad_filter": False,
-                "translation_host": _state.translation_host,
-                "translation_port": _state.translation_port,
                 "translation_backend": _state.translation_backend,
-                "translation_url": f"http://{_state.translation_host}:{_state.translation_port}",  # noqa: S5332 — local LLM backend, no TLS
-                "translation_prompt": _state.translation_prompt,
-                "romanization_prompt": _state.romanization_prompt,
+                "translation_address": f"{_state.translation_host}:{_state.translation_port}",
             }
         )
 
+    if status == "error":
+        return jsonify(base), 500
     return jsonify(base), (200 if is_ready else 503)
 
 
@@ -246,14 +238,13 @@ def stats():
     s["uptime_seconds"] = round(uptime)
     s["uptime_human"] = f"{int(uptime // 3600)}h{int((uptime % 3600) // 60)}m"
 
-    if s["chunks_transcribed"] > 0:
-        s["avg_whisper_time"] = round(s["total_whisper_time"] / s["chunks_transcribed"], 1)
+    if s["regions_transcribed"] > 0:
+        s["avg_whisper_time"] = round(s["total_whisper_time"] / s["regions_transcribed"], 1)
     else:
         s["avg_whisper_time"] = 0
 
-    with _state.prefetch_lock:
-        s["subtitle_cache_size"] = len(_state.subtitle_cache)
-    s["audio_cache_size"] = len(_state.full_audio_cache)
+    s["library_size"] = len({v["video_key"] for v in _state.store.library()}) if _state.store else 0
+    s.update(_state.jobs.stats() if _state.jobs else {"jobs": 0, "active": 0})
     s["blacklist_size"] = len(_state.user_blacklist)
     s["gpu"] = _get_gpu_stats()
     s["model"] = _state.model_name
@@ -264,47 +255,20 @@ def stats():
     return jsonify(s)
 
 
-@app.route("/config", methods=["GET"])
-def get_config():
-    return jsonify(
-        {
-            "model": _state.model_name,
-            "device": _state.device,
-            "compute_type": _state.compute_type,
-            "word_timestamps": _state.use_word_timestamps,
-            "pause_threshold": _state.pause_threshold,
-        }
-    )
-
-
 # ── Route: model hot-swap ─────────────────────────────────────────────────────
 
 
 @app.route("/model/switch", methods=["POST"])
 def switch_model():
     """Hot-swap the Whisper model without restarting the server."""
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     new_model = data.get("model")
     if not new_model:
         return jsonify({"error": "Missing 'model' field"}), 400
 
-    valid_models = [
-        "tiny",
-        "tiny.en",
-        "base",
-        "base.en",
-        "small",
-        "small.en",
-        "medium",
-        "medium.en",
-        "large-v1",
-        "large-v2",
-        "large-v3",
-        "turbo",
-        "large-v3-turbo",
-        "distil-large-v2",
-        "distil-large-v3",
-    ]
+    # Multilingual models only: *.en and distil-* models are English-only and
+    # cannot transcribe the languages Yume exists for.
+    valid_models = ["tiny", "base", "small", "medium", "large-v1", "large-v2", "large-v3", "turbo", "large-v3-turbo"]
 
     is_local_path = os.path.sep in new_model or "/" in new_model
     if is_local_path:
@@ -346,12 +310,37 @@ def switch_model():
         with _state.transcribe_lock:
             _state.model_name = new_model
             _state.model = new_whisper
-        with _state.prefetch_lock:
-            _state.subtitle_cache.clear()
+            # The friendly name from config described the OLD model
+            _state.model_display_name = ""
+        # Jobs belong to the old model; clients recreate theirs on the next poll
+        # (404) and get transcripts for the new model.
+        if _state.jobs:
+            _state.jobs.drop_all(f"Whisper model switched to {new_model}")
+        _persist_whisper_model(new_model)
         print(f"[Yume] Model switched to {_state.model_name}")
         return jsonify({"status": "ok", "model": _state.model_name, "previous": old_model})
     finally:
         _state.model_switch_lock.release()
+
+
+def _persist_whisper_model(model):
+    """Save a switched model to the config file, so the next start (launcher or
+    one-click) loads it instead of reverting to the old one."""
+    path = _state.config_file
+    if not path:
+        return
+    try:
+        with open(path, encoding="utf-8") as f:
+            cfg = json.load(f)
+        cfg["whisper_model"] = model
+        cfg["whisper_model_name"] = ""
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, path)
+        _state.config_mtime = os.path.getmtime(path)  # our own write: nothing to reload
+    except (OSError, ValueError) as e:
+        print(f"[Yume] Could not save the model choice to the config: {e}")
 
 
 # ── Route: translation model discovery ───────────────────────────────────────
@@ -360,6 +349,7 @@ def switch_model():
 @app.route("/translation/models", methods=["GET"])
 def list_translation_models():
     """Query the translation backend for available models."""
+    _reload_translation_config()
     url = f"http://{_state.translation_host}:{_state.translation_port}"  # noqa: S5332 — local LLM backend
     models = []
 
@@ -402,439 +392,158 @@ def list_translation_models():
     )
 
 
-# ── Routes: prepare (download full audio) ────────────────────────────────────
+# ── Routes: subtitle jobs ─────────────────────────────────────────────────────
+
+# Whisper language codes are 2-3 lowercase letters ("ja", "yue", "haw")
+_LANG_RE = re.compile(r"^[a-z]{2,3}$")
+_MAX_DURATION_S = 24 * 3600
 
 
-@app.route("/prepare", methods=["POST"])
-def prepare():
-    """Download full audio for a video. Called once before chunk transcription."""
+def _job_or_404(job_id):
+    job = _state.jobs.get(job_id) if _state.jobs else None
+    if job is None:
+        return None, (jsonify({"error": "Unknown job (server restarted or model switched) — create it again"}), 404)
+    return job, None
 
+
+@app.route("/jobs", methods=["POST"])
+def create_job():
+    """Start (or rejoin) the subtitle job for one video + language pair."""
+    if _state.load_error:
+        return jsonify({"error": f"Whisper could not load its model: {_state.load_error}"}), 503
+    data = request.get_json(silent=True) or {}
+    url = str(data.get("url") or "")
+    stream_url = str(data.get("stream_url") or "")
+    if not url and not stream_url:
+        return jsonify({"error": "Missing url"}), 400
+    for u in (url, stream_url):
+        if u:
+            valid, err = validate_url(u)
+            if not valid:
+                return jsonify({"error": f"Invalid URL: {err}"}), 400
+    language = str(data.get("language") or "").lower()
+    if language in ("", "auto"):
+        language = None
+    elif not _LANG_RE.match(language):
+        return jsonify({"error": f"Invalid language code: {language!r}"}), 400
+    target = str(data.get("target") or "").strip()[:40] or None
     try:
-        data = request.get_json()
-        url = data.get("url")
-        video_id = data.get("video_id", "unknown")
-
-        if not url:
-            return jsonify({"error": "Missing url"}), 400
-
-        valid, err = validate_url(url)
-        if not valid:
-            return jsonify({"error": f"Invalid URL: {err}"}), 400
-
-        with _state.cache_lock:
-            cached = _state.full_audio_cache.get(video_id)
-            if cached and time.time() - cached["timestamp"] < _state.FULL_AUDIO_TTL and os.path.exists(cached["path"]):
-                print(f"[Yume] Full audio cache hit for {video_id} ({cached['duration']:.0f}s)")
-                return jsonify({"status": "ready", "duration": cached["duration"], "cached": True})
-            if cached:
-                _audio.cleanup_audio_entry(cached)
-                _state.full_audio_cache.pop(video_id, None)
-
-        print(f"[Yume] Downloading full audio for {video_id}...")
-        audio_path, error_msg = _audio.download_full_audio(url)
-
-        if not audio_path:
-            return jsonify({"error": error_msg or "Audio download failed"}), 500
-
-        duration = _audio.get_audio_duration(audio_path)
-        size_kb = os.path.getsize(audio_path) / 1024
-
-        with _state.cache_lock:
-            if len(_state.full_audio_cache) >= _state.AUDIO_CACHE_MAX:
-                oldest = next(iter(_state.full_audio_cache))
-                evicted = _state.full_audio_cache.pop(oldest, None)
-                if evicted:
-                    _audio.cleanup_audio_entry(evicted)
-            _state.full_audio_cache[video_id] = {
-                "path": audio_path,
+        duration = float(data.get("duration") or 0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    # Live streams report Infinity; a bogus value would plan endless regions
+    if not math.isfinite(duration) or duration < 0 or duration > _MAX_DURATION_S:
+        duration = 0.0
+    try:
+        job = _state.jobs.create(
+            {
+                "video_id": data.get("video_id"),
+                "url": url,
+                "stream_url": stream_url,
+                "language": language,
+                "target": target,
+                "romanize": bool(data.get("romanize")),
+                "title": str(data.get("title") or ""),
                 "duration": duration,
-                "timestamp": time.time(),
             }
-
-        print(f"[Yume] Full audio ready: {duration:.1f}s, {size_kb:.0f}KB")
-        return jsonify({"status": "ready", "duration": duration, "cached": False})
-
-    except Exception as e:
-        import traceback
-
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/prepare_direct", methods=["POST"])
-def prepare_direct():
-    """Download audio from a direct stream URL (m3u8, mp4, etc.)."""
-
-    try:
-        data = request.get_json()
-        stream_url = data.get("stream_url")
-        video_id = data.get("video_id", "direct-" + str(int(time.time())))
-
-        if not stream_url:
-            return jsonify({"error": "Missing stream_url"}), 400
-
-        valid, err = validate_url(stream_url)
-        if not valid:
-            return jsonify({"error": f"Invalid URL: {err}"}), 400
-
-        with _state.cache_lock:
-            cached = _state.full_audio_cache.get(video_id)
-            if cached and time.time() - cached["timestamp"] < _state.FULL_AUDIO_TTL and os.path.exists(cached["path"]):
-                return jsonify({"status": "ready", "duration": cached["duration"], "cached": True})
-            if cached:
-                _audio.cleanup_audio_entry(cached)
-                _state.full_audio_cache.pop(video_id, None)
-
-        print(f"[Yume] Direct download: {stream_url[:120]}...")
-
-        tmp_dir = tempfile.mkdtemp(prefix="yume_direct_")
-        output_path = os.path.join(tmp_dir, "full_audio.wav")
-
-        result = subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-protocol_whitelist",
-                _state.FFMPEG_PROTOCOL_WHITELIST,
-                "-i",
-                stream_url,
-                "-vn",
-                "-ar",
-                "16000",
-                "-ac",
-                "1",
-                "-f",
-                "wav",
-                output_path,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=600,
         )
-
-        if result.returncode != 0 or not os.path.exists(output_path) or os.path.getsize(output_path) < 10000:
-            print("[Yume] ffmpeg failed, trying yt-dlp on stream URL...")
-            output_template = os.path.join(tmp_dir, "full_audio.%(ext)s")
-            result = subprocess.run(
-                [
-                    *_audio.ytdlp_cmd(),
-                    "-x",
-                    "--audio-format",
-                    "wav",
-                    "--postprocessor-args",
-                    _state.FFMPEG_AUDIO_OPTS,
-                    "--no-playlist",
-                    "--no-cache-dir",
-                    "--no-exec",
-                    "-o",
-                    output_template,
-                    "--",
-                    stream_url,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=300,
-            )
-            if result.returncode != 0 or not os.path.exists(output_path):
-                stderr = (result.stderr or "")[-300:]
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-                return jsonify({"error": f"Direct download failed: {stderr[:200]}"}), 500
-
-        duration = _audio.get_audio_duration(output_path)
-        size_kb = os.path.getsize(output_path) / 1024
-
-        with _state.cache_lock:
-            if len(_state.full_audio_cache) >= _state.AUDIO_CACHE_MAX:
-                oldest = next(iter(_state.full_audio_cache))
-                evicted = _state.full_audio_cache.pop(oldest, None)
-                if evicted:
-                    _audio.cleanup_audio_entry(evicted)
-            _state.full_audio_cache[video_id] = {
-                "path": output_path,
-                "duration": duration,
-                "timestamp": time.time(),
-            }
-
-        print(f"[Yume] Direct audio ready: {duration:.1f}s, {size_kb:.0f}KB")
-        return jsonify({"status": "ready", "duration": duration, "cached": False})
-
-    except Exception as e:
-        import traceback
-
-        traceback.print_exc()
-        _tmp = locals().get("tmp_dir")
-        if _tmp and os.path.isdir(_tmp):
-            shutil.rmtree(_tmp, ignore_errors=True)
-        return jsonify({"error": str(e)}), 500
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(job.snapshot(0, events=True))
 
 
-# ── Routes: transcription ─────────────────────────────────────────────────────
-
-
-@app.route("/transcribe_url", methods=["POST"])
-def transcribe_url():
-
-    if _state.model is None:
-        return jsonify({"error": "Model is still loading. Retry shortly."}), 503
-
+@app.route("/jobs/<job_id>", methods=["GET"])
+def get_job(job_id):
+    """Poll a job: segments changed since `since`; `t` is the playhead (priority)."""
+    job, err = _job_or_404(job_id)
+    if err:
+        return err
     try:
-        data = request.get_json()
-        if not data or "url" not in data:
-            return jsonify({"error": "Missing 'url' field"}), 400
-
-        url = data["url"]
-        video_id = data.get("video_id", "unknown")
-
-        valid, err = validate_url(url)
-        if not valid:
-            return jsonify({"error": f"Invalid URL: {err}"}), 400
-
-        try:
-            chunk_index = int(data.get("chunk_index", 0))
-            chunk_duration = int(data.get("chunk_duration", 30))
-            step_size = int(data.get("step_size", 25))
-        except (TypeError, ValueError):
-            return jsonify({"error": "chunk_index, chunk_duration and step_size must be integers"}), 400
-        if chunk_index < 0 or not (1 <= chunk_duration <= 300) or not (1 <= step_size <= 300):
-            return jsonify({"error": "chunk_index/chunk_duration/step_size out of range"}), 400
-        language = data.get("language") or None
-
-        cache_key = f"{video_id}:{step_size}:{chunk_index}"
-
-        with _state.prefetch_lock:
-            if cache_key in _state.subtitle_cache:
-                cached_result = _state.subtitle_cache[cache_key]
-                if len(cached_result.get("segments", [])) > 0:
-                    print(
-                        f"[Yume] Cache hit for chunk {chunk_index} of {video_id} "
-                        f"({len(cached_result['segments'])} segments)"
-                    )
-                    cached_result["cached"] = True
-                    with _state.stats_lock:
-                        _state.server_stats["cache_hits"] += 1
-                    return jsonify(cached_result)
-                else:
-                    print(f"[Yume] Stale empty cache for chunk {chunk_index} — re-transcribing")
-                    del _state.subtitle_cache[cache_key]
-
-        whisper_start = chunk_index * step_size
-        is_first_chunk = chunk_index == 0
-
-        # Chunk 0 has no pre-roll audio: chunks 1+ start 5 s before their owned
-        # region (the last 5 s of the previous chunk's window), giving Whisper
-        # warm-up context.  Chunk 0 starts cold at t=0.  Extending its window by
-        # 5 s gives Whisper proportionally more vocal content to work with when
-        # a song opens with an instrumental intro, reducing false no-speech drops.
-        whisper_duration = chunk_duration + (5 if is_first_chunk else 0)
-        owned_start = whisper_start
-        owned_end = whisper_start + step_size
-
-        print(
-            f"[Yume] Chunk {chunk_index}: whisper [{whisper_start}s-{whisper_start + whisper_duration}s], "
-            f"owns [{owned_start}s-{owned_end}s]"
-        )
-
-        with _state.stats_lock:
-            _state.server_stats["cache_misses"] += 1
-
-        audio_path = None
-        with _state.cache_lock:
-            prepared = _state.full_audio_cache.get(video_id)
-            prepared_path = prepared["path"] if prepared and os.path.exists(prepared["path"]) else None
-        if prepared_path:
-            audio_path = _audio.slice_audio(prepared_path, whisper_start, whisper_duration)
-
-        if audio_path is None:
-            print("[Yume] No prepared audio, falling back to stream download")
-            audio_path = _audio.download_audio_segment(url, whisper_start, whisper_duration)
-
-        if audio_path is None:
-            return jsonify({"error": "Audio extraction failed"}), 500
-
-        try:
-            result = _transcribe.transcribe_file(audio_path, language, whisper_start, is_first_chunk=is_first_chunk)
-        finally:
-            try:
-                os.unlink(audio_path)
-                parent = os.path.dirname(audio_path)
-                if parent and os.path.isdir(parent) and os.path.basename(parent).startswith("yume_") and parent != tempfile.gettempdir():
-                    shutil.rmtree(parent, ignore_errors=True)
-            except Exception:
-                pass
-
-        raw_count = len(result.get("segments", []))
-        trimmed = [seg for seg in result.get("segments", []) if (owned_start - 0.3) <= seg["start"] < (owned_end + 0.5)]
-
-        result["segments"] = trimmed
-        result["text"] = " ".join(s["text"] for s in trimmed)
-        result["cached"] = False
-
-        if len(trimmed) > 0:
-            with _state.prefetch_lock:
-                if len(_state.subtitle_cache) >= _state.SUBTITLE_CACHE_MAX:
-                    keys_to_remove = list(_state.subtitle_cache.keys())[
-                        : len(_state.subtitle_cache) - _state.SUBTITLE_CACHE_MAX + 1
-                    ]
-                    for k in keys_to_remove:
-                        del _state.subtitle_cache[k]
-                _state.subtitle_cache[cache_key] = result
-
-        print(
-            f"[Yume] Chunk {chunk_index} done: {len(trimmed)} segments "
-            f"(from {raw_count} raw, {'cached' if len(trimmed) > 0 else 'not cached — empty'})"
-        )
-        return jsonify(result)
-
-    except Exception as e:
-        import traceback
-
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        since = int(request.args.get("since", 0) or 0)
+        playhead = request.args.get("t")
+        playhead = float(playhead) if playhead not in (None, "") else None
+    except (TypeError, ValueError):
+        return jsonify({"error": "since must be an integer and t a number"}), 400
+    _state.jobs.poll(job, playhead)
+    return jsonify(job.snapshot(since, events=request.args.get("events") == "1"))
 
 
-@app.route("/transcribe", methods=["POST"])
-def transcribe():
-
-    if _state.model is None:
-        return jsonify({"error": "Model is still loading. Retry shortly."}), 503
-
-    try:
-        import base64
-
-        data = request.get_json()
-        if not data or "audio" not in data:
-            return jsonify({"error": "No audio data provided"}), 400
-
-        audio_base64 = data["audio"]
-        language = data.get("language") or None
-        start_offset = float(data.get("start_offset", 0))
-
-        try:
-            audio_bytes = base64.b64decode(audio_base64)
-        except Exception as e:
-            return jsonify({"error": f"Invalid base64: {str(e)}"}), 400
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as f:
-            f.write(audio_bytes)
-            temp_path = f.name
-
-        try:
-            result = _transcribe.transcribe_file(temp_path, language, start_offset)
-        finally:
-            try:
-                os.unlink(temp_path)
-            except Exception:
-                pass
-
-        return jsonify(result)
-
-    except Exception as e:
-        import traceback
-
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+@app.route("/jobs/<job_id>/options", methods=["POST"])
+def job_options(job_id):
+    job, err = _job_or_404(job_id)
+    if err:
+        return err
+    data = request.get_json(silent=True) or {}
+    if "romanize" in data:
+        _state.jobs.set_romanize(job, bool(data["romanize"]))
+    return jsonify({"success": True})
 
 
-# ── Routes: romanization ──────────────────────────────────────────────────────
+@app.route("/jobs/<job_id>/export", methods=["GET"])
+def job_export(job_id):
+    job, err = _job_or_404(job_id)
+    if err:
+        return err
+    fmt = "vtt" if request.args.get("format") == "vtt" else "srt"
+    with job.lock:
+        segments = [dict(s) for s in job.segments.values()]
+    progress = job.snapshot(0)["progress"]
+    content, count = _jobs.export_subtitles(segments, fmt)
+    return jsonify({"content": content, "count": count, "format": fmt, "progress": progress})
 
 
-@app.route("/romanize", methods=["POST"])
-def romanize():
-    """Deterministic romanization for ja/zh/ko. <5 ms vs 1-10 s for LLM."""
-
-    data = request.get_json() or {}
-    text = data.get("text", "").strip()
-    lang = data.get("language") or None
-
-    if not text:
-        return jsonify({"romanization": "", "method": "empty"})
-
-    result = None
-    if lang == "ja":
-        result = _romanize.romanize_japanese(text)
-    elif lang == "zh":
-        result = _romanize.romanize_chinese(text)
-    elif lang == "ko":
-        result = _romanize.romanize_korean(text)
-
-    if result is not None:
-        return jsonify({"romanization": result, "method": "deterministic", "language": lang})
-    return jsonify({"supported": False, "language": lang}), 501
+# ── Routes: library (durable cache) ───────────────────────────────────────────
 
 
-@app.route("/romanize_batch", methods=["POST"])
-def romanize_batch():
-    """Batch deterministic romanization — single round trip for N texts."""
-
-    data = request.get_json() or {}
-    texts = data.get("texts", [])
-    lang = data.get("language") or None
-
-    if not texts or not isinstance(texts, list):
-        return jsonify({"romanizations": [], "method": "empty"})
-
-    romanizer = None
-    if lang == "ja":
-        romanizer = _romanize.romanize_japanese
-    elif lang == "zh":
-        romanizer = _romanize.romanize_chinese
-    elif lang == "ko":
-        romanizer = _romanize.romanize_korean
-
-    if romanizer is None:
-        return jsonify({"supported": False, "language": lang}), 501
-
-    results = []
-    for text in texts:
-        try:
-            r = romanizer(text.strip()) if text.strip() else ""
-            results.append(r or "")
-        except Exception:
-            results.append("")
-
-    return jsonify({"romanizations": results, "method": "deterministic", "language": lang})
+@app.route("/library", methods=["GET"])
+def library():
+    return jsonify({"videos": _state.store.library()})
 
 
-# ── Routes: hallucination filter ──────────────────────────────────────────────
+@app.route("/library/export", methods=["GET"])
+def library_export():
+    a = request.args
+    video_key, language, model = a.get("video_key", ""), a.get("language", "auto"), a.get("model", "")
+    if not video_key or not model:
+        return jsonify({"error": "video_key and model are required"}), 400
+    fmt = "vtt" if a.get("format") == "vtt" else "srt"
+    content, count = _jobs.library_export(video_key, language, model, a.get("target") or None, fmt)
+    return jsonify({"content": content, "count": count, "format": fmt})
 
 
-@app.route("/hallucination_patterns", methods=["GET"])
-def get_hallucination_patterns():
-    """Server-authoritative hallucination patterns — client fetches at startup."""
-    return jsonify(
-        {
-            "builtin": _filter.HALLUCINATION_PATTERNS,
-            "credits": _filter.CREDITS_PATTERNS,
-            "user_blacklist": _state.user_blacklist,
-            "single_word_blocklist": _filter.SINGLE_WORD_BLOCKLIST,
-            "repeat_threshold": 6,
-            "concat_min_len": 4,
-            "concat_coverage": 0.95,
-        }
-    )
+@app.route("/library/delete", methods=["POST"])
+def library_delete():
+    video_key = str((request.get_json(silent=True) or {}).get("video_key") or "")
+    if not video_key:
+        return jsonify({"error": "video_key is required"}), 400
+    _state.store.delete_video(video_key)
+    return jsonify({"success": True})
 
 
-@app.route("/blacklist/update", methods=["POST"])
-def update_blacklist():
-    data = request.get_json() or {}
-    incoming = data.get("blacklist", [])
-    if not isinstance(incoming, list):
-        return jsonify({"error": "blacklist must be a list"}), 400
-    _state.user_blacklist = [str(item).strip() for item in incoming if str(item).strip()]
-    count = len(_state.user_blacklist)
-    print(f"[Yume] User blacklist updated: {count} items")
-    for item in _state.user_blacklist[:10]:
-        print(f"[Yume]   - {item!r}")
-    if count > 10:
-        print(f"[Yume]   ... and {count - 10} more")
-    # Persist so reported hallucinations survive server restarts
+# ── Routes: hallucination blacklist ───────────────────────────────────────────
+
+
+def _set_blacklist(items):
+    """Replace, persist and re-apply the user blacklist — the single source of
+    truth for both the CLI and the extension popup."""
+    seen = set()
+    clean = []
+    for item in items:
+        s = str(item).strip()
+        if s and s.lower() not in seen:
+            seen.add(s.lower())
+            clean.append(s)
+    _state.user_blacklist = clean
     try:
         if _state.blacklist_file:
             with open(_state.blacklist_file, "w", encoding="utf-8") as f:
-                json.dump(_state.user_blacklist, f, ensure_ascii=False, indent=2)
-    except Exception as e:
+                json.dump(clean, f, ensure_ascii=False, indent=2)
+    except OSError as e:
         print(f"[Yume] Blacklist save failed: {e}")
-    return jsonify({"success": True, "count": count})
+    if _state.jobs:
+        _state.jobs.refilter()
+    print(f"[Yume] User blacklist: {len(clean)} items")
+    return jsonify({"success": True, "count": len(clean), "blacklist": clean})
 
 
 @app.route("/blacklist", methods=["GET"])
@@ -842,44 +551,95 @@ def get_blacklist():
     return jsonify({"blacklist": _state.user_blacklist, "count": len(_state.user_blacklist)})
 
 
+@app.route("/blacklist/update", methods=["POST"])
+def update_blacklist():
+    incoming = (request.get_json(silent=True) or {}).get("blacklist", [])
+    if not isinstance(incoming, list):
+        return jsonify({"error": "blacklist must be a list"}), 400
+    return _set_blacklist(incoming)
+
+
+@app.route("/blacklist/add", methods=["POST"])
+def blacklist_add():
+    text = str((request.get_json(silent=True) or {}).get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "text is required"}), 400
+    return _set_blacklist([*_state.user_blacklist, text])
+
+
+@app.route("/blacklist/remove", methods=["POST"])
+def blacklist_remove():
+    text = str((request.get_json(silent=True) or {}).get("text") or "").strip().lower()
+    return _set_blacklist([b for b in _state.user_blacklist if b.lower() != text])
+
+
+# ── Routes: translation backend ───────────────────────────────────────────────
+
+
+@app.route("/translation/health", methods=["GET"])
+def translation_health():
+    """Is the configured LLM reachable? (The extension no longer talks to it.)"""
+    return jsonify(_state.jobs.translator.health())
+
+
+@app.route("/translation/test", methods=["POST"])
+def translation_test():
+    """Translate one sentence end-to-end — used by the CLI health check."""
+    data = request.get_json(silent=True) or {}
+    text = str(data.get("text") or "今日はいい天気ですね")[:500]
+    try:
+        out = _state.jobs.translator.translate_batch(
+            [text], data.get("language") or "ja", data.get("target") or "English"
+        )
+        return jsonify({"success": True, "translation": out[0]})
+    except _translate.TranslationError as e:
+        return jsonify({"success": False, "error": str(e)}), 502
+
+
 # ── Routes: cache management ──────────────────────────────────────────────────
 
 
 @app.route("/cache/clear", methods=["POST"])
 def clear_cache():
-    with _state.prefetch_lock:
-        count = len(_state.subtitle_cache)
-        _state.subtitle_cache.clear()
+    """Wipe the durable cache (transcripts, translations, library) and live jobs."""
+    _state.store.clear()
     with _state.cache_lock:
         _state.stream_url_cache.clear()
-        for _vid, entry in list(_state.full_audio_cache.items()):
-            _audio.cleanup_audio_entry(entry)
-        audio_count = len(_state.full_audio_cache)
-        _state.full_audio_cache.clear()
-    return jsonify({"cleared": count, "audio_cleared": audio_count})
-
-
-@app.route("/cache/status", methods=["GET"])
-def cache_status():
-    with _state.prefetch_lock:
-        keys = list(_state.subtitle_cache.keys())
-    return jsonify({"chunks_cached": len(keys), "keys": keys})
+    _state.jobs.drop_all("Cache cleared")
+    return jsonify({"success": True})
 
 
 # ── main() ────────────────────────────────────────────────────────────────────
 
 
+def _force_utf8_output():
+    """UTF-8 + line-buffered output.
+
+    Windows consoles/log pipes default to cp932/cp1252 — Japanese text in logs
+    would raise UnicodeEncodeError. And when the CLI launches the server its
+    stdout is a log FILE, which Python block-buffers: the CLI's "View Logs" and
+    crash diagnosis read stale logs, and a hard crash (CUDA abort) loses the
+    last lines. Done in main(), not at import: rebinding sys.stdout at import
+    time breaks anything that imports this module (pytest)."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+        except (AttributeError, ValueError):
+            pass
+
+
 def main():
+    _force_utf8_output()
     _cleanup_stale_temps()
     signal.signal(signal.SIGTERM, _shutdown_handler)
     signal.signal(signal.SIGINT, _shutdown_handler)
-    atexit.register(_audio.cleanup_all_audio)
 
     _setup_windows_console_handler()
 
     args = _parse_args()
     _configure_logging(args)
     _apply_config(args)
+    _init_pipeline(args)
 
     _print_startup_banner(args)
 
@@ -900,13 +660,74 @@ def main():
     # Load model in a background thread so the server is immediately responsive.
     # /health returns {"status": "loading"} until the model is ready.
     # Transcription endpoints return 503 while the model is loading.
-    threading.Thread(target=_load_model, args=(args, server_thread), daemon=True, name="model-loader").start()
+    threading.Thread(target=_load_model, args=(args,), daemon=True, name="model-loader").start()
 
     # Block the main thread to keep the process alive (Flask runs in server_thread).
     try:
         server_thread.join()
     except KeyboardInterrupt:
         pass
+
+
+_TRANSLATION_KEYS = {
+    "translation_host": "translation_host",
+    "translation_port": "translation_port",
+    "translation_backend": "translation_backend",
+    "translation_model": "translation_model",
+    "translation_prompt": "translation_prompt",
+    "romanization_prompt": "romanization_prompt",
+}
+
+
+def _load_translation_config(cfg):
+    """Copy the translation keys of a config dict into _state."""
+    for key, attr in _TRANSLATION_KEYS.items():
+        if key in cfg:
+            setattr(_state, attr, cfg[key] if cfg[key] is not None else "")
+
+
+def _reload_translation_config():
+    """Re-read the config file when it changed (one stat() per LLM request), so
+    translation settings edited in the CLI apply to the running server."""
+    path = _state.config_file
+    if not path:
+        return
+    try:
+        mtime = os.path.getmtime(path)
+        if mtime == _state.config_mtime:
+            return
+        with open(path, encoding="utf-8") as f:
+            cfg = json.load(f)
+        _state.config_mtime = mtime
+    except (OSError, ValueError):
+        return  # missing or mid-write: keep the current settings
+    before = _translation_settings(reload=False)
+    _load_translation_config(cfg)
+    if _translation_settings(reload=False) != before:
+        print("[Yume] Translation settings reloaded from the config file")
+
+
+def _translation_settings(reload=True):
+    """Live translation config for the Translator (read on every request)."""
+    if reload:
+        _reload_translation_config()
+    return {
+        "host": _state.translation_host,
+        "port": _state.translation_port,
+        "backend": _state.translation_backend,
+        "model": _state.translation_model,
+        "prompt": _state.translation_prompt,
+        "roma_prompt": _state.romanization_prompt,
+    }
+
+
+def _init_pipeline(args):
+    """Open the durable cache and start the job workers."""
+    cfg_dir = Path(args.config).parent if args.config else Path(__file__).resolve().parent.parent / "config"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    _state.store = _store.Store(cfg_dir / "yume_cache.db")
+    atexit.register(_state.store.close)
+    _state.jobs = _jobs.JobManager(_translate.Translator(_translation_settings))
 
 
 def _setup_windows_console_handler():
@@ -942,8 +763,6 @@ def _parse_args():
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--compute-type", default="float16")
     parser.add_argument("--port", type=int, default=5001)
-    parser.add_argument("--no-word-timestamps", action="store_true")
-    parser.add_argument("--pause-threshold", type=float, default=0.25)
     parser.add_argument("--config", type=str, default=None)
     parser.add_argument("--prewarm", action="store_true")
     parser.add_argument("--low-vram", action="store_true", help="Force int8 compute type to reduce VRAM usage")
@@ -964,8 +783,6 @@ def _apply_config(args):
     _state.model_name = args.model
     _state.device = args.device
     _state.compute_type = args.compute_type
-    _state.use_word_timestamps = not args.no_word_timestamps
-    _state.pause_threshold = args.pause_threshold
 
     if args.config and os.path.exists(args.config):
         with open(args.config, encoding="utf-8") as f:
@@ -975,16 +792,12 @@ def _apply_config(args):
         # NOTE: whisper_device / whisper_compute_type are intentionally NOT loaded
         # from config here.  The CLI resolves "auto" → "cuda"/"cpu" before launching
         # the server and passes the resolved value via --device / --compute-type.
-        _state.use_word_timestamps = cfg.get("word_timestamps", _state.use_word_timestamps)
-        _state.pause_threshold = cfg.get("pause_threshold", _state.pause_threshold)
         args.port = cfg.get("whisper_port", args.port)
         _state.youtube_auth_method = cfg.get("youtube_auth_method", _state.youtube_auth_method)
         _state.cookies_browser = cfg.get("cookies_browser", _state.cookies_browser)
-        _state.translation_host = cfg.get("translation_host", _state.translation_host)
-        _state.translation_port = cfg.get("translation_port", _state.translation_port)
-        _state.translation_backend = cfg.get("translation_backend", _state.translation_backend)
-        _state.translation_prompt = cfg.get("translation_prompt", "")
-        _state.romanization_prompt = cfg.get("romanization_prompt", "")
+        _load_translation_config(cfg)
+        _state.config_file = args.config
+        _state.config_mtime = os.path.getmtime(args.config)
 
     # Persisted user blacklist — reported hallucinations must survive restarts
     cfg_dir = Path(args.config).parent if args.config else Path(__file__).resolve().parent.parent / "config"
@@ -1001,23 +814,16 @@ def _apply_config(args):
     except Exception as e:
         print(f"[Yume] Blacklist load failed: {e}")
 
-    # Resolve 'auto' device using CTranslate2's own detection (not torch)
+    # Resolve 'auto' device using CTranslate2's own detection. (This used to test
+    # `"cuda" in get_supported_compute_types("cuda")` — a set of compute types like
+    # {"float16", "int8"}, which never contains "cuda" — so "auto" always meant CPU.)
     if _state.device == "auto":
         try:
             import ctranslate2
 
-            _state.device = "cuda" if "cuda" in ctranslate2.get_supported_compute_types("cuda") else "cpu"
+            _state.device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
         except Exception:
-            try:
-                import torch
-
-                _state.device = "cuda" if torch.cuda.is_available() else "cpu"
-            except ImportError:
-                try:
-                    r = subprocess.run(["nvidia-smi"], capture_output=True, timeout=5)
-                    _state.device = "cuda" if r.returncode == 0 else "cpu"
-                except Exception:
-                    _state.device = "cpu"
+            _state.device = "cpu"
 
     if _state.compute_type == "auto":
         _state.compute_type = "float16" if _state.device == "cuda" else "int8"
@@ -1030,14 +836,14 @@ def _apply_config(args):
 
 def _print_startup_banner(args):
     print("=" * 70)
-    print("  YUME -- Whisper Server v0.1.0")
+    print(f"  YUME -- Whisper Server v{SERVER_VERSION}")
     print("=" * 70)
     print(f"  Model:            {_state.model_name}")
     print(f"  Device:           {_state.device}")
     print(f"  Compute Type:     {_state.compute_type}")
     print(f"  Port:             {args.port}")
-    print("  Architecture:     download-once + local slice")
-    print("  Whisper Params:   v2.0.7 (proven for music)")
+    print("  Pipeline:         jobs (download once, quiet-point regions, cached)")
+    print("  Whisper Params:   music-tuned (beam 5, no word timestamps)")
     print("  VAD Filter:       OFF (required for music)")
     yt_info = _state.youtube_auth_method
     if _state.youtube_auth_method == "cookies":
@@ -1063,12 +869,6 @@ def _print_startup_banner(args):
         roma_parts.append("zh(pypinyin)")
     except ImportError:
         pass
-    try:
-        from romanization import romanize  # noqa: F401  # type: ignore[import-not-found]
-
-        roma_parts.append("ko(romanization)")
-    except ImportError:
-        pass
     if roma_parts:
         print(f"  Romanization:     {', '.join(roma_parts)} (instant)")
     else:
@@ -1083,7 +883,8 @@ def _print_startup_banner(args):
                 results.append(("yt-dlp", None, ["  WARNING: yt-dlp not found in PATH!"]))
             else:
                 v = subprocess.run([*_audio.ytdlp_cmd(), "--version"], capture_output=True, text=True, timeout=10)
-                results.append(("yt-dlp", v.stdout.strip() or "?", None))
+                version = v.stdout.strip() or "?"
+                results.append(("yt-dlp", _maybe_update_ytdlp(version), None))
         except Exception as exc:
             results.append(("yt-dlp", None, [f"  WARNING: yt-dlp check failed: {exc}"]))
         try:
@@ -1114,6 +915,44 @@ def _print_startup_banner(args):
     threading.Thread(target=_check_tool_versions, daemon=True).start()
 
 
+YTDLP_MAX_AGE_DAYS = 30
+
+
+def _maybe_update_ytdlp(version):
+    """Self-update the standalone yt-dlp when it is older than a month (YouTube
+    changes break old versions: a 7-month-old one got HTTP 403 on every video).
+    pip installs (Deno auth) are left to the CLI. Returns the version to show."""
+    import datetime
+
+    try:
+        released = datetime.date(*map(int, version.split(".")[:3]))
+    except ValueError:
+        return version
+    age = (datetime.date.today() - released).days
+    exe = shutil.which("yt-dlp")
+    if age <= YTDLP_MAX_AGE_DAYS or not exe or _state.youtube_auth_method == "deno":
+        return version
+    # Releases can be weeks apart: ask at most once a day, not on every start
+    stamp = Path(exe).with_name(".yt-dlp-update-check")
+    try:
+        if time.time() - stamp.stat().st_mtime < 86400:
+            return version
+    except OSError:
+        pass
+    print(f"  yt-dlp:           {version} is {age} days old — checking for an update...")
+    try:
+        r = subprocess.run([exe, "-U"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
+        v = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=10).stdout.strip()
+        if r.returncode == 0:
+            stamp.touch()
+            return f"{v} (updated from {version})" if v and v != version else f"{version} (latest)"
+        tail = (r.stdout + r.stderr).strip().splitlines()[-1:] or ["no output"]
+        print(f"  yt-dlp:           update failed: {tail[0][:150]}")
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(f"  yt-dlp:           update failed: {e}")
+    return f"{version} (could not update — Tools → yt-dlp)"
+
+
 def _setup_deno_auth(args):
     """Check deno availability and start bgutil server if youtube_auth_method == 'deno'."""
     if _state.youtube_auth_method != "deno":
@@ -1140,69 +979,25 @@ def _setup_deno_auth(args):
         print("")
         return
 
-    # Ensure pip yt-dlp is available (needed for plugin discovery)
-    _ensure_pip_ytdlp()
+    # The server never installs packages or downloads code at startup (that used
+    # to happen silently, unpinned, on every launch). Setup is the CLI's job:
+    # Tools -> Deno installs Deno, pip yt-dlp, the PO-token plugin and its server.
+    missing = []
+    try:
+        import yt_dlp  # noqa: F401 — pip yt-dlp is what discovers the plugin
+    except ImportError:
+        missing.append("yt-dlp (pip)")
+    try:
+        import yt_dlp_plugins.extractor.getpot_bgutil  # noqa: F401  # type: ignore[import-not-found]
+    except ImportError:
+        missing.append("bgutil-ytdlp-pot-provider")
+    if missing:
+        print(f"  WARNING: Deno auth needs {', '.join(missing)} — run: python pocket_yume.py (Tools -> Deno)")
 
-    # Ensure bgutil PO token plugin is installed
-    _ensure_bgutil_plugin()
-
-    # Setup and start the bgutil HTTP server
-    if _bgutil.setup_bgutil_server():
-        _bgutil.start_bgutil_server()
+    if _bgutil.start_bgutil_server():
         atexit.register(_bgutil.stop_bgutil_server)
     else:
-        print("  bgutil server:    setup failed — YouTube downloads may fail")
-        print("  bgutil server:    will try cookies fallback automatically")
-
-
-def _ensure_pip_ytdlp():
-    try:
-        r = subprocess.run([sys.executable, "-m", "yt_dlp", "--version"], capture_output=True, text=True, timeout=10)
-        if r.returncode == 0:
-            print(f"  yt-dlp (pip):     {r.stdout.strip()}")
-            return
-    except Exception:
-        pass
-    print("  yt-dlp (pip):     not found — installing...")
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-q", "--no-warn-script-location", "yt-dlp"],
-            capture_output=True,
-            timeout=120,
-        )
-        print("  yt-dlp (pip):     installed")
-    except Exception as e:
-        print(f"  yt-dlp (pip):     install failed ({e})")
-
-
-def _ensure_bgutil_plugin():
-    bgutil_installed = False
-    try:
-        r = subprocess.run(
-            [sys.executable, "-m", "pip", "show", "bgutil-ytdlp-pot-provider"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        bgutil_installed = r.returncode == 0
-    except Exception:
-        pass
-
-    if bgutil_installed:
-        print("  PO Token plugin:  bgutil-ytdlp-pot-provider (active)")
-        return
-
-    print("  PO Token plugin:  not found — installing bgutil-ytdlp-pot-provider...")
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-q", "--no-warn-script-location", "bgutil-ytdlp-pot-provider"],
-            capture_output=True,
-            timeout=120,
-        )
-        print("  PO Token plugin:  installed (YouTube BotGuard bypass via Deno)")
-    except Exception as e:
-        print(f"  PO Token plugin:  install failed ({e})")
-        print("  YouTube may require sign-in. Fallback: set youtube_auth_method='cookies'")
+        print("  bgutil server:    not running — YouTube downloads will fall back to cookies")
 
 
 def _write_token_file(args):
@@ -1210,9 +1005,11 @@ def _write_token_file(args):
     base_dir = Path(__file__).parent.parent.resolve()
     _state.TOKEN_FILE = str(base_dir / ".yume_token")
     try:
-        with open(_state.TOKEN_FILE, "w") as f:
+        if os.path.exists(_state.TOKEN_FILE):
+            os.unlink(_state.TOKEN_FILE)  # a leftover may have looser permissions
+        fd = os.open(_state.TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(_state.API_TOKEN)
-        os.chmod(_state.TOKEN_FILE, 0o600)
         print(f"  API token:        written to {_state.TOKEN_FILE}")
     except Exception as e:
         print(f"  API token:        file write FAILED ({e})")
@@ -1256,13 +1053,15 @@ def _set_low_priority():
         pass
 
 
-def _load_model(args, server_thread):
+def _load_model(args):
     """Load the Whisper model; handle errors with actionable messages."""
     _set_low_priority()
     try:
         _state.model = WhisperModel(_state.model_name, device=_state.device, compute_type=_state.compute_type)
 
-        if not args.prewarm:
+        # On CUDA a 1 s warm-up is cheap and is the only way to find out NOW that
+        # cuBLAS/cuDNN are missing (the model itself loads fine without them).
+        if not (args.prewarm or _state.device == "cuda"):
             print("  Prewarm:          skipped (use --prewarm to enable)")
         else:
             import numpy as np
@@ -1285,7 +1084,8 @@ def _load_model(args, server_thread):
                     print("  Falling back to CPU mode automatically.")
                     print("")
                     try:
-                        del _state.model
+                        # Assign, never `del`: other threads read _state.model concurrently
+                        _state.model = None
                         _state.device = "cpu"
                         _state.compute_type = "int8"
                         _state.model = WhisperModel(_state.model_name, device="cpu", compute_type="int8")
@@ -1293,6 +1093,9 @@ def _load_model(args, server_thread):
                         print("  Prewarm:          done (CPU fallback)")
                     except Exception as cpu_err:
                         print(f"  Prewarm:          CPU fallback also failed: {cpu_err}")
+                        _state.model = None
+                        _state.load_error = f"CUDA libraries missing and CPU fallback failed: {cpu_err}"
+                        return
                 else:
                     print(f"  Prewarm:          skipped ({pw_err})")
 
@@ -1302,11 +1105,13 @@ def _load_model(args, server_thread):
         print("=" * 70)
         print("")
 
-        server_thread.join()
-
     except Exception as e:
         _print_model_load_error(e)
-        sys.exit(1)
+        # sys.exit() here would only end this loader thread and leave /health
+        # reporting "loading" forever. Publish the failure instead: /health then
+        # returns status "error" with the message, which the extension and the
+        # CLI launcher both surface to the user.
+        _state.load_error = str(e) or type(e).__name__
 
 
 def _print_model_load_error(e):

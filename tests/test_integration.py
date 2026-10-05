@@ -1,4 +1,4 @@
-"""Integration tests for Yume v0.1.0.
+"""Integration tests for Yume.
 
 These tests verify that config options actually affect behavior.
 They exist because of the deno incident: youtube_auth_method="deno"
@@ -7,6 +7,7 @@ deep review missed it. These tests ensure that never happens again.
 
 Run: pytest tests/test_integration.py -v
 """
+
 import json
 import re
 import sys
@@ -26,10 +27,11 @@ from config import DEFAULT_CONFIG
 #    response — not just printed in a menu or stored in a file.
 # ---------------------------------------------------------------------------
 
+
 def _load_all_source_code():
     """Load all Python and JS source into a dict of {path: content}."""
     sources = {}
-    for pattern in ["*.py", "yume/*.py", "server/*.py", "extension/js/*.js", "extension/*.js"]:
+    for pattern in ["*.py", "yume/**/*.py", "server/*.py", "extension/js/*.js", "extension/*.js"]:
         for f in ROOT.glob(pattern):
             if "wanakana" in f.name or "__pycache__" in str(f):
                 continue
@@ -43,8 +45,8 @@ class TestDeadConfigDetection:
     # Keys that are KNOWN to be display-only or structural — exempt from the
     # "must influence behavior" rule. Document WHY each is exempt.
     EXEMPT_KEYS = {
-        "first_run_complete",   # Controls flow (wizard vs main menu), not a subprocess arg
-        "translation_model",    # Display-only: the actual model is loaded via gguf_model_path
+        "first_run_complete",  # Controls flow (wizard vs main menu), not a subprocess arg
+        "translation_model",  # Display-only: the actual model is loaded via gguf_model_path
     }
 
     # Keys that are KNOWN dead — they exist in config but nothing uses them.
@@ -67,14 +69,26 @@ class TestDeadConfigDetection:
             if key in self.EXEMPT_KEYS or key in self.KNOWN_DEAD:
                 continue
 
-            # Check if the key appears in any non-config, non-test source file
+            # The key must be READ from a config dict in app code: cfg["key"] /
+            # cfg.get("key"), not assigned, not only printed. A bare string match
+            # was fooled by unrelated uses (e.g. request data.get("language")),
+            # which hid four dead keys.
+            read_re = re.compile(
+                r"\bc(?:fg|onfig)\w*(?:\[\s*|\.get\(\s*)[\"']" + re.escape(key) + r"[\"']\s*[\],)](?!\s*=[^=])"
+            )
+            display_fns = ("print(", "info(", "warn(", "success(", "error(", "bullet(")
             found_in_app = False
             for path, content in sources.items():
                 if "config.py" in path or "test_" in path:
                     continue
-                # Look for the key being read: cfg["key"], cfg.get("key"), or key as a variable
-                if f'"{key}"' in content or f"'{key}'" in content or f"['{key}']" in content:
-                    found_in_app = True
+                for line in content.splitlines():
+                    stripped = line.strip()
+                    if stripped.startswith(("#", "//")) or any(fn in stripped for fn in display_fns):
+                        continue
+                    if read_re.search(line):
+                        found_in_app = True
+                        break
+                if found_in_app:
                     break
 
             if not found_in_app:
@@ -112,7 +126,7 @@ class TestDeadConfigDetection:
                             continue
                         if any(fn in stripped for fn in ["print(", "info(", "warn(", "success(", "error("]):
                             continue
-                        uses_in_app.append(f"  {path}:{i+1}: {stripped[:100]}")
+                        uses_in_app.append(f"  {path}:{i + 1}: {stripped[:100]}")
 
             # If the key IS now used in real code, it should be removed from KNOWN_DEAD
             # We allow loading the value (e.g. into a global) — that's not "using" it
@@ -127,6 +141,7 @@ class TestDeadConfigDetection:
 # 2. YOUTUBE AUTH CONFIG → COMMAND TRACING
 #    Verify that youtube_auth_method actually changes the yt-dlp command.
 # ---------------------------------------------------------------------------
+
 
 class TestYouTubeAuthConfig:
     """Trace youtube_auth_method config to actual yt-dlp command construction.
@@ -156,9 +171,7 @@ class TestYouTubeAuthConfig:
         assert "ytdlp_cmd" in src, "ytdlp_cmd function not found in server"
 
         # It must reference python -m yt_dlp for deno mode
-        assert "python" in src and "yt_dlp" in src, (
-            "ytdlp_cmd must route to 'python -m yt_dlp' for deno mode"
-        )
+        assert "python" in src and "yt_dlp" in src, "ytdlp_cmd must route to 'python -m yt_dlp' for deno mode"
 
     def test_deno_mode_has_strategy_entries(self):
         """Deno mode must have its own strategy entries in the download function."""
@@ -173,9 +186,7 @@ class TestYouTubeAuthConfig:
     def test_cookies_mode_passes_cookies_flag(self):
         """When youtube_auth_method='cookies', yt-dlp must get --cookies-from-browser."""
         src = self._get_server_source()
-        assert "--cookies-from-browser" in src, (
-            "Cookies mode must pass --cookies-from-browser to yt-dlp"
-        )
+        assert "--cookies-from-browser" in src, "Cookies mode must pass --cookies-from-browser to yt-dlp"
 
     def test_cookies_mode_uses_configured_browser(self):
         """The cookies_browser config value must be passed to yt-dlp."""
@@ -190,6 +201,7 @@ class TestYouTubeAuthConfig:
 # 3. BACKEND HEALTH CHECK CONSISTENCY
 #    Popup.js and pocket_yume.py must agree on which endpoints to check.
 # ---------------------------------------------------------------------------
+
 
 class TestHealthCheckConsistency:
     """Verify popup.js and CLI use the same health endpoints."""
@@ -217,10 +229,7 @@ class TestHealthCheckConsistency:
         assert len(cli_src) < 500_000, "Source file unexpectedly large — refusing regex to prevent ReDoS"
 
         # Find the ollama block — hp may be a literal or constant reference
-        ollama_block = re.search(
-            r'"ollama"\s*:\s*\{[^}]*"hp"\s*:\s*("([^"]+)"|HEALTH_PATH_OLLAMA)',
-            cli_src
-        )
+        ollama_block = re.search(r'"ollama"\s*:\s*\{[^}]*"hp"\s*:\s*("([^"]+)"|HEALTH_PATH_OLLAMA)', cli_src)
         assert ollama_block, "BACKEND_INFO ollama not found"
         if ollama_block.group(2):
             assert ollama_block.group(2) == "/api/tags", (
@@ -230,19 +239,22 @@ class TestHealthCheckConsistency:
             const_match = re.search(r'HEALTH_PATH_OLLAMA\s*=\s*"([^"]+)"', cli_src)
             assert const_match and const_match.group(1) == "/api/tags"
 
-    def test_popup_tries_v1_models(self):
-        """popup.js must try /v1/models for translation health check."""
-        popup_src = (ROOT / "extension" / "popup.js").read_text(encoding="utf-8")
-        assert "/v1/models" in popup_src, (
-            "popup.js doesn't try /v1/models for translation health — "
-            "it won't detect llama.cpp or LM Studio servers"
-        )
+    def test_server_translator_health_paths(self):
+        """The server checks the LLM itself now: /api/tags for Ollama, /v1/models otherwise."""
+        src = (ROOT / "server" / "_translate.py").read_text(encoding="utf-8")
+        assert '"/api/tags" if s.get("backend") == "ollama" else "/v1/models"' in src
+
+    def test_translator_sends_model_for_non_llamacpp(self):
+        """Ollama/LM Studio reject chat requests without a model name."""
+        src = (ROOT / "server" / "_translate.py").read_text(encoding="utf-8")
+        assert 'if s.get("backend") != "llamacpp" and s.get("model"):' in src
 
 
 # ---------------------------------------------------------------------------
 # 4. VERSION CONSISTENCY (extended)
 #    All files that contain a version string must agree.
 # ---------------------------------------------------------------------------
+
 
 class TestVersionConsistencyExtended:
     """Extended version checks beyond what CI already does."""
@@ -253,37 +265,39 @@ class TestVersionConsistencyExtended:
         assert m, "VERSION not found in pocket_yume.py"
         return m.group(1)
 
-    def test_server_health_version(self):
-        """Server /health response must report the same version."""
+    def test_server_version(self):
+        """The server's single SERVER_VERSION (used by /health and the banner)."""
         v = self._get_version()
         srv = (ROOT / "server" / "faster_whisper_server.py").read_text(encoding="utf-8")
-        assert f'"version": "{v}"' in srv, f"Server /health version mismatch (expected {v})"
+        assert f'SERVER_VERSION = "{v}"' in srv, f"SERVER_VERSION mismatch (expected {v})"
 
-    def test_server_banner_version(self):
-        """Server startup banner must show the same version."""
+    def test_manifest_version(self):
+        """The extension's single version source (the popup reads it at runtime)."""
         v = self._get_version()
-        srv = (ROOT / "server" / "faster_whisper_server.py").read_text(encoding="utf-8")
-        assert f"v{v}" in srv, f"Server banner doesn't contain v{v}"
+        m = json.loads((ROOT / "extension" / "manifest.json").read_text(encoding="utf-8"))
+        assert m["version"] == v, f"manifest.json ({m['version']}) != {v}"
 
-    def test_manifest_firefox_matches(self):
-        v = self._get_version()
-        mf = json.loads((ROOT / "extension" / "manifest_firefox.json").read_text())
-        assert mf["version"] == v, f"manifest_firefox.json ({mf['version']}) != {v}"
+    def test_single_cross_browser_manifest(self):
+        """One manifest for Chrome AND Firefox: Chrome uses background.service_worker,
+        Firefox uses background.scripts (Chrome 121+ ignores it). Two manifests
+        drifted apart and the CLI's copy-over switcher restored stale ones."""
+        m = json.loads((ROOT / "extension" / "manifest.json").read_text(encoding="utf-8"))
+        assert m["background"]["service_worker"] == "js/background.js"
+        assert m["background"]["scripts"] == ["js/background.js"]
+        assert "gecko" in m.get("browser_specific_settings", {})
+        assert not (ROOT / "extension" / "manifest_firefox.json").exists()
 
-    def test_popup_html_version(self):
-        v = self._get_version()
-        html = (ROOT / "extension" / "popup.html").read_text(encoding="utf-8")
-        assert f"v{v}" in html, f"popup.html doesn't show v{v}"
+    def test_content_scripts_exist(self):
+        m = json.loads((ROOT / "extension" / "manifest.json").read_text(encoding="utf-8"))
+        for cs in m["content_scripts"]:
+            for js in cs["js"]:
+                assert (ROOT / "extension" / js).exists(), f"manifest lists missing file {js}"
+            assert "css" not in cs, "CSS must load inside the overlay's shadow root, not into every page"
 
     def test_readme_badge_version(self):
         v = self._get_version()
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         assert f"version-{v}-blue" in readme, f"README badge doesn't show {v}"
-
-    def test_architecture_doc_version(self):
-        v = self._get_version()
-        arch = (ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
-        assert f"v{v}" in arch, f"ARCHITECTURE.md doesn't show v{v}"
 
 
 # ---------------------------------------------------------------------------
@@ -291,13 +305,24 @@ class TestVersionConsistencyExtended:
 #    All yt-dlp calls must go through _ytdlp_cmd(), not hardcoded "yt-dlp".
 # ---------------------------------------------------------------------------
 
+
+def _python_sources():
+    """Every app Python file — the CLI and server were split into yume/ and
+    server/_*.py, so checks that only read pocket_yume.py and
+    faster_whisper_server.py silently stopped covering most of the code."""
+    files = [ROOT / "pocket_yume.py", ROOT / "config.py"]
+    files += sorted((ROOT / "yume").rglob("*.py")) + sorted((ROOT / "server").glob("*.py"))
+    return [f for f in files if f.exists()]
+
+
 class TestSubprocessHygiene:
     """Verify no hardcoded 'yt-dlp' binary calls bypass _ytdlp_cmd()."""
 
     def test_no_hardcoded_ytdlp_in_server(self):
-        """Server must not call 'yt-dlp' directly — must use _ytdlp_cmd()."""
-        src = (ROOT / "server" / "faster_whisper_server.py").read_text(encoding="utf-8")
-        lines = src.splitlines()
+        """Server must not call 'yt-dlp' directly — must use ytdlp_cmd()."""
+        lines = []
+        for f in sorted((ROOT / "server").glob("*.py")):
+            lines += f.read_text(encoding="utf-8").splitlines()
         violations = []
         for i, line in enumerate(lines):
             stripped = line.strip()
@@ -305,48 +330,37 @@ class TestSubprocessHygiene:
                 continue
             # Look for subprocess calls with hardcoded "yt-dlp"
             if ('"yt-dlp"' in line or "'yt-dlp'" in line) and "subprocess" in line:
-                violations.append(f"  line {i+1}: {stripped[:100]}")
+                violations.append(f"  line {i + 1}: {stripped[:100]}")
 
-        assert not violations, (
-            "Found hardcoded 'yt-dlp' in subprocess calls "
-            "(must use _ytdlp_cmd()):\n" + "\n".join(violations)
+        assert not violations, "Found hardcoded 'yt-dlp' in subprocess calls (must use _ytdlp_cmd()):\n" + "\n".join(
+            violations
         )
 
     def test_no_shell_true_in_python(self):
         """No shell=True in subprocess calls (argument injection risk)."""
-        for pyfile in ["pocket_yume.py", "server/faster_whisper_server.py", "config.py"]:
-            path = ROOT / pyfile
-            if not path.exists():
-                continue
+        for path in _python_sources():
+            pyfile = str(path.relative_to(ROOT))
             violations = []
             for i, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
                 stripped = line.strip()
                 if stripped.startswith("#"):
                     continue
                 if "shell=True" in line:
-                    violations.append(f"  {pyfile} line {i+1}: {stripped[:100]}")
-            assert not violations, (
-                "Found shell=True (must use explicit argv lists):\n" +
-                "\n".join(violations)
-            )
+                    violations.append(f"  {pyfile} line {i + 1}: {stripped[:100]}")
+            assert not violations, "Found shell=True (must use explicit argv lists):\n" + "\n".join(violations)
 
     def test_no_os_system_in_python(self):
         """No os.system() calls (goes through shell)."""
-        for pyfile in ["pocket_yume.py", "server/faster_whisper_server.py", "config.py"]:
-            path = ROOT / pyfile
-            if not path.exists():
-                continue
+        for path in _python_sources():
+            pyfile = str(path.relative_to(ROOT))
             violations = []
             for i, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
                 stripped = line.strip()
                 if stripped.startswith("#"):
                     continue
                 if "os.system(" in line:
-                    violations.append(f"  {pyfile} line {i+1}: {stripped[:100]}")
-            assert not violations, (
-                "Found os.system() (use subprocess or ctypes instead):\n" +
-                "\n".join(violations)
-            )
+                    violations.append(f"  {pyfile} line {i + 1}: {stripped[:100]}")
+            assert not violations, "Found os.system() (use subprocess or ctypes instead):\n" + "\n".join(violations)
 
     def test_no_curl_pipe_shell(self):
         """No curl|sh pipe-to-shell patterns (MITM risk)."""
@@ -361,10 +375,9 @@ class TestSubprocessHygiene:
                 if stripped.startswith("#"):
                     continue
                 if "| sh" in line and "curl" in line and "# " not in line.split("|")[0]:
-                    violations.append(f"  {pyfile} line {i+1}: {stripped[:100]}")
-            assert not violations, (
-                "Found curl|sh pipe-to-shell (download first, then execute):\n" +
-                "\n".join(violations)
+                    violations.append(f"  {pyfile} line {i + 1}: {stripped[:100]}")
+            assert not violations, "Found curl|sh pipe-to-shell (download first, then execute):\n" + "\n".join(
+                violations
             )
 
 
@@ -382,11 +395,8 @@ class TestDependencyPinning:
             if not line or line.startswith("#"):
                 continue
             if ">=" in line or ">" in line.split("==")[0]:
-                violations.append(f"  line {i+1}: {line}")
-        assert not violations, (
-            "requirements.txt has unpinned dependencies (use == not >=):\n" +
-            "\n".join(violations)
-        )
+                violations.append(f"  line {i + 1}: {line}")
+        assert not violations, "requirements.txt has unpinned dependencies (use == not >=):\n" + "\n".join(violations)
 
 
 class TestHardcodedURLs:
@@ -402,15 +412,16 @@ class TestHardcodedURLs:
             stripped = line.strip()
             if stripped.startswith("//") or "DEFAULT_SETTINGS" in line or "function _" in line:
                 continue
-            if ("|| 'http://localhost:5001'" in line or
-                '|| "http://localhost:5001"' in line or
-                "|| 'http://localhost:5000'" in line or
-                '|| "http://localhost:5000"' in line):
-                violations.append(f"  line {i+1}: {stripped[:120]}")
+            if (
+                "|| 'http://localhost:5001'" in line
+                or '|| "http://localhost:5001"' in line
+                or "|| 'http://localhost:5000'" in line
+                or '|| "http://localhost:5000"' in line
+            ):
+                violations.append(f"  line {i + 1}: {stripped[:120]}")
         assert not violations, (
             "background.js has hardcoded localhost fallbacks "
-            "(use _whisperUrl()/_translationUrl() helpers):\n" +
-            "\n".join(violations)
+            "(use _whisperUrl()/_translationUrl() helpers):\n" + "\n".join(violations)
         )
 
     def test_no_inline_localhost_fallback_in_popup(self):
@@ -421,18 +432,37 @@ class TestHardcodedURLs:
         violations = []
         for i, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
             stripped = line.strip()
-            if stripped.startswith("//") or "getDefaultSettings" in line or "_POPUP_DEFAULTS" in line or "function _" in line:
+            if (
+                stripped.startswith("//")
+                or "getDefaultSettings" in line
+                or "_POPUP_DEFAULTS" in line
+                or "function _" in line
+            ):
                 continue
-            if ("|| 'http://localhost:5001'" in line or
-                '|| "http://localhost:5001"' in line or
-                "|| 'http://localhost:5000'" in line or
-                '|| "http://localhost:5000"' in line):
-                violations.append(f"  line {i+1}: {stripped[:120]}")
-        assert not violations, (
-            "popup.js has hardcoded localhost fallbacks "
-            "(use _whisperUrl() helper):\n" +
-            "\n".join(violations)
+            if (
+                "|| 'http://localhost:5001'" in line
+                or '|| "http://localhost:5001"' in line
+                or "|| 'http://localhost:5000'" in line
+                or '|| "http://localhost:5000"' in line
+            ):
+                violations.append(f"  line {i + 1}: {stripped[:120]}")
+        assert not violations, "popup.js has hardcoded localhost fallbacks (use _whisperUrl() helper):\n" + "\n".join(
+            violations
         )
+
+    def test_no_inline_localhost_fallback_in_content_scripts(self):
+        """Content scripts can't call _whisperUrl() — they must let background.js
+        resolve the server URL instead of carrying their own localhost fallback."""
+        violations = []
+        for name in ("session.js", "content.js", "subtitle-window.js"):
+            path = ROOT / "extension" / "js" / name
+            for i, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
+                stripped = line.strip()
+                if stripped.startswith("//"):
+                    continue
+                if "localhost:5001" in line or "localhost:5000" in line:
+                    violations.append(f"  {name} line {i + 1}: {stripped[:120]}")
+        assert not violations, "Content scripts hardcode server URLs:\n" + "\n".join(violations)
 
 
 # ---------------------------------------------------------------------------
@@ -440,6 +470,7 @@ class TestHardcodedURLs:
 #    Project name must be "Yume" everywhere user-facing, "Pocket Yume" only
 #    for the CLI wizard.
 # ---------------------------------------------------------------------------
+
 
 class TestNamingConsistency:
     """Verify project naming is consistent across all files."""
@@ -453,17 +484,17 @@ class TestNamingConsistency:
             content = path.read_text(encoding="utf-8")
             # PocketYume (camelCase) should not appear — it's either "Yume" or "Pocket Yume"
             occurrences = [
-                (i+1, line.strip())
+                (i + 1, line.strip())
                 for i, line in enumerate(content.splitlines())
-                if "PocketYume" in line and not line.strip().startswith("#")
+                if "PocketYume" in line
+                and not line.strip().startswith("#")
                 # Allow it in code blocks (backticks)
                 and "`PocketYume`" not in line
                 # Allow it in changelog entries that describe fixing the naming
                 and "references corrected" not in line
             ]
-            assert not occurrences, (
-                f"{doc} contains 'PocketYume' (should be 'Yume' or 'Pocket Yume'):\n" +
-                "\n".join(f"  line {n}: {ln[:80]}" for n, ln in occurrences)
+            assert not occurrences, f"{doc} contains 'PocketYume' (should be 'Yume' or 'Pocket Yume'):\n" + "\n".join(
+                f"  line {n}: {ln[:80]}" for n, ln in occurrences
             )
 
 
@@ -472,6 +503,7 @@ class TestNamingConsistency:
 #    Ensure no Python 3.10+ syntax is used without __future__ annotations.
 #    This caught a real bug: config.py used `int | str` which crashes on 3.9.
 # ---------------------------------------------------------------------------
+
 
 class TestPythonCompatibility:
     """Verify all Python files work on Python 3.8+."""
@@ -513,9 +545,7 @@ class TestPythonCompatibility:
     def test_python_version_check_exists(self):
         """pocket_yume.py must check Python version before importing config."""
         content = (ROOT / "pocket_yume.py").read_text(encoding="utf-8")
-        assert "sys.version_info" in content, (
-            "pocket_yume.py should check Python version early to give a clear error"
-        )
+        assert "sys.version_info" in content, "pocket_yume.py should check Python version early to give a clear error"
         # The check must appear BEFORE the config import
         version_check_pos = content.index("sys.version_info")
         config_import_pos = content.index("from config import")
@@ -532,32 +562,51 @@ class TestPythonCompatibility:
 #    'import logging' was missing from the server.
 # ---------------------------------------------------------------------------
 
+
 class TestImportCompleteness:
     """Verify Python files import all modules they use."""
 
     # Standard library modules that are commonly used via module.function()
     STDLIB_MODULES = {
-        "os", "sys", "json", "time", "shutil", "platform", "subprocess",
-        "threading", "logging", "re", "tempfile", "signal", "atexit",
-        "argparse", "secrets", "base64", "io", "zipfile", "tarfile",
+        "os",
+        "sys",
+        "json",
+        "time",
+        "shutil",
+        "platform",
+        "subprocess",
+        "threading",
+        "logging",
+        "re",
+        "tempfile",
+        "signal",
+        "atexit",
+        "argparse",
+        "secrets",
+        "base64",
+        "io",
+        "zipfile",
+        "tarfile",
     }
 
     def _get_imports(self, source):
         """Extract all imported module names from source."""
         import ast
+
         tree = ast.parse(source)
         imports = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    imports.add(alias.name.split('.')[0])
+                    imports.add(alias.name.split(".")[0])
             elif isinstance(node, ast.ImportFrom) and node.module:
-                imports.add(node.module.split('.')[0])
+                imports.add(node.module.split(".")[0])
         return imports
 
     def _get_module_references(self, source):
         """Find all 'module.something' references in source (excluding comments/strings/URLs)."""
         import ast
+
         refs = set()
         try:
             tree = ast.parse(source)
@@ -587,9 +636,7 @@ class TestImportCompleteness:
         imports = self._get_imports(src)
         refs = self._get_module_references(src)
         missing = refs - imports
-        assert not missing, (
-            f"pocket_yume.py uses these modules but doesn't import them: {missing}"
-        )
+        assert not missing, f"pocket_yume.py uses these modules but doesn't import them: {missing}"
 
     def test_config_imports_complete(self):
         """Config module must import every stdlib module it uses."""
@@ -597,6 +644,47 @@ class TestImportCompleteness:
         imports = self._get_imports(src)
         refs = self._get_module_references(src)
         missing = refs - imports
-        assert not missing, (
-            f"config.py uses these modules but doesn't import them: {missing}"
-        )
+        assert not missing, f"config.py uses these modules but doesn't import them: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# REFERENCES BETWEEN COMPONENTS
+#   Hints and calls that point at things that do not exist only fail when a
+#   user follows them ("python pocket_yume.py settings" was suggested 12 times
+#   and was not a command).
+# ---------------------------------------------------------------------------
+
+
+class TestCrossReferences:
+    def _cli_commands(self):
+        src = (ROOT / "pocket_yume.py").read_text(encoding="utf-8")
+        cmds = set(re.findall(r'cmd == "([a-z-]+)"', src))
+        for group in re.findall(r"cmd in \(([^)]*)\)", src):
+            cmds |= set(re.findall(r'"([a-z-]+)"', group))
+        return cmds
+
+    def test_suggested_cli_commands_exist(self):
+        cmds = self._cli_commands()
+        texts = list(_load_all_source_code().items())
+        texts += [
+            (str(p.relative_to(ROOT)), p.read_text(encoding="utf-8"))
+            for p in [ROOT / "README.md", *ROOT.glob("docs/*.md")]
+        ]
+        missing = set()
+        for path, text in texts:
+            for cmd in re.findall(r"pocket_yume\.py ([a-z][a-z-]+)\b", text):
+                if cmd not in cmds and cmd not in ("not", "and", "is", "to", "or"):
+                    missing.add(f"{path}: {cmd}")
+        assert not missing, f"hints name commands pocket_yume.py does not have: {sorted(missing)}"
+
+    def test_extension_calls_only_allowed_existing_server_paths(self):
+        bg = (ROOT / "extension/js/background.js").read_text(encoding="utf-8")
+        allowed = re.compile(re.search(r"const _ALLOWED_PATH = /(.*)/;", bg).group(1).replace("\\/", "/"))
+        server = (ROOT / "server/faster_whisper_server.py").read_text(encoding="utf-8")
+        routes = [re.sub(r"<[^>]+>", "[a-f0-9]{32}", r) for r in re.findall(r'@app\.route\("([^"]+)"', server)]
+        js = "".join((ROOT / p).read_text(encoding="utf-8") for p in ("extension/popup.js", "extension/js/session.js"))
+        used = {re.sub(r"\$\{[^}]+\}", "0" * 32, p) for p in re.findall(r"path: ['`]([^'`]+)['`]", js)}
+        assert used, "no server paths found in the extension"
+        for path in used:
+            assert allowed.match(path), f"{path} is called but not in background.js _ALLOWED_PATH"
+            assert any(re.fullmatch(r, path) for r in routes), f"{path} is called but the server has no such route"

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Pocket Yume CLI v0.1.0 -- Cross-platform installer & launcher for Yume AI Subtitles
-Complete rewrite: smart port management, API token auth, Windows cp1252 fix
+Pocket Yume CLI -- cross-platform installer & launcher for Yume AI subtitles.
 Supports: Windows, Linux, macOS
 """
 
@@ -184,6 +183,7 @@ from yume.launch import launch_services, set_launch_context  # noqa: E402
 from yume.menus import (  # noqa: E402
     cli_blacklist,
     cli_model,
+    cli_one_click,
     cli_server_stats,
     set_backend_info as _menus_set_bi,
     settings_menu,
@@ -274,7 +274,9 @@ def main_menu() -> None:
                 f"  {C.YELLOW}⬆{C.RESET}  Update available: v{_update_result[0]}  {C.DIM}{_update_result[1]}{C.RESET}"
             )
 
-        print(f"  {C.DIM}Tip: 'python pocket_yume.py help' lists direct CLI commands (launch, status, stats...){C.RESET}")
+        print(
+            f"  {C.DIM}Tip: 'python pocket_yume.py help' lists direct CLI commands (launch, status, stats...){C.RESET}"
+        )
 
         from yume.ui import ask_arrow
 
@@ -351,6 +353,23 @@ def main() -> None:
 
         if cmd == "launch":
             launch_services(cfg)
+        elif cmd == "serve":
+            from yume.service import serve
+
+            sys.exit(serve(cfg, BACKEND_INFO))
+        elif cmd == "stop":
+            from yume.service import read_state, request_stop
+
+            if read_state()["state"] == "stopped":
+                info("Yume is not running in the background.")
+            elif request_stop():
+                info("Stopped.")
+            else:
+                error("Yume did not stop in time — see logs/service.log")
+        elif cmd == "autostart":
+            cli_one_click(cfg, sys.argv[2:])
+        elif cmd == "settings":
+            settings_menu(cfg)
         elif cmd == "status":
             show_status(cfg)
         elif cmd == "health":
@@ -366,10 +385,7 @@ def main() -> None:
         elif cmd == "export":
             config_export(cfg, sys.argv[2] if len(sys.argv) > 2 else None)
         elif cmd == "import" and len(sys.argv) > 2:
-            imported = config_import(sys.argv[2])
-            if imported:
-                cfg.update(imported)
-                save_config(cfg)
+            config_import(sys.argv[2])  # merges with defaults and saves
         elif cmd == "recommend":
             from yume.hardware import recommend_whisper_model
 
@@ -393,7 +409,11 @@ def main() -> None:
             print(f"  {C.GOLD}Run:{C.RESET}")
             print("    (none)               Interactive menu")
             print("    launch               Start servers (interactive runtime menu)")
+            print("    serve                Start servers in the background (no window, auto-stops)")
+            print("    stop                 Stop servers started in the background")
+            print("    autostart on|off     Let the browser extension start/stop Yume by itself")
             print("    setup                Run setup wizard")
+            print("    settings             Settings menu (models, translation, addresses, one-click start)")
             print("    guide                Step-by-step how-to guides (cookbook)")
             print(f"\n  {C.GOLD}Inspect:{C.RESET}")
             print("    status               Check components")

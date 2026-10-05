@@ -1,410 +1,212 @@
 // ============================================================================
-// CONTENT SCRIPT v0.1.0 - Main orchestrator
+// CONTENT SCRIPT
+// Page lifecycle: find the video, start/stop the subtitle session, follow SPA
+// navigation, relay popup requests.
 // ============================================================================
 
-(async function() {
+(function () {
   'use strict';
 
-  DEBUG.info('ContentScript', 'Extension initializing on page', {
-    url: window.location.href,
-    readyState: document.readyState
-  });
-
-  // ========================================================================
-  // STATE
-  // ========================================================================
-
-  let state = {
-    isActive: false,
-    videoElement: null,
-    videoId: null,
-    subtitleWindow: null,
-    audioCapture: null,
-    settings: {}
+  const state = {
+    active: false,
+    starting: false,
+    video: null,
+    session: null,
+    window: null,
   };
 
-  // ========================================================================
-  // INITIALIZATION
-  // ========================================================================
+  // ── video detection ──────────────────────────────────────────────────────
 
-  async function initialize() {
-    try {
-      await loadSettings();
-
-      state.audioCapture = new AudioCapture();
-      if (state.settings.chunkDuration) {
-        state.audioCapture.setChunkDuration(state.settings.chunkDuration);
-      }
-
-      state.videoElement = await waitForVideo();
-      if (state.videoElement) state.videoId = getVideoId();
-
-      // Attach even when no video was found yet — on SPA sites (YouTube home →
-      // watch page) the video appears after load, and enabling subtitles then
-      // must still have its display events wired.
-      setupEventListeners();
-      startUrlWatcher();
-      DEBUG.success('ContentScript', 'Initialization complete');
-    } catch (error) {
-      DEBUG.error('ContentScript', 'Initialization failed', { error: error.message });
+  // The main video: the largest one that is visible and has data. A bare
+  // querySelector('video') picked whatever came first — on YouTube's home page
+  // that is a hover preview, on many sites an ad.
+  function findVideo() {
+    let best = null;
+    let bestArea = 0;
+    for (const v of document.querySelectorAll('video')) {
+      if (v.readyState < 1) continue;
+      const r = v.getBoundingClientRect();
+      const area = r.width * r.height;
+      if (area > bestArea) { best = v; bestArea = area; }
     }
+    return best;
   }
 
-  // ========================================================================
-  // VIDEO DETECTION
-  // ========================================================================
-
-  function waitForVideo(maxAttempts = 20) {
+  function waitForVideo(attempts = 20) {
     return new Promise((resolve) => {
-      let attempts = 0;
-      const interval = setInterval(() => {
-        attempts++;
-        const video = findVideoElement();
-        if (video) { clearInterval(interval); resolve(video); }
-        else if (attempts >= maxAttempts) { clearInterval(interval); resolve(null); }
-      }, 500);
+      const tick = () => {
+        const v = findVideo();
+        if (v || --attempts <= 0) resolve(v);
+        else setTimeout(tick, 500);
+      };
+      tick();
     });
   }
 
-  function findVideoElement() {
-    const selectors = ['video', '.video-player video', '#player video', '[class*="player"] video'];
-    for (const sel of selectors) {
-      const video = document.querySelector(sel);
-      if (video && video.readyState >= 2) return video;
+  // ── start / stop ─────────────────────────────────────────────────────────
+
+  // Resolves once the video is found and the session is starting (the popup
+  // answers right away); `done` settles when the session is running or failed.
+  // Errors after that point are shown in the subtitle window.
+  // Every start() takes a number; stop() and newer starts invalidate older
+  // ones. Without it, two starts overlapping across the video wait (Enable
+  // pressed twice, two quick navigations) each created a session and the
+  // first one kept running, and a stop() during the wait was undone.
+  let startSeq = 0;
+
+  async function start() {
+    const seq = ++startSeq;
+    state.active = true;  // a toggle during the wait below means "stop"
+    const video = (state.video && document.contains(state.video)) ? state.video : await waitForVideo(6);
+    if (seq !== startSeq) return { done: Promise.resolve() };  // stopped or superseded meanwhile
+    if (!video) {
+      state.active = false;
+      throw new Error('No video found on this page — start playing a video, then try again.');
     }
-    return null;
+    state.video = video;
+    if (!state.window) state.window = new SubtitleWindow();
+    state.window.resetProgress();
+    state.window.updateStatus('Starting...', 'loading');
+    if (state.session) state.session.stop();
+    const session = new SubtitleSession();
+    state.session = session;
+    state.starting = true;
+    const done = session.start(video).catch((e) => {
+      session.stop();  // releases its storage listener
+      if (state.session !== session) return;  // stopped or restarted meanwhile
+      if (state.window) state.window.showError(e.message);
+      state.active = false;
+    }).finally(() => {
+      if (state.session === session) state.starting = false;
+    });
+    return { done };
   }
 
-  // Stable across page reloads (no timestamps) — must match the id semantics
-  // in AudioCapture._getVideoId so caches and session restore stay coherent.
-  function getVideoId() {
-    const url = window.location.href;
-    if (url.includes('youtube.com') || url.includes('youtu.be')) {
-      const urlParams = new URLSearchParams(window.location.search);
-      const v = urlParams.get('v');
-      if (v) return v;
-    }
-    return window.location.pathname.replace(/[^a-zA-Z0-9]/g, '-');
+  function stop() {
+    startSeq++;  // a start() still waiting for the video must not resume
+    if (state.session) state.session.stop();
+    state.session = null;
+    state.active = false;
+    // Null BEFORE close(): close() dispatches 'subtitle-window-closed', whose
+    // handler calls stop() again — re-entering close() would recurse forever.
+    if (state.window) { const w = state.window; state.window = null; w.close(); }
   }
 
-  // ========================================================================
-  // START SUBTITLES
-  // ========================================================================
-
-  async function startSubtitles() {
-    // The video may have appeared after page load (SPA navigation) or been
-    // replaced — re-detect instead of trusting the element found at init.
-    if (!state.videoElement || !document.contains(state.videoElement)) {
-      state.videoElement = findVideoElement() || await waitForVideo(6);
-      if (!state.videoElement) {
-        throw new Error('No video found on this page — start playing a video, then try again.');
-      }
-      state.videoId = getVideoId();
+  async function restart(reason) {
+    if (!state.active) return;
+    if (state.session) state.session.stop();
+    if (state.window) {
+      state.window.isPlaying = false;
+      state.window.updateStatus(reason, 'loading');
     }
-
-    try {
-      state.subtitleWindow = new SubtitleWindow();
-      state.subtitleWindow.updateStatus('Starting...', 'loading');
-
-      const started = await state.audioCapture.startCapture();
-      // false = aborted mid-start (user toggled off while downloading) —
-      // stopSubtitles already reset the state; don't mark active.
-      if (started === false) return;
-
-      state.isActive = true;
-      // Status managed by prefetch-ready event
-    } catch (error) {
-      if (state.subtitleWindow) state.subtitleWindow.showError('Error: ' + error.message);
-      throw error;
+    state.video = null;
+    try { await start(); } catch (e) {
+      if (state.window) state.window.showError(e.message);
+      state.active = false;
     }
   }
 
-  // ========================================================================
-  // STOP SUBTITLES
-  // ========================================================================
-
-  async function stopSubtitles() {
-    if (state.audioCapture) state.audioCapture.stopCapture();
-    if (state.subtitleWindow) { state.subtitleWindow.close(); state.subtitleWindow = null; }
-    state.isActive = false;
-  }
-
-  // ========================================================================
-  // URL CHANGE DETECTION (YouTube SPA)
-  // ========================================================================
+  // ── SPA navigation ───────────────────────────────────────────────────────
+  // Polling catches every navigation. (Wrapping history.pushState from a
+  // content script does nothing: it runs in an isolated world, so the page's
+  // own pushState calls never go through our copy.)
 
   let lastUrl = window.location.href;
-
-  function startUrlWatcher() {
-    window.addEventListener('yt-navigate-finish', onUrlChange);
-    setInterval(() => {
-      if (window.location.href !== lastUrl) onUrlChange();
-    }, 1000);
-
-    const origPushState = history.pushState;
-    history.pushState = function() {
-      origPushState.apply(this, arguments);
-      setTimeout(onUrlChange, 100);
-    };
-    const origReplaceState = history.replaceState;
-    history.replaceState = function() {
-      origReplaceState.apply(this, arguments);
-      setTimeout(onUrlChange, 100);
-    };
-    window.addEventListener('popstate', () => setTimeout(onUrlChange, 100));
-  }
-
   function onUrlChange() {
-    const newUrl = window.location.href;
-    if (newUrl === lastUrl) return;
-
-    const oldV = new URL(lastUrl, window.location.origin).searchParams.get('v');
-    const newV = new URL(newUrl, window.location.origin).searchParams.get('v');
-    lastUrl = newUrl;
-
-    if (oldV && newV && oldV === newV) return;
-    if (!state.isActive) return;
-
-    restartForNewVideo();
+    const url = window.location.href;
+    if (url === lastUrl) return;
+    const prevId = lastUrl;
+    lastUrl = url;
+    if (!state.active) return;
+    // Same YouTube video, other params (&t=, playlists): nothing to do
+    const v = (u) => { try { return new URL(u).searchParams.get('v'); } catch (_e) { return null; } };
+    if (v(prevId) && v(prevId) === v(url)) return;
+    // Stop now: the old session would otherwise keep drawing the previous
+    // video's lines over the new one until the restart below.
+    if (state.session) state.session.stop();
+    if (state.window) {
+      state.window.updateSubtitle('', '', '');
+      state.window.updateStatus('Loading subtitles for the new video...', 'loading');
+    }
+    // Give the page a moment to swap the video source before reading its duration
+    setTimeout(() => restart('Loading subtitles for the new video...'), 1500);
   }
+  setInterval(onUrlChange, 1000);
+  window.addEventListener('popstate', () => setTimeout(onUrlChange, 100));
+  window.addEventListener('yt-navigate-start', onUrlChange);
+  window.addEventListener('yt-navigate-finish', onUrlChange);
+  // A player swapping its source fires "emptied" at once (media events don't
+  // bubble, hence the capture phase): catches the switch before the next poll.
+  document.addEventListener('emptied', onUrlChange, true);
 
-  async function restartForNewVideo() {
-    DEBUG.info('ContentScript', 'Restarting for new video');
-    if (state.audioCapture) state.audioCapture.stopCapture();
+  // ── session → window events ──────────────────────────────────────────────
 
-    await new Promise(r => setTimeout(r, 1500));
+  const toWindow = (fn) => (e) => { if (state.window) fn(state.window, e.detail || {}); };
+  window.addEventListener('pipeline-reset', toWindow((w) => w.resetProgress()));
+  window.addEventListener('prefetch-ready', toWindow((w) => w.showReady()));
+  window.addEventListener('display-subtitle', toWindow((w, d) => w.updateSubtitle(d.original, d.english, d.romaji, d.confidence)));
+  window.addEventListener('display-error', toWindow((w, d) => w.showError(d.message)));
+  window.addEventListener('display-status', toWindow((w, d) => w.updateStatus(d.message, d.type)));
+  window.addEventListener('chunk-progress', toWindow((w, d) => w.updateChunkProgress(d)));
+  window.addEventListener('subtitle-window-closed', () => stop());
 
-    const newVideo = await waitForVideo(10);
-    if (!newVideo) {
-      if (state.subtitleWindow) state.subtitleWindow.showError('No video found');
-      return;
-    }
-    state.videoElement = newVideo;
-    state.videoId = getVideoId();
-
-    if (state.subtitleWindow) {
-      state.subtitleWindow.isPlaying = false;
-      state.subtitleWindow.updateStatus('Loading subtitles...', 'loading');
-    }
-
-    await loadSettings();
-
-    state.audioCapture = new AudioCapture();
-    if (state.settings.chunkDuration) {
-      state.audioCapture.setChunkDuration(state.settings.chunkDuration);
-    }
-
-    try {
-      await state.audioCapture.startCapture();
-    } catch (error) {
-      if (state.subtitleWindow) state.subtitleWindow.showError('Restart failed: ' + error.message);
-    }
-  }
-
-  // ========================================================================
-  // RESTART FOR SETTINGS CHANGE
-  // ========================================================================
-
-  async function restartPipelineForSettingsChange(newSettings) {
-    if (!state.isActive || !state.audioCapture) return;
-
-    state.audioCapture.stopCapture();
-
-    if (state.subtitleWindow) {
-      state.subtitleWindow.isPlaying = false;
-      state.subtitleWindow.updateStatus('Reloading with new settings...', 'loading');
-    }
-
-    state.settings = { ...state.settings, ...newSettings };
-    await new Promise(r => setTimeout(r, 300));
-
-    state.audioCapture = new AudioCapture();
-    if (state.settings.chunkDuration) {
-      state.audioCapture.setChunkDuration(state.settings.chunkDuration);
-    }
-
-    try {
-      await state.audioCapture.startCapture();
-    } catch (error) {
-      if (state.subtitleWindow) state.subtitleWindow.showError('Restart failed: ' + error.message);
-    }
-  }
-
-  // Re-romanize cached chunks without full restart
-  async function reRomanizeCachedChunks() {
-    if (!state.audioCapture || !state.isActive) return;
-    if (state.subtitleWindow) {
-      state.subtitleWindow.updateStatus('Adding romanization...', 'loading');
-    }
-    await state.audioCapture.reRomanizeCachedChunks();
-    if (state.subtitleWindow) {
-      state.subtitleWindow.isPlaying = true;
-    }
-  }
-
-  // ========================================================================
-  // EVENT LISTENERS
-  // ========================================================================
-
-  function setupEventListeners() {
-    window.addEventListener('capture-buffering', (e) => {
-      if (state.subtitleWindow) state.subtitleWindow.showBuffering(e.detail.chunkIndex, e.detail.totalChunks);
-    });
-
-    window.addEventListener('prefetch-ready', () => {
-      if (state.subtitleWindow) state.subtitleWindow.showReady();
-    });
-
-    window.addEventListener('display-subtitle', (e) => {
-      if (state.subtitleWindow) {
-        state.subtitleWindow.updateSubtitle(
-          e.detail.original, e.detail.english, e.detail.romaji, e.detail.confidence
-        );
-      }
-    });
-
-    window.addEventListener('display-error', (e) => {
-      if (state.subtitleWindow) state.subtitleWindow.showError(e.detail.message);
-    });
-
-    window.addEventListener('display-status', (e) => {
-      if (state.subtitleWindow) state.subtitleWindow.updateStatus(e.detail.message, e.detail.type);
-    });
-
-    window.addEventListener('subtitle-window-closed', () => { stopSubtitles(); });
-
-    // Chunk progress
-    window.addEventListener('chunk-progress', (e) => {
-      if (state.subtitleWindow) {
-        state.subtitleWindow.updateChunkProgress(e.detail);
-      }
-    });
-
-    // Settings changes — smart handler
-    chrome.storage.onChanged.addListener((changes) => {
-      if (!changes.settings || !state.isActive) return;
-      const oldS = changes.settings.oldValue || {};
-      const newS = changes.settings.newValue || {};
-
-      const langChanged =
-        oldS.sourceLanguage !== newS.sourceLanguage ||
-        oldS.targetLanguage !== newS.targetLanguage;
-
-      const romajiToggled = oldS.showRomaji !== newS.showRomaji;
-
-      if (langChanged) {
-        // Language change → full pipeline restart
-        restartPipelineForSettingsChange(newS);
-      } else if (romajiToggled && newS.showRomaji) {
-        // Romaji toggled ON → re-romanize cached chunks (no restart)
-        reRomanizeCachedChunks();
-      }
-      // Romaji OFF → subtitle-window hides the line (its own onChanged listener)
-      // Appearance changes → subtitle-window handles via its own listener
-    });
-
-    DEBUG.success('ContentScript', 'Event listeners attached');
-  }
-
-  // ========================================================================
-  // SETTINGS
-  // ========================================================================
-
-  async function loadSettings() {
-    return new Promise((resolve) => {
-      chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }, (response) => {
-        state.settings = response?.settings || {};
-        resolve();
-      });
-    });
-  }
-
-  // ========================================================================
-  // MESSAGE HANDLER (from popup)
-  // ========================================================================
-
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.action === 'TOGGLE_SUBTITLES') {
-      (async () => {
-        try {
-          if (state.isActive) {
-            await stopSubtitles();
-            sendResponse({ success: true, active: false });
-          } else {
-            await startSubtitles();
-            sendResponse({ success: true, active: true });
-          }
-        } catch (error) {
-          sendResponse({ success: false, error: error.message });
-        }
-      })();
-      return true;
-    }
-
-    if (message.action === 'GET_STATUS') {
-      // Re-check live: state.videoElement can be stale (SPA nav) or null
-      // (video appeared after init) — the popup uses this for its hint.
-      const hasVideo = !!((state.videoElement && document.contains(state.videoElement)) || findVideoElement());
-      sendResponse({ success: true, active: state.isActive, hasVideo });
-      return false;
-    }
-
-    if (message.action === 'GET_DIAGNOSTICS') {
-      const diag = state.audioCapture ? state.audioCapture.getDiagnostics() : null;
-      sendResponse({ success: true, active: state.isActive, diagnostics: diag });
-      return false;
-    }
-
-    if (message.action === 'GET_CURRENT_SUBTITLE') {
-      let text = null;
-      if (state.subtitleWindow) text = state.subtitleWindow.getCurrentText();
-      if ((!text || !text.original) && state.audioCapture) {
-        text = state.audioCapture.getCurrentSubtitle();
-      }
-      sendResponse({ success: true, subtitle: text });
-      return false;
-    }
-
-    if (message.action === 'EXPORT_SRT' || message.action === 'EXPORT_VTT') {
-      if (!state.audioCapture || !state.isActive) {
-        sendResponse({ success: false, error: 'No active session' });
-        return false;
-      }
-      const result = message.action === 'EXPORT_VTT'
-        ? state.audioCapture.exportVTT()
-        : state.audioCapture.exportSRT();
-      sendResponse({ success: true, ...result });
-      return false;
-    }
-
-    if (message.action === 'CLEAR_CONTENT_CACHE') {
-      const cleared = state.audioCapture ? state.audioCapture.clearContentCache() : 0;
-      sendResponse({ success: true, cleared });
-      return false;
-    }
-
-    if (message.action === 'UPDATE_GLASS') {
-      // Live glass update from popup slider — apply to subtitle window immediately
-      if (state.subtitleWindow?.element) {
-        const s = state.subtitleWindow.settings || {};
-        s.glassEnabled = message.glassEnabled;
-        s.glassBlur = message.glassBlur;
-        s.glassRadius = message.glassRadius;
-        state.subtitleWindow.settings = s;
-        state.subtitleWindow.applyCustomStyles();
-      }
-      sendResponse({ success: true });
-      return false;
+  // Settings that change WHAT the server produces need a new job; display-only
+  // settings are applied by SubtitleWindow / SubtitleSession themselves.
+  chrome.storage.onChanged.addListener((changes) => {
+    if (!changes.settings || !state.active) return;
+    const o = changes.settings.oldValue || {};
+    const n = changes.settings.newValue || {};
+    if (o.sourceLanguage !== n.sourceLanguage || o.targetLanguage !== n.targetLanguage ||
+        o.showEnglish !== n.showEnglish || o.whisperUrl !== n.whisperUrl) {
+      restart('Reloading with new settings...');
+    } else if (o.showRomaji !== n.showRomaji && state.session) {
+      state.session.setRomanize(n.showRomaji === true);
     }
   });
 
-  // ========================================================================
-  // STARTUP
-  // ========================================================================
+  // ── popup / background messages ──────────────────────────────────────────
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initialize);
-  } else {
-    initialize();
-  }
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    switch (message.action) {
+      case 'TOGGLE_SUBTITLES':
+        if (state.active) {
+          stop();
+          sendResponse({ success: true, active: false });
+          return false;
+        }
+        start().then(() => sendResponse({ success: true, active: state.active }),
+          (e) => sendResponse({ success: false, error: e.message }));
+        return true;
+      case 'GET_STATUS':
+        sendResponse({ success: true, active: state.active, hasVideo: !!findVideo() });
+        return false;
+      case 'GET_DIAGNOSTICS':
+        if (!state.session) { sendResponse({ success: true, active: false, diagnostics: null }); return false; }
+        state.session.getDiagnostics().then((d) => sendResponse({ success: true, active: state.active, diagnostics: d }));
+        return true;
+      case 'REFRESH_SUBTITLES':
+        if (state.session) state.session.refresh();
+        sendResponse({ success: true });
+        return false;
+      case 'GET_CURRENT_SUBTITLE':
+        sendResponse({ success: true, subtitle: state.session ? state.session.getCurrentSubtitle() : null });
+        return false;
+      case 'EXPORT_SRT':
+      case 'EXPORT_VTT':
+        if (!state.session) { sendResponse({ success: false, error: 'No active session' }); return false; }
+        state.session.exportSubtitles(message.action === 'EXPORT_VTT' ? 'vtt' : 'srt').then(sendResponse);
+        return true;
+      case 'UPDATE_GLASS':
+        if (state.window) {
+          Object.assign(state.window.settings, {
+            glassEnabled: message.glassEnabled, glassBlur: message.glassBlur, glassRadius: message.glassRadius,
+          });
+          state.window.applyCustomStyles();
+        }
+        sendResponse({ success: true });
+        return false;
+      default:
+        return false;
+    }
+  });
 })();

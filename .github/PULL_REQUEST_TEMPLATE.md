@@ -14,8 +14,9 @@ Steps to verify this works:
 
 ## Checklist
 
-- [ ] `python -m py_compile pocket_yume.py` passes
-- [ ] `node --check extension/js/*.js` passes
-- [ ] `pytest tests/ -v` passes (49+ tests)
-- [ ] Version strings updated if changing behavior
+- [ ] `ruff check .` and `ruff format --check .` pass
+- [ ] `npx eslint extension/` passes
+- [ ] `pytest tests/ -v` and `npm test` pass
+- [ ] For pipeline/server changes: `python tests/live/check_server.py` passes against a running server
+- [ ] Releases only: version bumped in `pocket_yume.py`, `SERVER_VERSION`, `extension/manifest.json`, README badge
 - [ ] Tested on my OS: (Windows / Linux / macOS)

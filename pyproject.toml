@@ -2,6 +2,10 @@
 line-length = 120
 target-version = "py310"
 
+[tool.ruff.format]
+# A list of bare names for vulture, laid out with aligned comments on purpose
+exclude = ["vulture_whitelist.py"]
+
 [tool.ruff.lint]
 select = ["E", "F", "W"]
 ignore = [

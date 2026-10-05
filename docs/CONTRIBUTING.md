@@ -22,9 +22,7 @@ python pocket_yume.py --verbose launch   # debug logging
 **Code analysis & pre-commit hooks** (recommended):
 
 ```bash
-pip install pre-commit && pre-commit install
-pip install -r tools/analyze-requirements.txt
-python tools/analyze.py all  # full analysis report
+pip install pre-commit && pre-commit install   # ruff, bandit, eslint on every commit
 ```
 
 **Extension** (Chrome/Brave/Edge):
@@ -60,9 +58,9 @@ Check [Issues](https://github.com/jenox645/Yume/issues) for open tasks. Look for
 
 **Concrete starter tasks:**
 - Add a progress indicator for llama-cpp-python download (currently shows elapsed time, could show download size)
-- Document wanakana.js version and source URL in a comment at the top of the file
+- Romanize Japanese with context-aware readings (e.g. `cutlet`/`fugashi` instead of pykakasi)
 - Add `--version` flag output to `python pocket_yume.py status` (currently only in `--version`)
-- Write a test that verifies popup.js and pocket_yume.py use the same default port numbers
+- Write a test that verifies popup.js and config.py use the same default Whisper port
 - Improve error messages when the server can't bind to a port (show which process is using it)
 
 **High-impact areas:**
@@ -81,30 +79,31 @@ Check [Issues](https://github.com/jenox645/Yume/issues) for open tasks. Look for
 
 1. Create a feature branch from `main`
 2. Keep PRs focused — one feature or fix per PR
-3. Run the full test suite: `pytest tests/ -v`
-4. Run syntax checks: `python -m py_compile pocket_yume.py && node --check extension/js/*.js`
-5. If you changed behavior, update version strings (search for the current version across all files)
+3. Run the full test suite: `pytest tests/ -v` and `npm test`
+4. Run the linters: `ruff check .` and `npx eslint extension/`
+5. When releasing, bump the version in `pocket_yume.py`, `server/faster_whisper_server.py` (`SERVER_VERSION`), `extension/manifest.json` and the README badge
 6. Describe what you changed and why in the PR description
 
 ## Architecture Quick Reference
 
 | Component | File | Role |
 |-----------|------|------|
-| CLI | `pocket_yume.py` | Installer, launcher, menus (Pocket Yume) |
+| CLI | `pocket_yume.py` + `yume/` | Installer, launcher, menus (Pocket Yume) |
 | Config | `config.py` | Load/save/validate settings |
-| Server | `server/faster_whisper_server.py` | Whisper STT + hallucination filter |
-| Pipeline | `extension/js/audio-capture.js` | Chunk scheduling, parallel transcribe+translate |
-| Background | `extension/js/background.js` | Service worker, server proxy, caches |
-| UI | `extension/js/content.js` | Lifecycle, event wiring |
-| Overlay | `extension/js/subtitle-window.js` | DOM subtitle rendering |
+| Server | `server/faster_whisper_server.py` | Routes, auth, startup |
+| Pipeline | `server/_jobs.py` | Download → regions → Whisper → translate/romanize, cache |
+| Translation | `server/_translate.py` | LLM client with structured output |
+| Session | `extension/js/session.js` | Create job, poll, show the current cue |
+| Background | `extension/js/background.js` | Authenticated proxy to the server |
+| Overlay | `extension/js/subtitle-window.js` | Shadow-DOM subtitle window |
 
-See `ARCHITECTURE.md` and `DEVELOPER_GUIDE.md` for full details.
+See [ARCHITECTURE.md](ARCHITECTURE.md) and [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for full details.
 
 ## Reporting Bugs
 
 1. Run `python pocket_yume.py health` and include the output
 2. Include your OS, GPU, and Whisper model
-3. For extension bugs, include the browser console log and service worker log
+3. For extension bugs, include the popup's Diagnostics log (Download Log) and the browser console
 4. Screenshots of subtitle rendering issues are very helpful
 
 Use the [bug report template](https://github.com/jenox645/Yume/issues/new?template=bug_report.md) when opening an issue.

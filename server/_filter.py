@@ -4,6 +4,7 @@ All detection is stateless except _is_hallucination which reads the mutable
 user_blacklist from _state.
 """
 
+import re
 import unicodedata
 
 import _state
@@ -17,12 +18,8 @@ HALLUCINATION_PATTERNS = [
     "\u304a\u75b2\u308c\u69d8",
     "\u5b57\u5e55\u306f\u81ea\u52d5\u751f\u6210",
     "\u5b57\u5e55\u5236\u4f5c",
-    "\u4f5c\u8a5e",
-    "\u4f5c\u66f2",
-    "\u7de8\u66f2",
     "\u6b4c\uff1a",
     "feat.",
-    "\u8a5e\u66f2",
     "Sound Hodori",
     "\uc0ac\uc6b4\ub4dc \ud638\ub3cc\uc774",
     "\u30db\u30c9\u30ea",
@@ -62,14 +59,17 @@ HALLUCINATION_PATTERNS = [
 ]
 
 # ── Credits-line patterns ─────────────────────────────────────────────────────
+# Roles that open a credits line ("Vocals: X", "作詞・作曲：Y", "Mix & Mastering by Z").
+# They used to be plain substrings, which hid real lines: "I watched the video",
+# "remix", "piano man", "この曲を作曲した".
 CREDITS_PATTERNS = [
-    "\u4f5c\u8a5e\u30fb\u4f5c\u66f2",
-    "\u4f5c\u66f2\u30fb\u7de8\u66f2",
-    "\u4f5c\u8a5e",
-    "\u4f5c\u66f2",
-    "\u7de8\u66f2",
+    "\u4f5c\u8a5e",  # 作詞 lyrics
+    "\u4f5c\u66f2",  # 作曲 composition
+    "\u7de8\u66f2",  # 編曲 arrangement
+    "\u8a5e\u66f2",  # 詞曲
     "vocals",
     "vocal",
+    "vo",
     "guitar",
     "bass",
     "drums",
@@ -77,10 +77,23 @@ CREDITS_PATTERNS = [
     "illustration",
     "illust",
     "animation",
+    "movie",
     "video",
     "mix",
+    "mixing",
     "mastering",
+    "lyrics",
+    "music",
+    "arrangement",
 ]
+_ROLE = "|".join(re.escape(p) for p in sorted(CREDITS_PATTERNS, key=len, reverse=True))
+# role, then a separator / "by" / "&" / another role — e.g. "Vocals:", "作詞・作曲",
+# "Mix & Mastering", "Illustration by", "piano arrangement"
+_CREDITS_RE = re.compile(
+    rf"^\s*(?:{_ROLE})s?(?![a-z])\s*(?:[:：/／・&＆\-–—|｜]|by\b|and\b|(?:{_ROLE})(?![a-z]))",
+    re.IGNORECASE,
+)
+_CREDITS_MAX_LEN = 80
 
 # Exact whole-line matches only.  "like"/"share"/"comment"/"follow" used to be
 # substring patterns, which silently dropped real lyrics ("I like you", "follow me").
@@ -95,7 +108,6 @@ SINGLE_WORD_BLOCKLIST = ["music", "mm", "hmm", "like", "share", "comment", "foll
 # Precomputed lowercase copies — is_hallucination runs per transcribed segment,
 # so lowering every pattern on every call is pure waste.
 _HALLUCINATION_PATTERNS_LOWER = [p.lower() for p in HALLUCINATION_PATTERNS]
-_CREDITS_PATTERNS_LOWER = [p.lower() for p in CREDITS_PATTERNS]
 
 
 def is_hallucination(text):
@@ -149,13 +161,73 @@ def is_hallucination(text):
     return False
 
 
+# A unit of 1-12 characters repeated 5+ times in a row: Whisper stuck in a loop
+# ("…パープルドリームしてみてみてみてみて…" x150). Real lyrics rarely repeat a
+# word 5 times inside one line without spaces; "la la la la" is caught as a
+# whole-line hallucination above.
+_LOOP_RE = re.compile(r"(.{1,12}?)\1{4,}", re.DOTALL)
+LOOP_LINES = 3  # this many identical consecutive lines = a hallucination loop
+
+
+def collapse_loops(text):
+    """Cut a repetition loop down to one occurrence of the repeated unit."""
+    return _LOOP_RE.sub(r"\1", text).strip()
+
+
+def _without_loops(text):
+    """The text with every loop removed, including a trailing partial repeat
+    ("Azumoto-Azumoto-Azum" leaves nothing, not "Azum")."""
+    out, pos = [], 0
+    for m in _LOOP_RE.finditer(text):
+        out.append(text[pos : m.start()])
+        unit, end = m.group(1), m.end()
+        k = 0
+        while end + k < len(text) and k < len(unit) and text[end + k] == unit[k]:
+            k += 1
+        pos = end + k
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def clean_raw_segments(segs):
+    """Whisper's raw segments → (segments with loops cut, indexes to hide).
+
+    Decided on the RAW text: a line that is nothing but a loop
+    ("Azumoto-" x44 over an instrumental intro, stamped 0-30 s) is hidden; a
+    real line that degenerates into a loop at the end is kept, cut short.
+    Cutting first and filtering after let "Azumoto-Azum" through."""
+    out, hide = [], set()
+    for i, s in enumerate(segs):
+        text = s["text"]
+        if _LOOP_RE.search(text):
+            # Only what is OUTSIDE the loops counts: words before it ("…チェック
+            # してみてみて…") and after it ("ラララララ 君と夢を見ていた")
+            if len(re.sub(r"\W", "", _without_loops(text))) < 4:
+                hide.add(i)
+            text = collapse_loops(text)
+        out.append({**s, "text": text})
+    hide |= loop_indexes([s["text"] for s in out])
+    return out, hide
+
+
+def loop_indexes(texts):
+    """Indexes of lines in runs of LOOP_LINES+ identical consecutive lines
+    ("I don't want to lose you" x5 over an instrumental)."""
+    out = set()
+    run = []
+    for i, t in enumerate([*texts, None]):
+        key = t.strip().lower() if t is not None else None
+        if run and key == texts[run[0]].strip().lower():
+            run.append(i)
+            continue
+        if len(run) >= LOOP_LINES:
+            out.update(run)
+        run = [i] if t is not None else []
+    return out
+
+
 def is_credits_line(text):
-    """Return True if text looks like a credits/attribution line."""
-    t = text.strip()
-    t_lower = t.lower()
-    for pat in _CREDITS_PATTERNS_LOWER:
-        if pat in t_lower:
-            return True
-    if "\u30fb" in t and len(t) < 60:  # Japanese interpunct in short line = credits
-        return True
-    return False
+    """Return True if text looks like a credits/attribution line: a short line
+    that starts with a role followed by a separator, "by" or another role."""
+    t = unicodedata.normalize("NFC", text.strip())
+    return len(t) <= _CREDITS_MAX_LEN and bool(_CREDITS_RE.match(t))

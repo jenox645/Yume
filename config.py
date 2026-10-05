@@ -33,10 +33,6 @@ DEFAULT_CONFIG = {
     "whisper_compute_type": "auto",
     "whisper_host": "127.0.0.1",
     "whisper_port": DEFAULT_WHISPER_PORT,
-    "word_timestamps": False,
-    "pause_threshold": 0.25,
-    "chunk_duration": 30,
-    "language": "ja",
     "translation_backend": "llamacpp",
     "translation_host": "127.0.0.1",
     "translation_port": DEFAULT_TRANSLATION_PORT,
@@ -44,11 +40,22 @@ DEFAULT_CONFIG = {
     "gguf_model_path": "",
     "youtube_auth_method": "cookies",
     "cookies_browser": "chrome",
+    "translation_prompt": "",
     "romanization_prompt": "",
+    # Headless mode (started by the extension): stop after this many minutes
+    # without a video being subtitled. 0 = never.
+    "auto_stop_minutes": 30,
     "first_run_complete": False,
 }
 
 MAX_PORT = 65535
+
+# Keys older versions wrote that nothing reads any more; dropped on load so they
+# don't sit in the file looking like settings that do something.
+OBSOLETE_KEYS = ("chunk_duration", "word_timestamps", "pause_threshold", "language")
+
+# The config as last loaded/saved by this process (see save_config)
+_loaded: dict = {}
 
 
 def load_config() -> dict:
@@ -60,7 +67,12 @@ def load_config() -> dict:
             if not isinstance(data, dict):
                 _log.warning("[load_config] Config file is not a JSON object — using defaults")
                 return dict(DEFAULT_CONFIG)
-            return {**DEFAULT_CONFIG, **data}
+            for key in OBSOLETE_KEYS:
+                data.pop(key, None)
+            cfg = {**DEFAULT_CONFIG, **data}
+            _loaded.clear()
+            _loaded.update(cfg)
+            return cfg
         except json.JSONDecodeError as e:
             # Common cause: user manually edited the file with unescaped backslashes
             # (e.g., C:\Users\... instead of C:\\Users\\... in JSON)
@@ -87,10 +99,25 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict) -> None:
-    """Write config to disk."""
+    """Write config to disk.
+
+    The Yume server also writes this file (a Whisper model switched from the
+    extension popup is saved so it survives a restart). A key changed on disk
+    since this process loaded the config, and not changed here, keeps the
+    value on disk instead of being reverted by this process's stale copy."""
+    try:
+        on_disk = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        on_disk = {}
+    if isinstance(on_disk, dict) and _loaded:
+        for key, value in on_disk.items():
+            if key in _loaded and value != _loaded[key] and cfg.get(key) == _loaded[key]:
+                cfg[key] = value  # changed elsewhere, untouched here
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
+    _loaded.clear()
+    _loaded.update(cfg)
 
 
 def validate_port(value: int | str, name: str = "Port") -> int | None:

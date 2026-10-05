@@ -18,6 +18,24 @@ KiB = 1024
 MiB = 1024**2
 GiB = 1024**3
 
+# Whisper models offered by Yume — the single list every menu, the benchmark,
+# the launcher's resource check and the recommendation use.
+# (name, parameters, approx. VRAM in MB with float16 on GPU, description)
+# VRAM figures are faster-whisper's (CTranslate2), roughly half of OpenAI's
+# reference implementation; int8_float16 needs ~35% less. The translation LLM
+# needs its own VRAM on top when both run on the same GPU.
+# Only multilingual models: *.en and distil-* are English-only.
+WHISPER_MODELS = [
+    ("tiny", "39M", 1000, "Fastest, low accuracy"),
+    ("base", "74M", 1000, "Fast, decent accuracy"),
+    ("small", "244M", 1500, "Good balance of speed and accuracy"),
+    ("medium", "769M", 3000, "High accuracy, slower"),
+    ("large-v2", "1550M", 4500, "Very high accuracy"),
+    ("large-v3", "1550M", 4500, "Best accuracy"),
+    ("large-v3-turbo", "809M", 3000, "Near-v3 accuracy at ~2x speed (best mid-range)"),
+]
+WHISPER_MODEL_VRAM_MB = {name: vram for name, _p, vram, _d in WHISPER_MODELS}
+
 
 # detect_gpu() shells out to nvidia-smi / rocm-smi / wmic — up to several seconds
 # on machines without the tool. It's called on every menu render, so cache it;
@@ -47,12 +65,18 @@ def _detect_gpu_uncached() -> dict:
 
         out = _run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"], timeout=10)
         if out.returncode == 0 and out.stdout.strip():
-            p = out.stdout.strip().split(",")
-            r["has_nvidia"] = True
-            r["name"] = p[0].strip()
-            r["vendor"] = "nvidia"
-            r["vram_mb"] = int(p[1].strip()) if len(p) > 1 else 0
-            return r
+            # One line per GPU — use the one with the most VRAM
+            gpus = []
+            for line in out.stdout.strip().splitlines():
+                name, _, mem = line.rpartition(",")
+                try:
+                    gpus.append((int(mem.strip()), name.strip()))
+                except ValueError:
+                    continue
+            if gpus:
+                vram, name = max(gpus)
+                r.update(has_nvidia=True, name=name, vendor="nvidia", vram_mb=vram)
+                return r
     except Exception as e:
         _log.debug("[detect_gpu] nvidia-smi failed: %s", e)
 
@@ -106,30 +130,32 @@ def _detect_gpu_uncached() -> dict:
     except Exception as e:
         _log.debug("[detect_gpu] rocminfo failed: %s", e)
 
-    # ── Windows AMD via WMI ───────────────────────────────────────────────────
+    # ── Windows AMD via CIM ───────────────────────────────────────────────────
+    # (wmic is deprecated and absent on current Windows 11 builds.)
     if IS_WIN:
-        try:
-            from yume.utils import _run
-
-            out = _run(["wmic", "path", "win32_videocontroller", "get", "name,adapterram", "/format:csv"], timeout=10)
-            for line in out.stdout.strip().split("\n"):
-                ll = line.lower()
-                if "radeon" in ll or "amd" in ll:
-                    parts = line.split(",")
-                    r["has_amd"] = True
-                    r["vendor"] = "amd"
-                    r["name"] = parts[2].strip() if len(parts) > 2 else "AMD GPU"
-                    try:
-                        r["vram_mb"] = (
-                            int(parts[1].strip()) // MiB if len(parts) > 1 and parts[1].strip().isdigit() else 0
-                        )
-                    except Exception as e:
-                        _log.debug("[detect_gpu] wmic-amd-vram-parse failed: %s", e)
-                    return r
-        except Exception as e:
-            _log.debug("[detect_gpu] wmic-amd failed: %s", e)
+        for line in _win_cim("Win32_VideoController", "Name,AdapterRAM"):
+            name, _, ram = line.partition("|")
+            if "radeon" in name.lower() or "amd" in name.lower():
+                r.update(has_amd=True, vendor="amd", name=name.strip() or "AMD GPU")
+                # AdapterRAM is a uint32: it caps at 4 GB, so treat it as a minimum
+                r["vram_mb"] = int(ram) // MiB if ram.strip().isdigit() else 0
+                return r
 
     return r
+
+
+def _win_cim(cls: str, props: str) -> list[str]:
+    """Query a WMI/CIM class via PowerShell; one 'a|b|...' line per instance."""
+    from yume.utils import _run
+
+    fields = ",".join(f"$_.{p}" for p in props.split(","))
+    cmd = f"Get-CimInstance {cls} | ForEach-Object {{ @({fields}) -join '|' }}"
+    try:
+        out = _run(["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd], timeout=15)
+        return [ln.strip() for ln in out.stdout.splitlines() if ln.strip()] if out.returncode == 0 else []
+    except Exception as e:
+        _log.debug("[_win_cim] %s failed: %s", cls, e)
+        return []
 
 
 def _detect_cpu_name() -> str:
@@ -141,10 +167,7 @@ def _detect_cpu_name() -> str:
                 if line.startswith("model name"):
                     return line.split(":", 1)[1].strip()
         if IS_WIN:
-            from yume.utils import _run
-
-            r = _run(["wmic", "cpu", "get", "name"], timeout=5)
-            lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip() and ln.strip() != "Name"]
+            lines = _win_cim("Win32_Processor", "Name")
             if lines:
                 return lines[0]
         if IS_MAC:
@@ -176,6 +199,7 @@ def detect_ram_gb() -> float:
             return s.ullTotalPhys / GiB
         elif IS_MAC:
             import subprocess as _sp
+
             r = _sp.run(["sysctl", "hw.memsize"], capture_output=True, text=True, timeout=5)
             if r.returncode == 0 and r.stdout.strip():
                 return int(r.stdout.split(":")[1].strip()) / GiB
@@ -217,10 +241,10 @@ def recommend_whisper_model(gpu_info: dict | None = None) -> tuple[str, str]:
     else:
         if vram >= 10000:
             return "large-v3", f"GPU with {vram} MB VRAM → large-v3 (best accuracy)"
-        elif vram >= 7000:
-            return "large-v3-turbo", f"GPU with {vram} MB VRAM → turbo (near-v3 accuracy, 2x faster)"
         elif vram >= 5000:
-            return "distil-large-v3", f"GPU with {vram} MB VRAM → distil-large-v3 (fast + accurate)"
+            # Not distil-large-v3: distil models are English-only and would
+            # output English for the JA/ZH/KO/RU/AR audio Yume is built for.
+            return "large-v3-turbo", f"GPU with {vram} MB VRAM → turbo (near-v3 accuracy, 2x faster)"
         elif vram >= 4000:
             return "small", f"GPU with {vram} MB VRAM → small (recommended)"
         elif vram >= 2000:

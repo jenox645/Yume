@@ -116,6 +116,11 @@ body {
   backdrop-filter: blur(10px);
 }
 
+.button-row {
+  display: flex;
+  gap: 6px;
+}
+
 .control-row {
   display: flex;
   align-items: center;
@@ -602,13 +607,6 @@ body {
   width: 55px;
 }
 
-.diag-chunk {
-  color: var(--accent-blue);
-  flex-shrink: 0;
-  width: 22px;
-  text-align: right;
-}
-
 .diag-badge {
   display: inline-block;
   padding: 0 4px;
@@ -625,29 +623,20 @@ body {
   color: var(--accent-green);
 }
 
-.diag-badge.empty {
-  background: rgba(199, 72, 72, 0.15);
-  color: var(--accent-red);
+/* Event levels from the server job log (diagnostics panel) */
+.diag-badge.info {
+  background: rgba(74, 144, 226, 0.15);
+  color: var(--accent-blue);
+}
+
+.diag-badge.warn {
+  background: rgba(139, 122, 61, 0.2);
+  color: var(--border-gold);
 }
 
 .diag-badge.error {
   background: rgba(199, 72, 72, 0.3);
   color: #ff6666;
-}
-
-.diag-badge.fetching {
-  background: rgba(74, 144, 226, 0.15);
-  color: var(--accent-blue);
-}
-
-.diag-badge.stopped {
-  background: rgba(199, 72, 72, 0.2);
-  color: var(--accent-red);
-}
-
-.diag-badge.prepare {
-  background: rgba(139, 122, 61, 0.2);
-  color: var(--border-gold);
 }
 
 .diag-detail {
@@ -656,13 +645,6 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
-}
-
-.diag-segs {
-  color: var(--accent-green);
-  flex-shrink: 0;
-  width: 20px;
-  text-align: right;
 }
 
 /* ============================================================================

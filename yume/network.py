@@ -36,12 +36,49 @@ _api_token: str | None = None
 # ── Downloads ─────────────────────────────────────────────────────────────────
 
 
-def download_file(url: str, dest, label: str = "Downloading") -> bool:
-    """Download a file with progress bar, speed, and ETA display."""
+def fetch_published_sha256(checksums_url: str, filename: str) -> str | None:
+    """SHA-256 for `filename` from a published checksum file, or None.
+
+    Handles "HASH  name" lists (yt-dlp SHA2-256SUMS, BtbN checksums.sha256) and
+    single-file sums (Deno's *.sha256sum, which on Windows is PowerShell
+    Get-FileHash output: "Hash : HEX" on its own line).
+    """
+    import re
+
+    try:
+        req = urllib.request.Request(checksums_url, headers={"User-Agent": f"Yume/{_VERSION}"})
+        with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310 — official release URL
+            text = resp.read(1_000_000).decode("utf-8", errors="replace")
+    except Exception as e:
+        _log.debug("[fetch_published_sha256] %s: %s", checksums_url, e)
+        return None
+    hexes = []
+    for line in text.splitlines():
+        m = re.search(r"\b([0-9a-fA-F]{64})\b", line)
+        if not m:
+            continue
+        if filename in line:
+            return m.group(1).lower()
+        hexes.append(m.group(1).lower())
+    return hexes[0] if len(hexes) == 1 else None  # single-file sum without a name
+
+
+def download_file(url: str, dest, label: str = "Downloading", sha256: str | None = None) -> bool:
+    """Download a file with progress bar, speed, and ETA display.
+
+    With `sha256`, the file is verified before it is put in place; a mismatch
+    deletes it and fails (a truncated/corrupted model or a tampered binary must
+    never be used).
+    """
+    import hashlib
     import sys
 
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
+    # Download to "<name>.part" and rename only when complete. Writing straight
+    # to dest left a truncated file after Ctrl+C or a dropped connection — for
+    # a .gguf the launcher then auto-selected it and llama.cpp crashed on load.
+    part = dest.with_name(dest.name + ".part")
     try:
         req = urllib.request.Request(url, headers={"User-Agent": f"Yume/{_VERSION}"})
         with urllib.request.urlopen(req, timeout=180) as resp:  # nosec B310
@@ -56,12 +93,14 @@ def download_file(url: str, dest, label: str = "Downloading") -> bool:
                     print(f"\r  {C.RED}✗{C.RESET}  {label} — Not enough disk space" + " " * 20)
                     info(f"Need ~{total * 1.5 / MiB:.0f} MB, have {free / MiB:.0f} MB free")
                     return False
-            with open(dest, "wb") as f:
+            digest = hashlib.sha256()
+            with open(part, "wb") as f:
                 while True:
                     chunk = resp.read(DOWNLOAD_CHUNK_SIZE)
                     if not chunk:
                         break
                     f.write(chunk)
+                    digest.update(chunk)
                     dl += len(chunk)
                     elapsed = max(0.1, time.time() - t0)
                     speed = dl / elapsed
@@ -90,23 +129,30 @@ def download_file(url: str, dest, label: str = "Downloading") -> bool:
                         mb = dl / MiB
                         sys.stdout.write(f"\r  {C.CYAN}↓{C.RESET}  {mb:.1f} MB  {speed_mb:.1f} MB/s  ")
                         sys.stdout.flush()
+        if total and dl < total:
+            raise OSError(f"connection closed after {dl / MiB:.1f} of {total / MiB:.1f} MB")
+        if sha256 and digest.hexdigest() != sha256.lower():
+            raise OSError(f"SHA-256 mismatch — expected {sha256[:12]}…, got {digest.hexdigest()[:12]}… (file deleted)")
+        part.replace(dest)
         elapsed = time.time() - t0
-        print(f"\r  {C.GREEN}✓{C.RESET}  {label} — {total / MiB:.1f} MB in {elapsed:.0f}s" + " " * 30)
+        print(f"\r  {C.GREEN}✓{C.RESET}  {label} — {dl / MiB:.1f} MB in {elapsed:.0f}s" + " " * 30)
         return True
     except urllib.error.HTTPError as e:
         print(f"\r  {C.RED}✗{C.RESET}  {label} — HTTP {e.code}: {e.reason}" + " " * 20)
         if e.code == 404:
             info("The download URL may have changed. Try updating Yume.")
-        _cleanup_partial(dest)
+        _cleanup_partial(part)
         return False
     except urllib.error.URLError as e:
         print(f"\r  {C.RED}✗{C.RESET}  {label} — Connection failed: {e.reason}" + " " * 20)
         info("Check your internet connection and try again")
-        _cleanup_partial(dest)
+        _cleanup_partial(part)
         return False
-    except Exception as e:
-        print(f"\r  {C.RED}✗{C.RESET}  {label} — FAILED: {e}" + " " * 20)
-        _cleanup_partial(dest)
+    except BaseException as e:  # incl. KeyboardInterrupt: never leave a partial file behind
+        print(f"\r  {C.RED}✗{C.RESET}  {label} — FAILED: {e or type(e).__name__}" + " " * 20)
+        _cleanup_partial(part)
+        if isinstance(e, KeyboardInterrupt):
+            raise
         return False
 
 
@@ -138,6 +184,14 @@ def check_server(host: str, port: int, path: str = "/health") -> dict:
                 return {"up": True, "data": json.loads(body)}
             except (json.JSONDecodeError, ValueError):
                 return {"up": True, "data": {"raw": body.decode("utf-8", errors="replace")[:200]}}
+    except urllib.error.HTTPError as e:
+        # Not healthy, but the body still says why (Whisper /health returns
+        # 503 {"status": "loading"} or 500 {"status": "error", "error": ...}).
+        try:
+            data = json.loads(e.read())
+        except Exception:
+            data = {}
+        return {"up": False, "data": data if isinstance(data, dict) else {}}
     except Exception:
         return {"up": False, "data": {}}
 
@@ -196,7 +250,13 @@ def hf_list_gguf(repo: str) -> list[dict]:
                 sb = f.get("size", 0)
                 sg = sb / GiB
                 out.append(
-                    {"name": f["path"], "bytes": sb, "size": f"{sg:.2f} GB" if sg >= 1 else f"{sb / MiB:.0f} MB"}
+                    {
+                        "name": f["path"],
+                        "bytes": sb,
+                        "size": f"{sg:.2f} GB" if sg >= 1 else f"{sb / MiB:.0f} MB",
+                        # HuggingFace stores big files in LFS; its oid IS the SHA-256
+                        "sha256": (f.get("lfs") or {}).get("oid"),
+                    }
                 )
         return out
     except urllib.error.HTTPError as e:
@@ -211,7 +271,7 @@ def hf_list_gguf(repo: str) -> list[dict]:
         return []
 
 
-def hf_download(repo: str, filename: str) -> bool:
+def hf_download(repo: str, filename: str, sha256: str | None = None) -> bool:
     from yume.utils import GGUF_DIR
 
     GGUF_DIR.mkdir(parents=True, exist_ok=True)
@@ -219,6 +279,7 @@ def hf_download(repo: str, filename: str) -> bool:
         f"https://huggingface.co/{repo}/resolve/main/{filename}",
         GGUF_DIR / filename,
         f"Downloading {filename}",
+        sha256=sha256,
     )
 
 
