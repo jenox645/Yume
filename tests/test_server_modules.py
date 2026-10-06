@@ -408,7 +408,14 @@ class TestIsHallucination(unittest.TestCase):
         self.assertTrue(_filter.is_hallucination("abababab"))
 
     def test_a_word_said_twice_is_a_lyric(self):
-        for line in ["きらきら", "どんどん", "もっともっと", "そうそう", "더 그리워 더 그리워", "I love you I love you"]:
+        for line in [
+            "きらきら",
+            "どんどん",
+            "もっともっと",
+            "そうそう",
+            "더 그리워 더 그리워",
+            "I love you I love you",
+        ]:
             self.assertFalse(_filter.is_hallucination(line), line)
         self.assertTrue(_filter.is_hallucination("la la la la la la"))
 
