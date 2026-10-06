@@ -46,7 +46,28 @@ HALLUCINATION_PATTERNS = [
     "\u8bb0\u5f97\u70b9\u8d5e",
     "\u5173\u6ce8\u6211",
     "\u4e00\u952e\u4e09\u8fde",
+    "字幕志愿者",  # "subtitle volunteer …"
+    "字幕志願者",
+    "中文字幕",
+    "优优独播剧场",  # "YoYo Television Series Exclusive"
+    "優優獨播劇場",
+    "YoYo Television Series",
+    "Amara.org",
+    "明镜与点点",
+    "请不吝点赞",
+    # Korean common hallucinations
+    "한글자막",  # "Korean subtitles by …"
+    "자막 제공",
+    "자막 by",
+    "다음 영상에서 만나요",  # "see you in the next video"
+    "시청해주셔서 감사합니다",
+    "시청해 주셔서 감사합니다",
+    "구독과 좋아요",
+    "MBC 뉴스",
     # Russian common hallucinations
+    "субтитр",  # "Субтитры сделал/создавал/подогнал …" ("subtitles by …")
+    "DimaTorzok",
+    "Продолжение следует",  # "to be continued"
     "\u041f\u043e\u0434\u043f\u0438\u0441\u044b\u0432\u0430\u0439\u0442\u0435\u0441\u044c \u043d\u0430 \u043a\u0430\u043d\u0430\u043b",
     "\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440",
     "\u0421\u0442\u0430\u0432\u044c\u0442\u0435 \u043b\u0430\u0439\u043a",
@@ -56,6 +77,7 @@ HALLUCINATION_PATTERNS = [
     "\u0634\u0643\u0631\u0627 \u0644\u0644\u0645\u0634\u0627\u0647\u062f\u0629",
     "\u0644\u0627 \u062a\u0646\u0633\u0649 \u0627\u0644\u0627\u0639\u062c\u0627\u0628",  # bare alef form
     "\u0644\u0627 \u062a\u0646\u0633\u0649 \u0627\u0644\u0625\u0639\u062c\u0627\u0628",  # hamza-below form (Whisper standard)
+    "نانسي قنقر",  # "ترجمة نانسي قنقر" ("translated by …")
 ]
 
 # ── Credits-line patterns ─────────────────────────────────────────────────────
@@ -93,6 +115,9 @@ _CREDITS_RE = re.compile(
     rf"^\s*(?:{_ROLE})s?(?![a-z])\s*(?:[:：/／・&＆\-–—|｜]|by\b|and\b|(?:{_ROLE})(?![a-z]))",
     re.IGNORECASE,
 )
+# CJK/Korean roles need no separator: "詞曲 李宗盛", "작사 김이나"
+_CJK_ROLES = ["作詞", "作曲", "編曲", "詞曲", "作词", "编曲", "词曲", "監製", "监制", "작사", "작곡", "편곡"]
+_CJK_CREDITS_RE = re.compile(rf"^\s*(?:{'|'.join(_CJK_ROLES)})(?:\s|[:：/／・、&＆|｜]|$)")
 _CREDITS_MAX_LEN = 80
 
 # Exact whole-line matches only.  "like"/"share"/"comment"/"follow" used to be
@@ -136,7 +161,8 @@ def is_hallucination(text):
         if len(unique) <= 2:
             return True
 
-    # Concatenated repetition: "musicmusic", "aaaaa", "la la la la".
+    # Concatenated repetition: "aaaaaa", "la la la la", 3+ times. Twice is a
+    # lyric: きらきら, もっともっと, "더 그리워 더 그리워", "I love you I love you".
     # The repeating unit may start after a short prefix — "MACACACACA..." is
     # "ma" + "ca"*N and never matches anchored at position 0, so try offsets
     # up to one unit length (require an extra repeat there to avoid false
@@ -147,7 +173,7 @@ def is_hallucination(text):
             for offset in range(0, sub_len + 1):
                 body = clean[offset:]
                 repeats = len(body) // sub_len
-                min_repeats = 2 if offset == 0 else 3
+                min_repeats = 3 if offset == 0 else 4
                 if repeats < min_repeats:
                     continue
                 sub = body[:sub_len]
@@ -230,4 +256,42 @@ def is_credits_line(text):
     """Return True if text looks like a credits/attribution line: a short line
     that starts with a role followed by a separator, "by" or another role."""
     t = unicodedata.normalize("NFC", text.strip())
-    return len(t) <= _CREDITS_MAX_LEN and bool(_CREDITS_RE.match(t))
+    return len(t) <= _CREDITS_MAX_LEN and bool(_CREDITS_RE.match(t) or _CJK_CREDITS_RE.match(t))
+
+
+# ── Region-level detection ────────────────────────────────────────────────────
+
+WINDOW_S = 30.0  # Whisper's window
+# "Thank you" at the end of a region: what Whisper hears in a fade-out
+THANKS_LINES = {
+    "thank you", "thanks", "thank you very much", "감사합니다", "고맙습니다", "спасибо",
+    "شكرا", "شكرا لكم", "谢谢", "謝謝", "ありがとうございました",
+}  # fmt: skip
+
+
+def _norm(text):
+    t = "".join(c for c in unicodedata.normalize("NFC", text) if unicodedata.category(c) != "Mn")  # ً in شكراً
+    return " ".join(re.sub(r"[\W_]+", " ", t.lower()).split())
+
+
+def window_hallucinations(segs, region):
+    """Indexes of lines Whisper made up for a region it heard no words in.
+
+    With nothing to transcribe, Whisper fills its whole 30 s window with one
+    line, stamped 0 → 30 s even when the region is shorter (the rest of the
+    window is padding): "字幕志愿者 李宗盛", "Субтитры сделал DimaTorzok",
+    "한글자막 by …" over intros and instrumentals, in every language. A real
+    line alone in its region is stamped at most to the region's end (a chorus
+    line across a whole 20 s region was one), so only the full window counts.
+    Also "Thank you" in a region's last seconds. `segs` are the region's raw
+    segments (times not clipped yet)."""
+    start, end = region
+    out = set()
+    if len(segs) == 1:
+        s = segs[0]
+        if s["start"] - start <= 1.0 and s["end"] - s["start"] >= WINDOW_S - 0.5:
+            out.add(0)
+    for i, s in enumerate(segs):
+        if end - s["end"] <= 3.0 and _norm(s["text"]) in THANKS_LINES:
+            out.add(i)
+    return out

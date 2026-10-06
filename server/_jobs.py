@@ -26,7 +26,7 @@ import _audio
 import _regions
 import _romanize
 import _state
-from _filter import clean_raw_segments, is_credits_line, is_hallucination
+from _filter import clean_raw_segments, is_credits_line, is_hallucination, window_hallucinations
 from _transcribe import transcribe_audio
 from _translate import BATCH_SIZE, TranslationError, _unshout
 
@@ -43,6 +43,20 @@ NEAR_BATCH = 3  # ...in batches this small
 
 def _hidden(text):
     return is_hallucination(text) or is_credits_line(text)
+
+
+def _clean_region(raw, region):
+    """A region's raw Whisper segments (the cache keeps them raw) → (segments,
+    loop indexes, filler indexes), every line within the region.
+
+    Lines starting after the region belong to the next one (the stream preview
+    hears past region 0's cut), and Whisper stamps lines up to the end of its
+    30 s window, past the audio it was given: "다음 영상에서 만나요" ("see you in
+    the next video") ran to 304 s in a 283 s video."""
+    raw = [s for s in raw if s["start"] < region[1] - 0.1]
+    filler = window_hallucinations(raw, region)
+    segs, loops = clean_raw_segments(raw)
+    return [{**s, "end": min(s["end"], region[1])} for s in segs], loops, filler
 
 
 class Job:
@@ -76,7 +90,7 @@ class Job:
         self.segments = {}  # id -> segment dict
         self.next_sid = 1
         self.rev = 0
-        self.playhead = 0.0
+        self.playhead = float(params.get("playhead") or 0.0)  # YouTube resumes where you left off
         self.last_poll = time.time()
         self.events = collections.deque(maxlen=60)
         self.context = []  # recent (source, translation) pairs for the LLM
@@ -103,8 +117,7 @@ class Job:
         region = self.regions[idx]
         dropped = 0
         cache = _state.store
-        # The cache keeps Whisper's raw output; loops are cleaned here, on the way in
-        raw, loops = clean_raw_segments(raw)
+        raw, loops, filler = _clean_region(raw, region)
         texts = [s["text"] for s in raw]
         cached_tr = {}
         if self.target and cache is not None and texts:
@@ -114,7 +127,7 @@ class Job:
                 with _state.stats_lock:
                     _state.server_stats["translation_cache_hits"] += len(cached_tr)
         for i, s in enumerate(raw):
-            hidden = i in loops or _hidden(s["text"])
+            hidden = i in loops or i in filler or _hidden(s["text"])
             dropped += hidden
             roma = _romanize.romanize(self.language, s["text"]) if self.language else ""
             if roma is None and cache is not None:
@@ -131,6 +144,7 @@ class Job:
                 "region": region,
                 "orphan": False,
                 "loop": i in loops,
+                "filler": i in filler,  # region-level, so refilter() keeps it hidden
                 "tries": 0,
             }
             self.next_sid += 1
@@ -312,7 +326,7 @@ class JobManager:
                 for seg in job.segments.values():
                     if seg["orphan"]:
                         continue
-                    hidden = seg["loop"] or _hidden(seg["text"])
+                    hidden = seg["loop"] or seg["filler"] or _hidden(seg["text"])
                     if hidden != seg["hidden"]:
                         seg["hidden"] = hidden
                         job._touch(seg)
@@ -386,7 +400,9 @@ class JobManager:
             with job.lock:
                 job.status = "downloading"
                 job.event("Downloading audio...")
-            if not job.stream_url and (0.0, _regions.FIRST_REGION_S) not in cached:
+            # The preview is for a video watched from the start, not one resumed at 40:00
+            preview = job.playhead < _regions.FIRST_REGION_S
+            if preview and not job.stream_url and not any(r[0] == 0.0 for r in cached):
                 threading.Thread(target=self._preview, args=(job,), daemon=True).start()
 
             if job.stream_url:
@@ -448,14 +464,14 @@ class JobManager:
             if path and self._alive(job):
                 raw = transcribe_audio(_audio.load_audio(path), job.language, 0.0, is_first_region=True)
                 with job.lock:
+                    if job.status == "error":  # the download failed meanwhile (a live stream)
+                        return
                     job.preview_segments = raw
                     if job.regions and job.status != "downloading":
                         self._adopt_preview(job)
                     elif not job.regions:
-                        _state.store.put_transcript(
-                            job.video_key, job.lang_key, job.model, 0.0, _regions.FIRST_REGION_S, raw
-                        )
-                        job.preview_segments = None
+                        # preview_segments kept: cached and adopted under the plan,
+                        # whose region 0 may end before 30 s
                         job.show_preview(raw)
                         job.event(
                             f"First 30 s ready from the stream ({len(raw)} lines) — full download continues", "ok"
@@ -469,17 +485,23 @@ class JobManager:
             self._notify()
 
     def _adopt_preview(self, job):
-        """Use the preview as region 0 if the plan has a matching region 0."""
+        """Use the preview as region 0 if it covers the plan's region 0 (which
+        ends at a quiet point at most FIRST_REGION_S in)."""
         raw = job.preview_segments
         if raw is None or not job.regions:
             return
         job.preview_segments = None
-        first = (0.0, _regions.FIRST_REGION_S)
-        if job.regions[0] == first and job.region_state[0] == "pending":
-            _state.store.put_transcript(job.video_key, job.lang_key, job.model, *first, raw)
+        first = job.regions[0]
+        if first[0] != 0.0 or first[1] > _regions.FIRST_REGION_S:
+            return
+        if job.region_state[0] == "pending":
             job.add_region(0, raw)
             # Before the plan existed the preview had nothing to show; it does now
             job.event(f"Region 1/{len(job.regions)}: {len(raw)} lines (stream preview)")
+        elif job.region_state[0] != "done" or first != (0.0, _regions.FIRST_REGION_S):
+            return  # the worker is transcribing region 0 itself
+        # else: shown before the plan, which kept that region
+        _state.store.put_transcript(job.video_key, job.lang_key, job.model, *first, raw)
 
     # ── transcription worker ────────────────────────────────────────────────
 
@@ -654,10 +676,15 @@ def export_subtitles(segments, fmt="srt"):
 def library_export(video_key, language, model, target, fmt="srt"):
     """Build subtitles for a cached video without a live job."""
     store = _state.store
-    raw, loops = [], set()
-    for _region, segs in sorted(store.get_transcripts(video_key, language, model).items()):
-        segs, hide = clean_raw_segments(segs)
-        loops |= {len(raw) + i for i in hide}
+    cached = store.get_transcripts(video_key, language, model)
+    # The video's current plan: a region of an older plan would duplicate lines
+    planned = [tuple(r) for r in (store.get_video(video_key) or {}).get("regions") or []]
+    raw, hide = [], set()
+    for region in planned or sorted(cached):
+        if region not in cached:
+            continue
+        segs, loops, filler = _clean_region(cached[region], region)
+        hide |= {len(raw) + i for i in loops | filler}
         raw.extend(segs)
     # Any translation model: the library outlives model switches
     translations = store.get_translations(language, target, None, [s["text"] for s in raw]) if target else {}
@@ -667,6 +694,6 @@ def library_export(video_key, language, model, target, fmt="srt"):
         roma = _romanize.romanize(lang, s["text"]) if lang else ""
         if roma is None:
             roma = store.get_romanization(language, s["text"]) or ""
-        hidden = i in loops or _hidden(s["text"])
+        hidden = i in hide or _hidden(s["text"])
         segments.append({**s, "translation": translations.get(s["text"], ""), "romaji": roma, "hidden": hidden})
     return export_subtitles(segments, fmt)

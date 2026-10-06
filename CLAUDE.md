@@ -30,7 +30,7 @@ pytest tests/test_server_modules.py -v   # Server module unit tests
 
 ruff check .                             # Lint
 ruff check --fix .                       # Auto-fix lint violations
-ruff format pocket_yume.py config.py server/   # CI checks formatting of these
+ruff format --check .                    # CI checks formatting of the whole repo (tests too)
 
 bandit -r pocket_yume.py config.py server/ yume/ -ll -c pyproject.toml  # Security scan
 ```
