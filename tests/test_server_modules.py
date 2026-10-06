@@ -1256,7 +1256,7 @@ class TestParseArgs(unittest.TestCase):
     def test_defaults(self):
         with patch("sys.argv", ["server"]):
             args = _fws._parse_args()
-        self.assertEqual(args.model, "large-v3")
+        self.assertEqual(args.model, "large-v3-turbo")  # as accurate as large-v3 on songs, 2x faster
         self.assertEqual(args.device, "cuda")
         self.assertEqual(args.compute_type, "float16")
         self.assertEqual(args.port, 5001)

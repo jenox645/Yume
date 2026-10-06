@@ -41,6 +41,7 @@ import _audio
 import _bgutil
 import _jobs
 import _romanize
+import _separate
 import _store
 import _translate
 from _security import validate_url
@@ -251,8 +252,20 @@ def stats():
     s["model_display_name"] = _state.model_display_name or ""
     s["device"] = _state.device
     s["compute_type"] = _state.compute_type
+    s["vocal_isolation"] = _vocal_isolation_status()
 
     return jsonify(s)
+
+
+def _vocal_isolation_status():
+    if not _state.vocal_isolation:
+        return "off"
+    ok, why = _separate.available()
+    return f"on ({_separate.MODEL}, CUDA)" if ok else f"unavailable: {why}"
+
+
+def _report_vocal_isolation():
+    print(f"[Yume] Vocal isolation: {_vocal_isolation_status()}")
 
 
 # ── Route: model hot-swap ─────────────────────────────────────────────────────
@@ -409,6 +422,7 @@ def _job_or_404(job_id):
 @app.route("/jobs", methods=["POST"])
 def create_job():
     """Start (or rejoin) the subtitle job for one video + language pair."""
+    _reload_translation_config()  # vocal_isolation may have changed
     if _state.load_error:
         return jsonify({"error": f"Whisper could not load its model: {_state.load_error}"}), 503
     data = request.get_json(silent=True) or {}
@@ -663,6 +677,8 @@ def main():
     # Pre-load kakasi dictionary in background to hide its 30-120 s startup cost
     # (Windows Defender scans each file in the dictionary).
     threading.Thread(target=lambda: _romanize.get_kakasi(), daemon=True).start()
+    # Importing torch takes seconds: check vocal isolation now, not in the first job
+    threading.Thread(target=_report_vocal_isolation, daemon=True).start()
 
     # Load model in a background thread so the server is immediately responsive.
     # /health returns {"status": "loading"} until the model is ready.
@@ -683,6 +699,7 @@ _TRANSLATION_KEYS = {
     "translation_model": "translation_model",
     "translation_prompt": "translation_prompt",
     "romanization_prompt": "romanization_prompt",
+    "vocal_isolation": "vocal_isolation",  # not translation, but re-read live the same way
 }
 
 
@@ -766,7 +783,7 @@ def _parse_args():
     import argparse
 
     parser = argparse.ArgumentParser(description="Yume Whisper Server")
-    parser.add_argument("--model", default="large-v3")
+    parser.add_argument("--model", default="large-v3-turbo")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--compute-type", default="float16")
     parser.add_argument("--port", type=int, default=5001)

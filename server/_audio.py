@@ -436,7 +436,7 @@ def friendlify_ytdlp_error(raw_error):
     return raw_error
 
 
-def download_full_audio(url):
+def download_full_audio(url, stereo=False):
     """Download the complete audio track as 16 kHz mono WAV.
 
     Strategy 1: yt-dlp (multiple auth/format combos)
@@ -444,7 +444,11 @@ def download_full_audio(url):
     Strategy 3: ffmpeg direct (for m3u8 / direct media URLs)
 
     Returns (path, None) on success or (None, error_message) on failure.
+    16 kHz mono (what Whisper takes), or 44.1 kHz stereo for vocal isolation
+    (_separate: separating the 16 kHz mono made transcription worse).
     """
+    rate, channels = ("44100", "2") if stereo else ("16000", "1")
+    pp_opts = f"ffmpeg:-ar {rate} -ac {channels}"
     tmp_dir = tempfile.mkdtemp(prefix="yume_")
     output_template = os.path.join(tmp_dir, "full_audio.%(ext)s")
     output_path = os.path.join(tmp_dir, "full_audio.wav")
@@ -477,7 +481,7 @@ def download_full_audio(url):
                         "--audio-format",
                         "wav",
                         "--postprocessor-args",
-                        _state.FFMPEG_AUDIO_OPTS,
+                        pp_opts,
                         "--no-playlist",
                         "--no-cache-dir",
                         "--no-exec",
@@ -554,9 +558,9 @@ def download_full_audio(url):
                         stream_url,
                         "-vn",
                         "-ar",
-                        "16000",
+                        rate,
                         "-ac",
-                        "1",
+                        channels,
                         "-f",
                         "wav",
                         ffmpeg_output,
@@ -592,9 +596,9 @@ def download_full_audio(url):
                     url,
                     "-vn",
                     "-ar",
-                    "16000",
+                    rate,
                     "-ac",
-                    "1",
+                    channels,
                     "-f",
                     "wav",
                     ffmpeg_output,

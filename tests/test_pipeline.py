@@ -23,6 +23,7 @@ import _audio  # noqa: E402
 import _jobs  # noqa: E402
 import _regions  # noqa: E402
 import _romanize  # noqa: E402
+import _separate  # noqa: E402
 import _state  # noqa: E402
 import _store  # noqa: E402
 import _translate  # noqa: E402
@@ -294,7 +295,8 @@ def pipeline(tmp_path):
         w.setsampwidth(2)
         w.setframerate(SR)
         w.writeframes((_tone_with_gaps(95) * 32767).astype(np.int16).tobytes())
-    saved = (_state.model, _state.store, _state.jobs, _state.user_blacklist)
+    saved = (_state.model, _state.store, _state.jobs, _state.user_blacklist, _state.vocal_isolation)
+    _state.vocal_isolation = False  # never a real separator (or a torch import) in tests
     _state.model = _FakeModel()
     _state.store = _store.Store(tmp_path / "c.db")
     _state.user_blacklist = []
@@ -310,7 +312,7 @@ def pipeline(tmp_path):
     _state.jobs.drop_all("teardown")
     time.sleep(0.2)  # let a worker mid-region finish before the store closes
     _state.store.close()
-    _state.model, _state.store, _state.jobs, _state.user_blacklist = saved
+    _state.model, _state.store, _state.jobs, _state.user_blacklist, _state.vocal_isolation = saved
 
 
 def _run(jobs, job, timeout=20, playhead=0):
@@ -390,6 +392,78 @@ def test_stream_preview_covers_a_region_0_cut_before_30s(pipeline):
         assert job.region_state == ["done", "pending"]
     # and it is cached under the plan's region only
     assert set(_state.store.get_transcripts("pv", "ja", job.model)) == {(0.0, 21.5)}
+
+
+# ── vocal isolation ───────────────────────────────────────────────────────────
+
+
+def test_songs_are_transcribed_from_the_separated_vocals(pipeline, monkeypatch):
+    vocals = _tone_with_gaps(95) * 0.5  # recognisably not the mix
+    heard = []
+    real_transcribe = _jobs.transcribe_audio
+
+    def transcribe(audio, *a, **kw):
+        heard.append(float(np.abs(audio).max()))
+        return real_transcribe(audio, *a, **kw)
+
+    monkeypatch.setattr(_separate, "wanted", lambda duration: True)
+    monkeypatch.setattr(_separate, "read_stereo", lambda path: np.zeros((2, 10), np.float32))
+    monkeypatch.setattr(_separate, "isolate", lambda stereo: vocals)
+    monkeypatch.setattr(_jobs, "transcribe_audio", transcribe)
+    job = pipeline.jobs.create({**PARAMS, "video_id": "song", "duration": 95})
+    assert job.isolate and job.model == _state.model_name + _separate.MODEL_SUFFIX
+    snap = _run(pipeline.jobs, job)
+    assert snap["status"] == "done"
+    assert pipeline.download.call_args.kwargs == {"stereo": True}  # stereo: what the separator needs
+    assert heard and max(heard) <= 0.15 + 1e-6  # every region came from the vocals (the mix peaks at 0.3)
+    assert any("Vocals separated" in e["msg"] for e in job.events)
+    # cached apart from transcripts of the mix
+    assert _state.store.get_transcripts("song", "ja", job.model)
+    assert not _state.store.get_transcripts("song", "ja", _state.model_name)
+
+
+def test_a_failed_separation_transcribes_the_mix(pipeline, monkeypatch):
+    def boom(stereo):
+        raise RuntimeError("CUDA out of memory")
+
+    monkeypatch.setattr(_separate, "wanted", lambda duration: True)
+    monkeypatch.setattr(_separate, "read_stereo", lambda path: np.zeros((2, 10), np.float32))
+    monkeypatch.setattr(_separate, "isolate", boom)
+    job = pipeline.jobs.create({**PARAMS, "video_id": "song2", "duration": 95})
+    snap = _run(pipeline.jobs, job)
+    assert snap["status"] == "done" and snap["progress"]["lines"] > 0
+    assert job.model == _state.model_name and not job.isolate  # cached as the mix's
+    assert any("Vocal isolation failed" in e["msg"] and "out of memory" in e["msg"] for e in job.events)
+
+
+def test_which_videos_are_separated(monkeypatch):
+    monkeypatch.setattr(_separate, "available", lambda: (True, ""))
+    monkeypatch.setattr(_state, "vocal_isolation", True)
+    assert _separate.wanted(240)
+    assert not _separate.wanted(0)  # unknown length (a live stream)
+    assert not _separate.wanted(_separate.MAX_S + 1)  # a talk, not a song
+    monkeypatch.setattr(_state, "vocal_isolation", False)
+    assert not _separate.wanted(240)
+    monkeypatch.setattr(_state, "vocal_isolation", True)
+    monkeypatch.setattr(_separate, "available", lambda: (False, "not installed"))
+    assert not _separate.wanted(240)
+
+
+def test_stereo_downloads_are_read_for_the_separator(tmp_path):
+    import wave
+
+    def wav(path, rate, channels):
+        with wave.open(str(path), "wb") as w:
+            w.setnchannels(channels)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            w.writeframes(np.array([16384, -16384] * 50, np.int16).tobytes())
+        return str(path)
+
+    st = _separate.read_stereo(wav(tmp_path / "s.wav", 44100, 2))
+    assert st.shape == (2, 50) and st[0, 0] == pytest.approx(0.5) and st[1, 0] == pytest.approx(-0.5)
+    assert _separate.read_stereo(wav(tmp_path / "m.wav", 16000, 1)) is None
+    assert _separate.read_stereo(str(tmp_path / "missing.wav")) is None
 
 
 def test_no_stream_preview_of_the_start_for_a_resumed_video(pipeline):

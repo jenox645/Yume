@@ -25,6 +25,7 @@ import uuid
 import _audio
 import _regions
 import _romanize
+import _separate
 import _state
 from _filter import clean_raw_segments, is_credits_line, is_hallucination, window_hallucinations
 from _transcribe import transcribe_audio
@@ -39,6 +40,20 @@ PREVIEW_GRACE_S = 60  # region 0 waits this long for an in-flight stream preview
 MAX_TRANSLATE_TRIES = 3
 NEAR_S = 20  # lines starting this soon after the playhead are translated first...
 NEAR_BATCH = 3  # ...in batches this small
+
+
+def _duration(value):
+    try:
+        duration = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return duration if 0 <= duration < 7 * 24 * 3600 else 0.0  # NaN/inf fail both tests
+
+
+def job_model(duration):
+    """The Whisper model id transcripts are cached under: separated vocals
+    give other transcripts than the mix, so they get their own."""
+    return _state.model_name + (_separate.MODEL_SUFFIX if _separate.wanted(duration) else "")
 
 
 def _hidden(text):
@@ -71,14 +86,11 @@ class Job:
         self.url = params.get("url") or ""
         self.stream_url = params.get("stream_url") or ""
         self.title = (params.get("title") or "")[:200]
-        try:
-            duration = float(params.get("duration") or 0)
-        except (TypeError, ValueError):
-            duration = 0.0
-        self.duration = duration if 0 <= duration < 7 * 24 * 3600 else 0.0  # NaN/inf fail both tests
-        self.model = _state.model_name
+        self.duration = _duration(params.get("duration"))
+        self.model = job_model(self.duration)
+        self.isolate = self.model.endswith(_separate.MODEL_SUFFIX)  # separate the vocals first
 
-        self.status = "starting"  # starting|downloading|transcribing|translating|done|error
+        self.status = "starting"  # starting|downloading|separating|transcribing|translating|done|error
         self.error = ""
         self.audio = None
         self.mode = "full"  # "full": slice local audio; "stream": download each region
@@ -158,7 +170,7 @@ class Job:
         self._update_status()
 
     def _update_status(self):
-        if self.status in ("error", "downloading", "starting") or not self.regions:
+        if self.status in ("error", "downloading", "separating", "starting") or not self.regions:
             return
         if any(st in ("pending", "running") for st in self.region_state):
             self.status = "transcribing"
@@ -278,7 +290,8 @@ class JobManager:
         video_key = str(params.get("video_id") or params.get("url") or "")[:200]
         if not video_key:
             raise ValueError("video_id or url is required")
-        key = (video_key, params.get("language") or "auto", params.get("target") or "", _state.model_name)
+        model = job_model(_duration(params.get("duration")))
+        key = (video_key, params.get("language") or "auto", params.get("target") or "", model)
         with self.lock:
             existing = self.jobs.get(self.by_key.get(key, ""))
             if existing is not None and existing.status == "done" and "failed" in existing.region_state:
@@ -408,13 +421,20 @@ class JobManager:
             if job.stream_url:
                 path, err = _audio.download_direct(job.stream_url)
             else:
-                path, err = _audio.download_full_audio(job.url)
+                path, err = _audio.download_full_audio(job.url, stereo=job.isolate)
             if not self._alive(job):
                 _audio.remove_temp(path)
                 return
             if path:
                 try:
                     audio = _audio.load_audio(path)
+                    if job.isolate:
+                        vocals = self._isolate(job, path)
+                        if vocals is not None:
+                            audio = vocals
+                        else:  # transcripts of the mix are cached as the mix's
+                            job.model = _state.model_name
+                            cached = store.get_transcripts(job.video_key, job.lang_key, job.model)
                 finally:
                     _audio.remove_temp(path)
                 with _state.stats_lock:
@@ -452,6 +472,27 @@ class JobManager:
                 job.event(job.error, "error")
         self._notify()
 
+    def _isolate(self, job, path):
+        """The song's vocals (16 kHz mono), or None to transcribe the mix."""
+        with job.lock:
+            job.status = "separating"
+            job.event("Separating the vocals from the music...")
+        self._notify()
+        t0 = time.time()
+        try:
+            stereo = _separate.read_stereo(path)
+            if stereo is None:
+                raise RuntimeError("the download is not 44.1 kHz stereo")
+            vocals = _separate.isolate(stereo)
+        except Exception as e:  # a separation problem must never cost the subtitles
+            with job.lock:
+                job.isolate = False
+                job.event(f"Vocal isolation failed ({type(e).__name__}: {e}) — transcribing the mix", "warn")
+            return None
+        with job.lock:
+            job.event(f"Vocals separated in {time.time() - t0:.0f}s", "ok")
+        return vocals
+
     def _preview(self, job):
         """Transcribe the first 30 s straight from the stream while the full
         download runs: first subtitles in ~max(download, whisper) instead of
@@ -467,7 +508,7 @@ class JobManager:
                     if job.status == "error":  # the download failed meanwhile (a live stream)
                         return
                     job.preview_segments = raw
-                    if job.regions and job.status != "downloading":
+                    if job.regions and job.status not in ("downloading", "separating"):
                         self._adopt_preview(job)
                     elif not job.regions:
                         # preview_segments kept: cached and adopted under the plan,

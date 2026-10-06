@@ -246,7 +246,7 @@ def _check_resources(cfg: dict) -> bool:
     if using_nvidia:
         from yume.hardware import WHISPER_MODEL_VRAM_MB
 
-        model_name = cfg.get("whisper_model", "large-v3")
+        model_name = cfg.get("whisper_model", "large-v3-turbo")
         required_vram = WHISPER_MODEL_VRAM_MB.get(model_name, 4_500)  # custom paths: assume large
         if cfg.get("whisper_compute_type", "auto") in ("int8", "int8_float16"):
             required_vram = int(required_vram * 0.65)
