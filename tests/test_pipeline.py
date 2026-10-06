@@ -851,3 +851,25 @@ def test_cookie_hint_only_where_cookies_could_help(monkeypatch):
     monkeypatch.setattr(_state, "youtube_auth_method", "cookies")
     _path, err = _audio.download_full_audio("https://www.youtube.com/watch?v=gone")
     assert "unavailable" in err and "cookies" not in err.lower()
+
+
+def test_audio_that_is_not_16k_mono_is_converted_by_ffmpeg(tmp_path):
+    # The stereo downloads for vocal isolation. faster-whisper's decode_audio
+    # fails with PyAV 19 (TypeError), so Yume converts with ffmpeg itself.
+    import shutil
+    import wave
+
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg not installed")
+    path = tmp_path / "stereo.wav"
+    tone = (0.25 * np.sin(2 * np.pi * 440 * np.arange(44100) / 44100) * 32767).astype(np.int16)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(44100)
+        w.writeframes(np.repeat(tone, 2).tobytes())
+    audio = _audio.load_audio(str(path))
+    assert audio.dtype == np.float32 and abs(len(audio) - 16000) <= 32
+    assert 0.2 < np.abs(audio).max() < 0.3
+    with pytest.raises(RuntimeError, match="ffmpeg could not read"):
+        _audio.load_audio(str(tmp_path / "missing.wav"))
