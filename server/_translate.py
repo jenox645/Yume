@@ -31,6 +31,12 @@ LANG_NAMES = {
     "ar": "Arabic",
 }
 CJK_LANGS = {"Chinese", "Japanese", "Korean"}
+# One example line per LLM-romanized language, to anchor the style
+_ROMA_EXAMPLES = {
+    "ar": "كيفك انت بتذكر آخر مرة → kifak enta btetzakar akher marra",
+    "ja": "君の名前を呼んだ → kimi no namae wo yonda",
+    "zh": "我想你 → wǒ xiǎng nǐ",
+}
 
 # Kana, CJK ideographs (+ext A, compatibility), half-width katakana
 _CJK_RE = re.compile("[぀-ヿ㐀-鿿豈-﫿ｦ-ﾟ]")
@@ -334,10 +340,16 @@ class Translator:
         if custom:
             system = custom.replace("{src}", name).replace("{sys}", "romanization")
         else:
+            # A style to hold to: without one, a small model switched between
+            # batches ("kayfak ant" / "Kifka qala 'am b-qoole")
             system = (
                 f"You transliterate {name} text into Latin letters. Do NOT translate. "
-                f"Write how each line is pronounced, nothing else."
+                f"Write how each line is pronounced, nothing else. Use a simple, readable "
+                f"romanization like song-lyric sites: lowercase, one Latin word per original word, "
+                f"no hyphens inside words."
             )
+            if lang in _ROMA_EXAMPLES:
+                system += f" Example: {_ROMA_EXAMPLES[lang]}"
         system += f'\nReturn JSON {{"romanizations": [...]}} with exactly {n} strings, one per numbered input line.'
         user = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
         out = self._structured(system, user, "romanizations", n, min(3000, 120 + sum(len(t) for t in texts) * 4))

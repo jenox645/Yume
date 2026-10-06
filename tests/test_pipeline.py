@@ -230,6 +230,28 @@ def test_korean_and_russian_romanization():
     assert _romanize.romanize("ja", "   ") == ""
 
 
+@pytest.mark.parametrize(
+    "hangul, rr",
+    [
+        ("좋은 꿈", "joeun kkum"),  # silent ㅎ (was "joteun")
+        ("감사합니다", "gamsahamnida"),  # nasalization (was "gamsahapnida")
+        ("모든 말을", "modeun mareul"),  # liaison, ㄹ → r
+        ("마음속에", "maeumsoge"),
+        ("그대가 멀리", "geudaega meolli"),  # ㄹㄹ → ll
+        ("어떻게", "eotteoke"),  # ㅎ + ㄱ → k
+        ("같이", "gachi"),  # palatalization
+        ("설날", "seollal"),
+        ("종로", "jongno"),
+        ("있는", "inneun"),
+        ("없지만", "eopjiman"),
+        ("행운이", "haenguni"),  # ㅇ final does not move
+        ("닭", "dak"),
+    ],
+)
+def test_korean_romanization_follows_pronunciation(hangul, rr):
+    assert _romanize.romanize("ko", hangul) == rr
+
+
 # ── jobs ──────────────────────────────────────────────────────────────────────
 
 
