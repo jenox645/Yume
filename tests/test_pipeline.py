@@ -44,7 +44,8 @@ def _tone_with_gaps(seconds, gap_every=10.0):
 
 def test_regions_cover_track_without_overlap():
     regions = _regions.plan_regions(_tone_with_gaps(200))
-    assert regions[0] == (0.0, _regions.FIRST_REGION_S)
+    assert regions[0][0] == 0.0
+    assert _regions.FIRST_MIN_S <= regions[0][1] <= _regions.FIRST_REGION_S  # the stream preview covers it
     assert regions[-1][1] == pytest.approx(200, abs=0.01)
     for (s1, e1), (s2, _e2) in zip(regions, regions[1:]):
         assert e1 == s2  # contiguous, exclusive
@@ -54,7 +55,7 @@ def test_regions_cover_track_without_overlap():
 
 def test_regions_cut_in_silence():
     regions = _regions.plan_regions(_tone_with_gaps(200, gap_every=10.0))
-    for _s, cut in regions[1:-1]:
+    for _s, cut in regions[:-1]:  # region 0 too: a cut at a fixed 30 s split the first sung line
         # every gap starts at a multiple of 10 and lasts 1 s
         assert (cut % 10.0) <= 1.0 + _regions.HOP_S, f"cut at {cut}s is not in a silent gap"
 
@@ -312,10 +313,10 @@ def pipeline(tmp_path):
     _state.model, _state.store, _state.jobs, _state.user_blacklist = saved
 
 
-def _run(jobs, job, timeout=20):
+def _run(jobs, job, timeout=20, playhead=0):
     deadline = time.time() + timeout
     while time.time() < deadline:
-        jobs.poll(job, 0)
+        jobs.poll(job, playhead)
         if job.status in ("done", "error"):
             return job.snapshot(0)
         time.sleep(0.05)
@@ -366,6 +367,86 @@ def test_blacklist_edit_hides_lines_incrementally(pipeline):
     changed = job.snapshot(rev)["segments"]
     assert changed and all(s["hidden"] for s in changed)
     assert job.snapshot(0)["progress"]["lines"] == 0
+
+
+def _raw(s, e, t):
+    return {"start": s, "end": e, "text": t, "confidence": -0.3}
+
+
+def test_stream_preview_covers_a_region_0_cut_before_30s(pipeline):
+    # The preview hears [0, 30); the plan cuts region 0 at a quiet point, here
+    # 21.5 s. Lines it heard after the cut are region 1's, which transcribes them
+    # whole: a fixed cut at 30 s split the first sung line.
+    job = _jobs.Job(("pv", "ja", "English"), PARAMS)
+    raw = [_raw(1.0, 6.0, "最初の行"), _raw(24.0, 30.0, "半分の行")]
+    with job.lock:
+        job.show_preview(raw)  # shown before the plan exists
+        job.preview_segments = raw
+        assert [s["text"] for s in job.snapshot(0)["segments"]] == ["最初の行", "半分の行"]
+        job.set_regions([(0.0, 21.5), (21.5, 47.0)], {})
+        pipeline.jobs._adopt_preview(job)
+        shown = [s for s in job.segments.values() if not s["hidden"]]
+        assert [s["text"] for s in shown] == ["最初の行"]
+        assert job.region_state == ["done", "pending"]
+    # and it is cached under the plan's region only
+    assert set(_state.store.get_transcripts("pv", "ja", job.model)) == {(0.0, 21.5)}
+
+
+def test_no_stream_preview_of_the_start_for_a_resumed_video(pipeline):
+    with patch.object(_audio, "download_audio_segment", return_value=None) as seg:
+        job = pipeline.jobs.create({**PARAMS, "video_id": "resumed", "playhead": 60.0})
+        assert job.playhead == 60.0  # transcribed first, before the first poll
+        _run(pipeline.jobs, job, playhead=60.0)
+        seg.assert_not_called()
+        _run(pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "from-start"}))
+        seg.assert_called_once()
+
+
+def test_stream_preview_shown_before_a_plan_that_keeps_its_region(pipeline):
+    # Plans cached before the quiet cut (and stream mode) keep region 0 = [0, 30)
+    job = _jobs.Job(("pv30", "ja", "English"), PARAMS)
+    raw = [_raw(1.0, 6.0, "最初の行"), _raw(24.0, 29.0, "次の行")]
+    with job.lock:
+        job.show_preview(raw)
+        job.preview_segments = raw
+        job.set_regions([(0.0, 30.0), (30.0, 55.0)], {})
+        pipeline.jobs._adopt_preview(job)
+        assert [s["text"] for s in job.segments.values() if not s["hidden"]] == ["最初の行", "次の行"]
+        assert len(job.segments) == 2  # kept, not added again
+        assert job.region_state == ["done", "pending"]
+    assert set(_state.store.get_transcripts("pv30", "ja", job.model)) == {(0.0, 30.0)}
+
+
+def test_lines_end_with_their_region_and_window_fillers_are_hidden(pipeline):
+    job = _jobs.Job(("clip", "ko", "English"), {**PARAMS, "language": "ko"})
+    with job.lock:
+        job.regions = [(0.0, 24.5), (24.5, 52.0), (52.0, 60.3)]
+        job.region_state = ["pending"] * 3
+        job.add_region(0, [_raw(0.0, 30.0, "다음 노래")])  # alone over the intro
+        job.add_region(1, [_raw(25.0, 33.0, "사랑해요"), _raw(40.0, 54.0, "그대")])
+        job.add_region(2, [_raw(52.0, 82.0, "안녕")])  # stamped past the end of the video
+    segs = {s["text"]: s for s in job.segments.values()}
+    assert segs["다음 노래"]["hidden"] and segs["안녕"]["hidden"]
+    assert not segs["사랑해요"]["hidden"] and not segs["그대"]["hidden"]
+    assert segs["그대"]["end"] == 52.0 and segs["안녕"]["end"] == 60.3
+    # a blacklist edit re-filters every line: the fillers stay hidden
+    pipeline.jobs.jobs[job.id] = job
+    pipeline.jobs.refilter()
+    assert segs["다음 노래"]["hidden"] and segs["안녕"]["hidden"] and not segs["그대"]["hidden"]
+
+
+def test_library_export_follows_the_plan_and_the_filters(pipeline):
+    store = _state.store
+    store.put_video("lib", "https://x", "t", 40.0, [[0.0, 20.0], [20.0, 40.0]])
+    store.put_transcript("lib", "ja", "m", 0.0, 30.0, [_raw(1.0, 5.0, "古い計画")])  # an older plan's region 0
+    store.put_transcript("lib", "ja", "m", 0.0, 20.0, [_raw(1.0, 5.0, "一行目")])
+    store.put_transcript("lib", "ja", "m", 20.0, 40.0, [_raw(21.0, 25.0, "二行目"), _raw(36.0, 52.0, "三行目")])
+    store.put_video("lib2", "https://x", "t", 30.0, [[0.0, 30.0]])
+    store.put_transcript("lib2", "ja", "m", 0.0, 30.0, [_raw(0.0, 30.0, "字幕")])  # fills the window
+    srt, n = _jobs.library_export("lib", "ja", "m", None)
+    assert n == 3 and "古い計画" not in srt
+    assert "00:00:36,000 --> 00:00:40,000" in srt  # ends with the video, not at 52 s
+    assert _jobs.library_export("lib2", "ja", "m", None)[1] == 0
 
 
 def test_download_failure_reports_error(pipeline):
@@ -481,6 +562,27 @@ def test_all_caps_translations_are_sentence_cased():
     assert _translate._unshout("SOMARU MACHIBAN", "SOMARU MACHIBAN") == "SOMARU MACHIBAN"  # source was caps
     assert _translate._unshout("I want you", "x") == "I want you"
     assert _translate._unshout("OK", "はい") == "OK"  # too short to be shouting
+
+
+def test_live_stream_is_reported_not_recorded(monkeypatch):
+    # live test (ANN news): yt-dlp's ffmpeg fails on the live HLS with a bare exit
+    # code, and the get-url + ffmpeg fallback would record the stream for 15 min
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        err = (
+            "[hls @ 0] Opening 'https://rr7.googlevideo.com/videoplayback/id/x.1/itag/234/source/"
+            "yt_live_broadcast/live/1/seg.ts' for reading\nERROR: ffmpeg exited with code 3199971767"
+        )
+        return types.SimpleNamespace(returncode=1, stderr=err, stdout="")
+
+    monkeypatch.setattr(_audio.subprocess, "run", fake_run)
+    monkeypatch.setattr(_audio, "get_stream_url", lambda url: pytest.fail("fallback must not run"))
+    monkeypatch.setattr(_state, "youtube_auth_method", "none")
+    path, err = _audio.download_full_audio("https://www.youtube.com/watch?v=6PNb0Jv6qbU")
+    assert path is None and err == _audio.LIVE_ERROR
+    assert len(calls) == 1
 
 
 def test_unreadable_browser_cookies_are_skipped(monkeypatch):

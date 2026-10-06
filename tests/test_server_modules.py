@@ -407,6 +407,11 @@ class TestIsHallucination(unittest.TestCase):
     def test_repeated_two_char_pattern_detected(self):
         self.assertTrue(_filter.is_hallucination("abababab"))
 
+    def test_a_word_said_twice_is_a_lyric(self):
+        for line in ["きらきら", "どんどん", "もっともっと", "そうそう", "더 그리워 더 그리워", "I love you I love you"]:
+            self.assertFalse(_filter.is_hallucination(line), line)
+        self.assertTrue(_filter.is_hallucination("la la la la la la"))
+
     def test_normal_short_word_not_flagged(self):
         self.assertFalse(_filter.is_hallucination("la"))
 
@@ -502,6 +507,54 @@ class TestIsCreditsLine(unittest.TestCase):
     def test_japanese_word_music_not_caught(self):
         # "音楽" (music) is a Japanese word that legitimately appears in lyrics
         self.assertFalse(_filter.is_credits_line("音楽が流れる夜"))
+
+    def test_cjk_roles_need_no_separator(self):
+        # live test, Jay Chou "晴天": "詞曲 李宗盛" was shown for 30 s
+        for line in ["詞曲 李宗盛", "作曲 周杰倫", "작사 김이나", "编曲：钟兴民"]:
+            self.assertTrue(_filter.is_credits_line(line), line)
+        for line in ["この曲を作曲した", "作曲家になりたい"]:
+            self.assertFalse(_filter.is_credits_line(line), line)
+
+    def test_live_test_hallucinations_are_caught(self):
+        # Seen in live tests (Korean, Chinese, Russian, Arabic music videos)
+        for line in [
+            "한글자막 by 한효정",
+            "다음 영상에서 만나요.",
+            "字幕志愿者 李宗盛",
+            "中文字幕志愿者 李宗盛",
+            "优优独播剧场——YoYo Television Series Exclusive",
+            "Субтитры сделал DimaTorzok",
+            "Субтитры подогнал «Симон»",
+            "Продолжение следует...",
+            "ترجمة نانسي قنقر",
+        ]:
+            self.assertTrue(_filter.is_hallucination(line), line)
+        for line in ["Группа крови на рукаве", "그대가 멀리 사라져버릴 것 같아", "还要多久 我才能在你身边"]:
+            self.assertFalse(_filter.is_hallucination(line), line)
+
+    def test_line_filling_a_silent_window_is_a_hallucination(self):
+        lone = _filter.window_hallucinations
+        # alone across a whole region (an intro, an instrumental)
+        self.assertEqual(lone([{"start": 0.0, "end": 30.0, "text": "x"}], (0.0, 24.5)), {0})
+        self.assertEqual(lone([{"start": 30.0, "end": 60.0, "text": "x"}], (30.0, 58.25)), {0})
+        # stamped 30 s long over an 8 s last region
+        self.assertEqual(lone([{"start": 274.5, "end": 304.5, "text": "x"}], (274.5, 282.83)), {0})
+        # real lines: alone but not filling the window, or not alone
+        self.assertEqual(lone([{"start": 274.5, "end": 280.0, "text": "x"}], (274.5, 282.83)), set())
+        self.assertEqual(lone([{"start": 30.0, "end": 41.0, "text": "x"}], (30.0, 56.0)), set())
+        # a chorus line Whisper stamped across its whole 20 s region (live test)
+        self.assertEqual(lone([{"start": 224.4, "end": 244.7, "text": "x"}], (224.45, 244.7)), set())
+        two = [{"start": 0.0, "end": 12.0, "text": "a"}, {"start": 12.0, "end": 26.0, "text": "b"}]
+        self.assertEqual(lone(two, (0.0, 26.0)), set())
+
+    def test_thank_you_at_the_end_of_a_region_is_a_hallucination(self):
+        lone = _filter.window_hallucinations
+        segs = [{"start": 96.0, "end": 120.0, "text": "a"}, {"start": 123.2, "end": 125.2, "text": "감사합니다."}]
+        self.assertEqual(lone(segs, (96.2, 123.35)), {1})
+        self.assertEqual(lone([{"start": 200.0, "end": 210.0, "text": "شكراً"}], (178.0, 212.0)), {0})
+        # in the middle of a region it can be a real line
+        mid = [{"start": 100.0, "end": 102.0, "text": "감사합니다"}, {"start": 102.0, "end": 110.0, "text": "b"}]
+        self.assertEqual(lone(mid, (96.0, 123.0)), set())
 
     def test_credits_patterns_are_all_strings(self):
         for p in _filter.CREDITS_PATTERNS:
