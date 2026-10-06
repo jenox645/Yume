@@ -47,7 +47,7 @@ import _translate
 from _security import validate_url
 
 # Must match pocket_yume.VERSION and extension/manifest.json (tests check it)
-SERVER_VERSION = "0.1.0"
+SERVER_VERSION = "0.2.0"
 
 # ── Flask app ─────────────────────────────────────────────────────────────────
 app = Flask(__name__)

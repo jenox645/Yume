@@ -68,13 +68,13 @@ pre-commit run --all-files
 
 See `docs/ARCHITECTURE.md`. In short:
 1. `content.js` finds the main video and starts a `SubtitleSession` (`session.js`).
-2. The session `POST /jobs` (url, video id, language, target, romanize, duration) via `background.js` (authenticated proxy with a path allowlist), then polls `GET /jobs/<id>?since=<rev>&t=<playhead>`.
-3. `_jobs.JobManager`: cache check → full download (+ a stream preview of the first 30 s) → `_regions.plan_regions` (exclusive ~25 s regions cut at quiet points; no overlap) → one transcription worker (playhead region first) → hallucination filter/blacklist (`hidden` flag; raw text kept) → deterministic romanization → one LLM worker (batches of ≤10 lines).
+2. The session `POST /jobs` (url, video id, language, target, romanize, duration, playhead `t`) via `background.js` (authenticated proxy with a path allowlist), then polls `GET /jobs/<id>?since=<rev>&t=<playhead>`.
+3. `_jobs.JobManager`: cache check → full download (+ a stream preview of the first 30 s) → optional vocal isolation (`_separate`, Demucs on CUDA, songs ≤ 15 min) → `_regions.plan_regions` (exclusive ~25 s regions cut at quiet points; no overlap) → one transcription worker (playhead region first) → hallucination filter/blacklist (`hidden` flag; raw text kept) → deterministic romanization → one LLM worker (batches of ≤10 lines).
 4. Every segment change bumps the job `rev`; polls return only changed segments. 404 on poll → the session recreates its job (reloads from cache).
 
 **Translation:** `_translate.Translator` uses structured output (JSON schema with exactly N strings), falling back to `json_object`, then numbered lines; the working mode is remembered per endpoint. The model name is sent for every backend except llama.cpp. One single-line retry for missing lines / CJK leaks.
 
-**Cache:** `config/yume_cache.db` (SQLite, `_store.py`): videos + region plans, raw transcripts per (video, language, Whisper model, region), translations per (source, target, LLM model, text), LLM romanizations.
+**Cache:** `config/yume_cache.db` (SQLite, `_store.py`): videos + region plans, raw transcripts per (video, language, Whisper model — `+htdemucs` when separated, region), translations per (source, target, LLM model, text), LLM romanizations.
 
 **Romanization:** pykakasi (JA) and pypinyin (ZH) on the server, built-in KO/RU tables; `None` from `_romanize.romanize()` means "LLM needed" (Arabic, or JA/ZH without the libraries). The pykakasi dictionary is pre-loaded in a background thread at startup.
 
@@ -124,6 +124,7 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 | `yume/launch.py` | Server lifecycle: start llama.cpp / Ollama / Whisper, runtime menu, `LLAMA_SERVER_DEPS`; shared builders `whisper_command` / `llamacpp_command` / `build_server_env` (also used by `serve`) |
 | `yume/llama_server.py` | Installs/locates llama.cpp's prebuilt `llama-server` (tools/llama.cpp/); `launch.llamacpp_command` prefers it over llama-cpp-python |
 | `yume/service.py` | Headless `serve` supervisor: hidden children, `config/service.json` state, idle auto-stop (`auto_stop_minutes`), detached spawn that survives the browser's job object |
+| `yume/vocals.py` | Vocal isolation from the CLI: status, install (PyTorch CUDA build matched to the driver + demucs), on/off |
 | `yume/native_host.py` | Native messaging host `com.pocketyume.yume` (status/start/stop) + registration; allowed extension ID must match the manifest `key` |
 | `yume/setup.py` | Setup wizard, extension guide, uninstall |
 | `yume/menus/` | Interactive menus, split by area: `server.py` (CLI commands, blacklist, Whisper model), `hf_browser.py`, `tools.py`, `settings.py`; backend info injected into `_shared.py` |
@@ -139,6 +140,7 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 | `server/faster_whisper_server.py` | Flask routes (`/jobs`, `/library`, `/blacklist`, `/translation/*`, `/model/switch`, `/stats`), auth, startup |
 | `server/_jobs.py` | Job manager, transcription + LLM workers, export |
 | `server/_regions.py` | Quiet-point region planning |
+| `server/_separate.py` | Optional vocal isolation (Demucs htdemucs, CUDA only); falls back to the mix |
 | `server/_translate.py` | LLM client with structured output |
 | `server/_store.py` | SQLite cache |
 | `server/_audio.py` | yt-dlp/ffmpeg download strategies, WAV loading |

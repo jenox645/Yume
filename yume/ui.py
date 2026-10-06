@@ -255,7 +255,7 @@ def header(sub: str | None = None, version: str = "") -> None:
             print(center(line))
     except UnicodeEncodeError:
         print(center(f"{C.GOLD}{C.BOLD}Y  U  M  E{C.RESET}"))
-    print(center(f"{C.PURPLE}You Understand More Easily{C.RESET}"))
+    print(center(f"{C.PURPLE}YUME-chan · You'll Understand More Easily{C.RESET}"))
     tag = "Pocket Yume CLI" + (f" · v{version}" if version else "")
     print(center(f"{C.DIM}{tag}{C.RESET}"))
     if sub:
