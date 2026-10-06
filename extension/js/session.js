@@ -177,7 +177,11 @@ class SubtitleSession {
   }
 
   async _createJob() {
-    const r = await SubtitleSession.api({ method: 'POST', path: '/jobs', body: this.params, timeout: 20000 });
+    // t: where playback starts (YouTube resumes where you left off) — what to transcribe first
+    const t = this.video && Number.isFinite(this.video.currentTime) ? this.video.currentTime : 0;
+    const r = await SubtitleSession.api({
+      method: 'POST', path: '/jobs', body: { ...this.params, t: Number(t.toFixed(1)) }, timeout: 20000,
+    });
     if (!r.ok) throw new Error(r.data?.error || `Server error ${r.status}`);
     this.jobId = r.data.id;
     this.rev = 0;
@@ -250,7 +254,7 @@ class SubtitleSession {
       const msg = allFailed
         ? 'Transcription failed — see Diagnostics in the popup; press Enable again to retry'
         : {
-          starting: 'Starting...', downloading: 'Downloading audio...',
+          starting: 'Starting...', downloading: 'Downloading audio...', separating: 'Separating the vocals...',
           transcribing: 'Transcribing...', translating: 'Translating...',
           done: 'No vocals detected in this video',
         }[snap.status];
@@ -337,8 +341,11 @@ class SubtitleSession {
     const loc = window.location;
     const host = loc.hostname.replace(/^(www|m|music)\./, '');
     const params = new URLSearchParams(loc.search);
-    if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+    if (host === 'youtube.com' || host === 'youtube-nocookie.com' || host === 'youtu.be') {
       if (params.get('v')) return params.get('v');
+      // /shorts/ID, /live/ID, /embed/ID, youtu.be/ID: the same video as watch?v=ID (same cache)
+      const m = loc.pathname.match(host === 'youtu.be' ? /^\/([\w-]{11})/ : /^\/(?:shorts|live|embed)\/([\w-]{11})/);
+      if (m) return m[1];
     }
     for (const k of [...params.keys()]) {
       if (/^(utm_.*|t|time|start|ref|si|feature|fbclid|gclid|list|index|pp)$/.test(k)) params.delete(k);

@@ -4,11 +4,13 @@
 
 # Yume
 
+### YUME-chan — *You'll Understand More Easily*
+
 **Real-time AI subtitles for any video — fully local, no cloud APIs.**
 
 Transcription · Translation · Romanization
 
-![Version](https://img.shields.io/badge/version-0.1.0-blue)
+![Version](https://img.shields.io/badge/version-0.2.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10+-green)
 ![Chrome](https://img.shields.io/badge/chrome-MV3-yellow)
 ![Firefox](https://img.shields.io/badge/firefox-MV3-orange)
@@ -29,6 +31,14 @@ Yume fetches the audio of the video you are watching (via [yt-dlp](https://githu
 **Source languages:** Japanese · Chinese · Korean · Russian · Arabic
 
 > **Note:** This is an early-stage personal project. Expect rough edges. Contributions and bug reports are welcome.
+
+### What's new in 0.2
+
+- **Vocal isolation** — on an NVIDIA GPU, Yume separates the singer from the music before Whisper listens (Demucs). Fewer misheard lyrics; install it from **Tools → Vocal Isolation** or the setup wizard.
+- **One-click start** — press Enable in the extension and Yume starts by itself in the background, and stops when you stop watching.
+- **GPU translation without compiling anything** — llama.cpp's prebuilt `llama-server`, matched to your driver: a whole song is translated in seconds.
+- **The server does the work** — download once, ~25 s sections cut at quiet points, the part you are watching first, everything cached in SQLite: reopening a video is instant, in any browser.
+- **Made for songs in five languages** — hallucinations Whisper invents over music ("subtitles by …", "see you in the next video") are hidden in Japanese, Chinese, Korean, Russian and Arabic; Korean romanization follows pronunciation; `large-v3-turbo` is the default (as accurate as `large-v3` on songs, twice as fast).
 
 ---
 
@@ -79,7 +89,8 @@ Firefox (121+): open `about:debugging` → **This Firefox** → **Load Temporary
 graph LR
     EXT["Browser extension<br/>(renders subtitles)"] -- "create job, poll every 1 s<br/>with the playhead" --> SRV
     subgraph SRV ["Yume server (port 5001)"]
-        DL["Download audio once<br/>yt-dlp / ffmpeg"] --> RG["Split at quiet points<br/>~25 s regions"]
+        DL["Download audio once<br/>yt-dlp / ffmpeg"] --> SEP["Separate the vocals<br/>(optional, Demucs on GPU)"]
+        SEP --> RG["Split at quiet points<br/>~25 s regions"]
         RG --> WH["Whisper<br/>region under the playhead first"]
         WH --> FL["Hallucination filter<br/>+ your blacklist"]
         FL --> TR["Translate in batches<br/>(local LLM, JSON output)"]
@@ -97,15 +108,32 @@ The extension only renders: it asks the server for a job for the current video a
 
 Real-world numbers on an **RTX 3060 12 GB VRAM** (a mid-range card):
 
+Measured with `large-v3-turbo` and Qwen2.5-7B Q3_K_M on the GPU build of `llama-server`:
+
 | Step | Time | Details |
 |------|------|---------|
-| Whisper model load | ~15 s | `large-v3` (~3 GB download, ~4.5 GB VRAM in float16) — one-time on launch |
-| Translation model load | ~12 s | ~10 GB GGUF file — one-time on launch |
-| Section (dialogue-heavy) | ~25 s | ~25 s of audio with dense speech: transcribe + translate + romanize |
+| Start Yume | ~8 s | Enable in the extension → both servers ready (models already downloaded) |
+| First subtitle of a new 4–5 min song | 4–9 s | audio download + first section, translated (Korean, Chinese, Russian, Arabic music videos) |
+| Whole 4–5 min song | 25–60 s | every line transcribed, translated and romanized |
+| 75-minute video opened at 40:00 | ~20 s | to the first translated line at 40:00 (the 75 min of audio download in ~17 s) |
+| Whisper, one ~25 s section | ~0.6 s | `large-v3` takes twice as long |
+| Translation, 10 lines | 4–6 s | keeps up with dense speech: the line on screen was translated 97% of the time |
+| Vocal isolation, 4-min song | ~8 s | Demucs on the GPU, 0.6 GB VRAM; then every section is transcribed from the vocals |
+| A video watched before | instant | everything is cached |
 
-After both models are loaded, a section with moderate dialogue processes in under 25 seconds. Sections with silence or sparse speech are faster. Section N+1 is already being transcribed while section N is being translated, so perceived delay is lower than the raw per-section time.
+Accuracy on two Japanese songs, measured against their lyrics (characters wrong, scored on the reading so 幻 and マボロシ count as the same):
 
-Smaller models are significantly faster — a 3B translation model and `small` Whisper cut per-section time roughly in half, at the cost of some accuracy. Use `python pocket_yume.py benchmark` to measure your own hardware, and `python pocket_yume.py recommend` to get a model suggestion based on your GPU.
+| | "One more kiss" | "Purple Dream" | Time per song |
+|---|---|---|---|
+| `large-v3-turbo` | 14.0% | 8.1% | ~5 s |
+| `large-v3-turbo` + vocal isolation | **11.7%** | **7.9%** | ~13 s |
+| `large-v3` | 25.7% | 9.4% | ~9 s |
+
+`large-v3-turbo` is the recommended Whisper model on any GPU.
+
+We also tried [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) (January 2026), which beats Whisper on published singing benchmarks: on these songs it was less accurate (17.0% / 15.0%) and 4–10× slower, so Yume stays on Whisper.
+
+Smaller models are faster at the cost of accuracy — a 3B translation model, or `small` Whisper on a CPU. Use `python pocket_yume.py benchmark` to measure your own hardware, and `python pocket_yume.py recommend` to get a model suggestion based on your GPU.
 
 ---
 
@@ -141,13 +169,13 @@ For every backend except llama.cpp, set the model name in **Settings → Transla
 | | Minimum | Recommended |
 |---|---------|-------------|
 | **RAM** | 8 GB | 16+ GB |
-| **GPU** | None (CPU works) | NVIDIA 4+ GB VRAM |
-| **Disk** | 5 GB | 10+ GB |
+| **GPU** | None (CPU works) | NVIDIA 8+ GB VRAM (Whisper + a 7B translation model) |
+| **Disk** | 5 GB | 15+ GB (with vocal isolation: +3.5 GB) |
 | **Python** | 3.10 | 3.11+ |
 
 | GPU | Support | Notes |
 |-----|---------|-------|
-| NVIDIA (CUDA) | Full | Best performance. Auto-detected via CTranslate2. |
+| NVIDIA (CUDA) | Full | Best performance. Auto-detected via CTranslate2. Vocal isolation needs a driver with CUDA 12.6+. |
 | AMD (ROCm) | Linux only | RDNA2+ recommended. |
 | CPU | Always | Slower. Use `small` or `base` Whisper model. |
 
@@ -205,7 +233,8 @@ YouTube blocks automated downloads to prevent bots. Yume supports two methods:
 ### Known Limitations
 
 - **Startup wait time** — Yume downloads audio before transcribing, so there's a delay before the first subtitle appears. Duration depends on connection speed and video length.
-- **Whisper misses soft vocals** — Whisper's voice activity detection isn't tuned for singing. Quiet vocals over instrumentation (especially in the first 10–15 seconds) may be missed.
+- **Whisper still mishears lyrics** — about one character in ten on the songs we measured. Vocal isolation helps; a line Whisper invents over an instrumental can still slip through (blacklist it from the popup).
+- **No live streams** — Yume transcribes a video's whole audio, so it works on the recording once a stream has ended.
 - **Large models are slow** — A 12B model takes 10–20 seconds per section on consumer GPUs. Use a smaller model if latency matters.
 - **Only sites yt-dlp can download** — DRM-protected streams (Netflix, most paid services) cannot be subtitled. For sites with plain HLS/MP4 streams, the popup's *Custom Stream URL* field accepts the media URL directly.
 - **Non-YouTube site support is best-effort** — yt-dlp handles extraction, but bot protection, authentication, and DRM vary by site. Only the sites listed above are regularly tested.
@@ -229,8 +258,13 @@ See [docs/SECURITY.md](docs/SECURITY.md) for the threat model.
 <details>
 <summary><strong>Changelog</strong></summary>
 
-### Unreleased
+### v0.2.0
 
+- **Vocal isolation:** with PyTorch (CUDA) + demucs installed (Tools → Vocal Isolation, or the setup wizard on NVIDIA machines), each song's vocals are separated from the music before transcription (~8 s per 4-minute song). Measured against lyrics: 14.0% → 11.7% and 8.1% → 7.9% of characters wrong. Videos over 15 minutes and machines without CUDA transcribe the mix as before.
+- **Multilingual live tests (Korean, Chinese, Russian, Arabic music videos, a 75-minute talk, a live stream, Bilibili):** lines Whisper invents for a stretch it hears no words in (one line stamped across its whole 30 s window — "字幕志愿者 李宗盛", "Субтитры сделал DimaTorzok", "한글자막 by …") are hidden in any language; a phrase said twice (きらきら, もっともっと) is no longer hidden as spam; the first section ends at a quiet point instead of splitting the first sung line at 30 s; lines no longer run past the end of the video; Korean romanization follows pronunciation (좋은 joeun, 감사합니다 gamsahamnida); live streams get a clear message instead of an ffmpeg error; a video resumed at 40:00 starts there without transcribing its first 30 s; Shorts, embeds and youtu.be links share the cache with watch?v= links.
+- **`large-v3-turbo` is the default and recommended Whisper model** (measured: as accurate as `large-v3` on songs, twice as fast). Qwen3-ASR was evaluated and not adopted (less accurate on our songs, 4–10× slower).
+- **CLI:** no crash when the output is redirected (`health > log.txt`); aligned tables. **Firefox:** declares that it collects no data (`web-ext lint` clean).
+- **Fresh installs:** audio decoding failed with PyAV 19 (which a new install gets); Yume now converts audio with ffmpeg and pins PyAV 18. Dependencies updated (numpy 2.5.3, ESLint 10, GitHub Actions); Dependabot now sends one grouped PR per month.
 - **Translation on the GPU without compiling anything:** Yume now installs llama.cpp's official prebuilt `llama-server` (CUDA build matched to your driver, Vulkan for AMD/Intel, Metal on Apple Silicon) instead of llama-cpp-python, whose GPU wheels lag behind new Python versions and usually ended up CPU-only. On an RTX 3060 a batch of 10 lines went from ~26 s to ~5 s; a whole song is translated in seconds. Existing llama-cpp-python setups keep working.
 - **Live-test fixes (two real songs):** yt-dlp keeps itself up to date (a 7-month-old one got HTTP 403 on every video); unreadable browser cookies (Chrome/Brave/Edge on Windows) are tried once instead of six times, and the first-30-s stream preview retries without them; Whisper loops ("I don't want to lose you" ×5, a phrase repeated 150× in one line) are hidden/cut (decided on the raw line: a line that is only a loop, like a 30-second "Azumoto-Azumoto-…" over an instrumental intro, is hidden); the first lines and the lines near the playhead are translated in small batches so they are ready in seconds, and the translator prompt keeps a stable prefix for llama.cpp's cache; the progress badge says what it counts ("Listening 3/11", "Translating 11/32"); ALL-CAPS translations are sentence-cased; romaji doubles consonants after っ (hashitte, not "hashitsu te"); switching videos no longer flashes the previous video's subtitles; the timing offset now goes the direction the popup says (+ = later); blacklisting from the popup hides the line at once; missing server packages are reported by the health check and the launcher.
 - **Audit fixes:** credits filter no longer hides real lines containing words like "video", "mix", "piano" or "作曲"; the launcher only kills a Python process on its ports when it is really a Yume server; a missing cuBLAS/cuDNN is detected at startup (CPU fallback) instead of every section failing; switching the Whisper model from the popup is remembered; pressing Enable again retries sections that failed; long downloads no longer retry 5× after a timeout; Japanese/other non-ASCII yt-dlp output no longer breaks downloads on Windows; the PO-token helper no longer stalls after a while; a corrupt cache database is set aside instead of stopping the server; `python pocket_yume.py settings` (suggested in many hints) now exists.

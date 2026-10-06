@@ -143,6 +143,21 @@ def _offer_one_click() -> None:
             warn(f"Could not turn it on ({e}) — try again later in Settings → One-click start.")
 
 
+def _offer_vocal_isolation() -> None:
+    """Offer vocal isolation on NVIDIA machines (optional, ~3.5 GB)."""
+    from yume import vocals
+    from yume.hardware import detect_gpu
+
+    if not detect_gpu().get("has_nvidia") or vocals.status()[0]:
+        return
+    print()
+    section("Vocal isolation (optional)")
+    info("Separates the singer from the music before Whisper listens: fewer")
+    info(f"transcription errors on songs. ~{vocals.DOWNLOAD_GB:.0f} GB download (PyTorch with CUDA).")
+    if ask_yn("Install vocal isolation?", True):
+        vocals.install()
+
+
 def setup_wizard(cfg: dict) -> dict:
     from config import DEFAULT_OLLAMA_PORT, save_config
 
@@ -313,6 +328,7 @@ def setup_wizard(cfg: dict) -> dict:
         cfg["first_run_complete"] = True
         save_config(cfg)
         _offer_one_click()
+        _offer_vocal_isolation()
         _extension_guide()
         pause()
         return cfg
@@ -519,6 +535,7 @@ def setup_wizard(cfg: dict) -> dict:
         info("Missing components can be installed from the Tools menu.")
 
     _offer_one_click()
+    _offer_vocal_isolation()
     _extension_guide()
     pause()
     return cfg

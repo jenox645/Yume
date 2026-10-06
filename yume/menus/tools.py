@@ -64,6 +64,7 @@ def tools_menu(cfg: dict) -> None:
                 (f"Deno            {ok if dn else opt_miss}", "Helps bypass YouTube bot detection (optional)"),
                 ("Translation Backend", "Choose how Yume translates: llama.cpp / Ollama / LM Studio / Custom"),
                 (f"Translation Engine  {engine}", "Install / update llama.cpp's prebuilt GPU server (llama-server)"),
+                ("Vocal Isolation", "Separate the singer from the music before transcribing (better lyrics)"),
                 ("Download Translation Model", "Browse and download GGUF models (the files your translator uses)"),
                 ("Python Dependencies", "Install required Python packages + romanization libraries"),
                 ("Test Translation", "Send a test sentence to check if translation is working"),
@@ -72,9 +73,9 @@ def tools_menu(cfg: dict) -> None:
                 ("Browser Extension", "How to load Yume in Chrome, Edge, Brave or Firefox"),
                 ("Back", None),
             ],
-            default=11,
+            default=12,
         )
-        if ch == -1 or ch == 11:
+        if ch == -1 or ch == 12:
             return
         elif ch == 0:
             _menu_ytdlp(cfg)
@@ -87,16 +88,20 @@ def tools_menu(cfg: dict) -> None:
         elif ch == 4:
             _menu_llama_server()
         elif ch == 5:
-            browse_hf(cfg)
+            from yume import vocals
+
+            vocals.menu(cfg)
         elif ch == 6:
-            _menu_pydeps()
+            browse_hf(cfg)
         elif ch == 7:
-            _test_translation(cfg)
+            _menu_pydeps()
         elif ch == 8:
-            benchmark_whisper(cfg)
+            _test_translation(cfg)
         elif ch == 9:
-            detect_fonts()
+            benchmark_whisper(cfg)
         elif ch == 10:
+            detect_fonts()
+        elif ch == 11:
             from yume.setup import _extension_guide
 
             header("Browser Extension")

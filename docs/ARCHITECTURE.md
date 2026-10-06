@@ -45,15 +45,27 @@ from a content script and an MV3 service worker; see "Why server-side" below.)
      yt-dlp auth strategies, ffmpeg fallback; `download_direct` for a custom
      stream URL). Meanwhile a **stream preview** transcribes the first 30 s
      straight from the stream so subtitles start before the download ends.
-   - **Plan regions** (`_regions.plan_regions`): region 0 is `[0, 30)`, then a cut
-     every ~26 s at the quietest point in a ±5 s window. Regions are exclusive —
-     no overlap, nothing to de-duplicate.
+     The request carries the playhead (`t`): a video resumed later skips it.
+   - **Separate the vocals** (`_separate`, optional): with PyTorch (CUDA) +
+     demucs installed and `vocal_isolation` on, a video up to 15 min is
+     downloaded as 44.1 kHz stereo and htdemucs separates the whole song on the
+     GPU (~8 s for 4 min); everything below then uses the vocals, and the
+     transcripts are cached under `<model>+htdemucs`. Any failure falls back to
+     the mix. (Separating Yume's 16 kHz mono instead made transcription worse.)
+   - **Plan regions** (`_regions.plan_regions`): region 0 ends at the quietest
+     point in [20, 30] s (the stream preview covers it; its lines after the cut
+     are left to region 1), then a cut every ~26 s at the quietest point in a
+     ±5 s window. Regions are exclusive — no overlap, nothing to de-duplicate.
+     Lines are kept inside their region (Whisper stamps lines up to the end of
+     its 30 s window, past the audio it was given).
    - **Transcription worker** (one thread, the model is not thread-safe): takes
      the region under the playhead of the most recently polled job, then the
      next ~10, then earlier ones. Raw Whisper segments go to the cache.
    - **Filter**: built-in hallucination patterns, credits lines and the user
      blacklist mark segments `hidden` (raw text is kept, so blacklist edits apply
-     retroactively).
+     retroactively). Region-level too: a line alone in its region stamped across
+     Whisper's whole 30 s window is what Whisper writes when it hears no words
+     (in every language), and "thank you" in a region's last seconds.
    - **Romanize** deterministically (JA pykakasi, ZH pypinyin, KO Revised
      Romanization, RU BGN/PCGN); Arabic, and JA/ZH without the libraries, go to
      the LLM when the user enabled romanization.

@@ -286,7 +286,7 @@ async function toggleSubtitles() {
       response = await chrome.tabs.sendMessage(tab.id, { action: 'TOGGLE_SUBTITLES' });
     } catch (e) {
       if (/Receiving end does not exist|Could not establish connection/.test(e.message)) {
-        throw new Error('Yume is not loaded on this tab yet — reload the page (F5), then try again.');
+        throw new Error('Yume is not loaded on this tab yet — reload the page (F5), then try again.', { cause: e });
       }
       throw e;
     }
@@ -668,23 +668,24 @@ async function fetchStats() {
     return;
   }
   const s = r.data;
+  const n = (v) => _escapeHtml(v ?? '?');  // numbers too: nothing reaches innerHTML unescaped
   let html = '';
   if (s.gpu) {
-    const pct = Math.round((s.gpu.vram_used_mb / s.gpu.vram_total_mb) * 100);
+    const pct = Math.round((s.gpu.vram_used_mb / s.gpu.vram_total_mb) * 100) || 0;
     const color = pct > 90 ? 'var(--accent-red)' : pct > 70 ? 'var(--border-gold)' : 'var(--accent-green)';
     html += `<div style="margin-bottom:8px"><b>${_escapeHtml(s.gpu.gpu_name)}</b><br>`;
     html += '<div style="display:flex;align-items:center;gap:8px;margin:4px 0">';
     html += '<div style="flex:1;height:8px;background:rgba(255,255,255,0.1);border-radius:4px;overflow:hidden">';
     html += `<div style="width:${pct}%;height:100%;background:${color};border-radius:4px"></div></div>`;
-    html += `<span style="font-size:11px;color:${color}">${s.gpu.vram_used_mb}/${s.gpu.vram_total_mb} MB</span></div>`;
-    html += `GPU: ${s.gpu.gpu_util_pct ?? '?'}% &nbsp;|&nbsp; ${s.gpu.gpu_temp_c ?? '?'}°C</div>`;
+    html += `<span style="font-size:11px;color:${color}">${n(s.gpu.vram_used_mb)}/${n(s.gpu.vram_total_mb)} MB</span></div>`;
+    html += `GPU: ${n(s.gpu.gpu_util_pct)}% &nbsp;|&nbsp; ${n(s.gpu.gpu_temp_c)}°C</div>`;
   }
   html += `<b>Whisper:</b> ${_escapeHtml(s.model)} (${_escapeHtml(s.device)}/${_escapeHtml(s.compute_type)})<br>`;
-  html += `Sections transcribed: <b>${s.regions_transcribed}</b> &nbsp;|&nbsp; Lines: <b>${s.segments_produced}</b><br>`;
-  html += `Avg Whisper time: <b>${s.avg_whisper_time}s</b> &nbsp;|&nbsp; Last: ${s.last_region_whisper_time}s<br>`;
-  html += `Audio processed: <b>${Math.round(s.total_audio_seconds)}s</b> &nbsp;|&nbsp; Lines translated: ${s.lines_translated}<br>`;
-  html += `Hallucinations blocked: <b>${s.hallucinations_filtered}</b> &nbsp;|&nbsp; Blacklist: ${s.blacklist_size}<br>`;
-  html += `Uptime: ${_escapeHtml(s.uptime_human)} &nbsp;|&nbsp; Saved videos: ${s.library_size} &nbsp;|&nbsp; Active jobs: ${s.active}`;
+  html += `Sections transcribed: <b>${n(s.regions_transcribed)}</b> &nbsp;|&nbsp; Lines: <b>${n(s.segments_produced)}</b><br>`;
+  html += `Avg Whisper time: <b>${n(s.avg_whisper_time)}s</b> &nbsp;|&nbsp; Last: ${n(s.last_region_whisper_time)}s<br>`;
+  html += `Audio processed: <b>${n(Math.round(s.total_audio_seconds))}s</b> &nbsp;|&nbsp; Lines translated: ${n(s.lines_translated)}<br>`;
+  html += `Hallucinations blocked: <b>${n(s.hallucinations_filtered)}</b> &nbsp;|&nbsp; Blacklist: ${n(s.blacklist_size)}<br>`;
+  html += `Uptime: ${_escapeHtml(s.uptime_human)} &nbsp;|&nbsp; Saved videos: ${n(s.library_size)} &nbsp;|&nbsp; Active jobs: ${n(s.active)}`;
   el.innerHTML = html;
 
   const isCustomPath = /[/\\]/.test(s.model || '');

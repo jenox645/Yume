@@ -27,7 +27,7 @@ DEFAULT_OLLAMA_PORT = 11434
 
 # Defaults
 DEFAULT_CONFIG = {
-    "whisper_model": "large-v3",
+    "whisper_model": "large-v3-turbo",
     "whisper_model_name": "",
     "whisper_device": "auto",
     "whisper_compute_type": "auto",
@@ -45,6 +45,9 @@ DEFAULT_CONFIG = {
     # Headless mode (started by the extension): stop after this many minutes
     # without a video being subtitled. 0 = never.
     "auto_stop_minutes": 30,
+    # Separate the vocals from the music before transcribing songs (needs PyTorch
+    # with CUDA + demucs: Tools → Vocal isolation). Ignored when not installed.
+    "vocal_isolation": True,
     "first_run_complete": False,
 }
 

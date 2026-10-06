@@ -8,6 +8,7 @@ import re
 import shutil
 import sys
 import time
+import unicodedata
 
 PLAT = platform.system()
 IS_WIN = PLAT == "Windows"
@@ -97,28 +98,34 @@ def panel(text: str, title: str = "", style: str = "", width: int | None = None,
     print(f"  {color}{bot}{C.RESET}")
 
 
+def _width(text) -> int:
+    """Columns a cell takes on screen: no ANSI codes, CJK characters count two."""
+    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in ANSI_ESCAPE_RE.sub("", str(text)))
+
+
 def table(headers: list, rows: list, col_styles: list | None = None, title: str = "") -> None:
     """Render a formatted table."""
     col_styles = col_styles or [C.RESET] * len(headers)
-    widths = [len(h) for h in headers]
+    widths = [_width(h) for h in headers]
     for row in rows:
         for i, cell in enumerate(row):
             if i < len(widths):
-                clean = ANSI_ESCAPE_RE.sub("", str(cell))
-                widths[i] = max(widths[i], len(clean))
+                widths[i] = max(widths[i], _width(cell))
 
+    # Too wide (a long path in the last column): only the last column gives way.
+    # Cells are never cut, so shrinking every column pushed each row's later
+    # cells out of line ("Translation server responding   PASS").
     max_w = tw() - 6
     total = sum(widths) + (len(widths) - 1) * 3
     if total > max_w:
-        scale = max_w / total
-        widths = [max(4, int(w * scale)) for w in widths]
+        widths[-1] = max(4, widths[-1] - (total - max_w))
 
     def _row(cells, styles=None):
         parts = []
         for i, cell in enumerate(cells):
             s = styles[i] if styles and i < len(styles) else C.RESET
-            clean = ANSI_ESCAPE_RE.sub("", str(cell))
-            pad = widths[i] - len(clean) if i < len(widths) else 0
+            last = i == len(cells) - 1
+            pad = 0 if last or i >= len(widths) else widths[i] - _width(cell)
             parts.append(f"{s}{cell}{C.RESET}{' ' * max(0, pad)}")
         return "   ".join(parts)
 
@@ -248,7 +255,7 @@ def header(sub: str | None = None, version: str = "") -> None:
             print(center(line))
     except UnicodeEncodeError:
         print(center(f"{C.GOLD}{C.BOLD}Y  U  M  E{C.RESET}"))
-    print(center(f"{C.PURPLE}You Understand More Easily{C.RESET}"))
+    print(center(f"{C.PURPLE}YUME-chan · You'll Understand More Easily{C.RESET}"))
     tag = "Pocket Yume CLI" + (f" · v{version}" if version else "")
     print(center(f"{C.DIM}{tag}{C.RESET}"))
     if sub:

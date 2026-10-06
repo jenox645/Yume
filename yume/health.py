@@ -200,6 +200,9 @@ def health_check(cfg: dict) -> None:
         f_kakasi = ex.submit(_chk_roma, "pykakasi", "Japanese romaji (kanji→reading)")
         f_pinyin = ex.submit(_chk_roma, "pypinyin", "Chinese pinyin")
         f_config = ex.submit(_chk_config)
+        from yume import vocals
+
+        f_vocals = ex.submit(vocals.health_row, cfg)
 
         # Collect config first (needed for server checks)
         config_rows, c, wp, tp = f_config.result()
@@ -228,6 +231,7 @@ def health_check(cfg: dict) -> None:
         roma_results = [f_kakasi.result(), f_pinyin.result()]
         roma_installed = sum(1 for _, ok, detail in roma_results if ok and "not installed" not in detail)
         results.extend(roma_results)
+        results.append(f_vocals.result())
         if roma_installed == 0:
             info(f"\n  {C.DIM}Tip: Install romanization libraries for instant romaji/pinyin:{C.RESET}")
             info(f"  {C.CYAN}pip install pykakasi pypinyin{C.RESET}")

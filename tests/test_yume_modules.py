@@ -714,3 +714,68 @@ class TestYumeProcessDetection:
             assert is_port_free(srv.getsockname()[1]) is False
         finally:
             srv.close()
+
+
+class TestCliOutputEncoding:
+    def test_piped_output_survives_a_non_utf8_code_page(self):
+        # `pocket_yume.py health > log.txt` crashed: the redirected stream used
+        # cp932/cp1252, which cannot encode the CLI's ✓ and —
+        import os
+        import subprocess
+
+        root = Path(__file__).parent.parent
+        code = "import pocket_yume; pocket_yume._utf8_output(); print('\u2713 \u2014 \u2026')"
+        env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+        r = subprocess.run([sys.executable, "-c", code], cwd=root, env=env, capture_output=True, timeout=60)
+        assert r.returncode == 0, r.stderr.decode(errors="replace")
+        assert r.stdout.decode("utf-8").strip() == "✓ — …"
+
+
+class TestRecommendTurbo:
+    def test_big_gpus_get_turbo_too(self):
+        # measured: large-v3 is no more accurate than turbo on songs, and 2x slower
+        from yume.hardware import recommend_whisper_model
+
+        for vram in (6144, 12288, 24576):
+            gpu = {"has_nvidia": True, "has_amd": False, "vram_mb": vram, "name": "GPU", "vendor": "nvidia"}
+            assert recommend_whisper_model(gpu)[0] == "large-v3-turbo"
+
+
+class TestTable:
+    def test_columns_stay_aligned_when_the_last_one_is_too_long(self, capsys, monkeypatch):
+        from yume import ui
+
+        monkeypatch.setattr(ui, "tw", lambda: 80)
+        monkeypatch.setattr(ui.C, "RESET", "")
+        rows = [
+            ["GPU detection", "PASS", "NVIDIA"],
+            ["Translation server responding", "PASS", "OK"],
+            ["Translation end-to-end", "PASS", "今日はいい天気ですね → Today's weather is nice."],
+            ["Whisper server script", "PASS", "C:/Users/someone/Desktop/Work Space/PROJET/Yume/server/x.py"],
+        ]
+        ui.table(["Check", "Result", "Details"], rows)
+        lines = [ln for ln in capsys.readouterr().out.splitlines() if "PASS" in ln]
+        assert len({ui._width(ln[: ln.index("PASS")]) for ln in lines}) == 1
+        # CJK characters take two columns
+        assert ui._width("今日は") == 6 and ui._width("\033[1mab\033[0m") == 2
+
+
+class TestVocalIsolationCli:
+    def test_torch_build_follows_the_driver(self):
+        from yume.vocals import torch_index
+
+        assert torch_index((13, 3)).endswith("/cu128")
+        assert torch_index((12, 8)).endswith("/cu128")
+        assert torch_index((12, 6)).endswith("/cu126")
+        assert torch_index((12, 4)) is None  # too old for PyTorch 2.11: update the driver
+        assert torch_index(None) is None
+
+    def test_health_row_is_never_a_failure(self, monkeypatch):
+        from yume import vocals
+
+        monkeypatch.setattr(vocals, "status", lambda: (False, "not installed"))
+        name, ok, detail = vocals.health_row({"vocal_isolation": True})
+        assert ok and "optional" in detail
+        assert vocals.health_row({"vocal_isolation": False})[2].startswith("off")
+        monkeypatch.setattr(vocals, "status", lambda: (True, "htdemucs, PyTorch 2.11.0+cu128"))
+        assert vocals.health_row({})[2].startswith("on")

@@ -14,7 +14,7 @@ import time
 
 # ── Whisper model ────────────────────────────────────────────────────────────
 model = None
-model_name = "large-v3"
+model_name = "large-v3-turbo"
 model_display_name = ""  # Friendly name for custom models (from config)
 device = "cuda"
 compute_type = "float16"
@@ -50,6 +50,10 @@ transcribe_lock = threading.Lock()
 # Serialises /model/switch — two concurrent switches would each load a model,
 # briefly tripling VRAM and leaving whichever finishes last as the winner.
 model_switch_lock = threading.Lock()
+
+# Separate the vocals before transcribing songs (_separate.py; config
+# "vocal_isolation"). Only used when PyTorch with CUDA and demucs are installed.
+vocal_isolation = True
 
 # ── YouTube auth ──────────────────────────────────────────────────────────────
 youtube_auth_method = "cookies"  # "cookies" or "deno"

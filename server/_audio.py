@@ -26,6 +26,18 @@ from _security import validate_url
 # same time again.
 DOWNLOAD_TIMEOUT_S = 900
 
+LIVE_ERROR = (
+    "This is a live stream. Yume transcribes a video's whole audio, so it works on the "
+    "recording once the stream has ended."
+)
+
+
+def _is_live(stderr_lower):
+    """yt-dlp failed on a live stream: its HLS URLs say so (ffmpeg only reports
+    "exited with code 3199971767")."""
+    return "yt_live_broadcast" in stderr_lower or "/live/1/" in stderr_lower
+
+
 # Browser cookies that yt-dlp could not read. Chromium browsers on Windows lock
 # their cookie database while running and encrypt it with app-bound keys, so
 # every cookie attempt fails the same way; skip them for a while once seen.
@@ -424,7 +436,7 @@ def friendlify_ytdlp_error(raw_error):
     return raw_error
 
 
-def download_full_audio(url):
+def download_full_audio(url, stereo=False):
     """Download the complete audio track as 16 kHz mono WAV.
 
     Strategy 1: yt-dlp (multiple auth/format combos)
@@ -432,7 +444,11 @@ def download_full_audio(url):
     Strategy 3: ffmpeg direct (for m3u8 / direct media URLs)
 
     Returns (path, None) on success or (None, error_message) on failure.
+    16 kHz mono (what Whisper takes), or 44.1 kHz stereo for vocal isolation
+    (_separate: separating the 16 kHz mono made transcription worse).
     """
+    rate, channels = ("44100", "2") if stereo else ("16000", "1")
+    pp_opts = f"ffmpeg:-ar {rate} -ac {channels}"
     tmp_dir = tempfile.mkdtemp(prefix="yume_")
     output_template = os.path.join(tmp_dir, "full_audio.%(ext)s")
     output_path = os.path.join(tmp_dir, "full_audio.wav")
@@ -465,7 +481,7 @@ def download_full_audio(url):
                         "--audio-format",
                         "wav",
                         "--postprocessor-args",
-                        _state.FFMPEG_AUDIO_OPTS,
+                        pp_opts,
                         "--no-playlist",
                         "--no-cache-dir",
                         "--no-exec",
@@ -492,6 +508,11 @@ def download_full_audio(url):
                         f"[Yume] Browser cookies unreadable — skipping cookie strategies for {_COOKIES_RETRY_S // 60} min"
                     )
                     break
+
+                if _is_live(stderr_lower):
+                    # The fallbacks below would record the live stream until the timeout
+                    remove_temp(output_path)
+                    return None, LIVE_ERROR
 
                 if _state.ERR_REQUESTED_FORMAT in stderr_lower and fmt_pass == "bestaudio":
                     continue  # skip to nofmt pass of same auth strategy
@@ -537,9 +558,9 @@ def download_full_audio(url):
                         stream_url,
                         "-vn",
                         "-ar",
-                        "16000",
+                        rate,
                         "-ac",
-                        "1",
+                        channels,
                         "-f",
                         "wav",
                         ffmpeg_output,
@@ -575,9 +596,9 @@ def download_full_audio(url):
                     url,
                     "-vn",
                     "-ar",
-                    "16000",
+                    rate,
                     "-ac",
-                    "1",
+                    channels,
                     "-f",
                     "wav",
                     ffmpeg_output,
@@ -665,8 +686,10 @@ def remove_temp(path):
 def load_audio(path):
     """Load audio as float32 mono 16 kHz numpy array.
 
-    Downloads are already 16 kHz mono 16-bit WAV (yt-dlp/ffmpeg are told so), which
-    the stdlib reads directly; anything else goes through faster-whisper's decoder.
+    Downloads are usually 16 kHz mono 16-bit WAV (yt-dlp/ffmpeg are told so), which
+    the stdlib reads directly. Anything else — the 44.1 kHz stereo downloads for
+    vocal isolation — is converted by ffmpeg. Not by faster-whisper's decode_audio:
+    it passes PyAV an argument PyAV 19 removed (TypeError on every file).
     """
     import wave
 
@@ -679,9 +702,14 @@ def load_audio(path):
                 return pcm.astype(np.float32) / 32768.0
     except (wave.Error, EOFError, OSError):
         pass
-    from faster_whisper.audio import decode_audio
-
-    return decode_audio(path, sampling_rate=16000)
+    r = subprocess.run(
+        ["ffmpeg", "-v", "error", "-nostdin", "-i", path, "-vn", "-ac", "1", "-ar", "16000", "-f", "s16le", "-"],
+        capture_output=True,
+        timeout=DOWNLOAD_TIMEOUT_S,
+    )  # nosec B603 B607 — fixed argv, path from our own temp dir
+    if r.returncode != 0:
+        raise RuntimeError(f"ffmpeg could not read the audio: {r.stderr.decode(errors='replace').strip()[-200:]}")
+    return np.frombuffer(r.stdout, dtype=np.int16).astype(np.float32) / 32768.0
 
 
 def download_direct(stream_url):

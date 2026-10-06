@@ -303,7 +303,7 @@ def _menu_whisper_model(cfg: dict) -> None:
     header("Whisper Model")
     h, p = cfg["whisper_host"], cfg["whisper_port"]
     data = _server_get(h, p, "/stats")
-    cur = data.get("model", cfg.get("whisper_model", "?")) if data else cfg.get("whisper_model", "large-v3")
+    cur = data.get("model", cfg.get("whisper_model", "?")) if data else cfg.get("whisper_model", "large-v3-turbo")
     is_custom = os.path.sep in cur or "/" in cur
     friendly_name = cfg.get("whisper_model_name", "")
     if data:

@@ -31,8 +31,8 @@ WHISPER_MODELS = [
     ("small", "244M", 1500, "Good balance of speed and accuracy"),
     ("medium", "769M", 3000, "High accuracy, slower"),
     ("large-v2", "1550M", 4500, "Very high accuracy"),
-    ("large-v3", "1550M", 4500, "Best accuracy"),
-    ("large-v3-turbo", "809M", 3000, "Near-v3 accuracy at ~2x speed (best mid-range)"),
+    ("large-v3", "1550M", 4500, "Slower than turbo, no more accurate on songs"),
+    ("large-v3-turbo", "809M", 3000, "Best for any GPU: large-v3 accuracy at ~2x speed"),
 ]
 WHISPER_MODEL_VRAM_MB = {name: vram for name, _p, vram, _d in WHISPER_MODELS}
 
@@ -239,12 +239,13 @@ def recommend_whisper_model(gpu_info: dict | None = None) -> tuple[str, str]:
         else:
             return "tiny", "CPU with <8 GB RAM → tiny model (fastest)"
     else:
-        if vram >= 10000:
-            return "large-v3", f"GPU with {vram} MB VRAM → large-v3 (best accuracy)"
-        elif vram >= 5000:
-            # Not distil-large-v3: distil models are English-only and would
-            # output English for the JA/ZH/KO/RU/AR audio Yume is built for.
-            return "large-v3-turbo", f"GPU with {vram} MB VRAM → turbo (near-v3 accuracy, 2x faster)"
+        if vram >= 5000:
+            # Even with VRAM for large-v3: on two Japanese songs measured against
+            # their lyrics, turbo had 23% / 21% character errors and large-v3
+            # 22% / 32%, at twice the time per region. And not distil-large-v3:
+            # distil models are English-only and would output English for the
+            # JA/ZH/KO/RU/AR audio Yume is built for.
+            return "large-v3-turbo", f"GPU with {vram} MB VRAM → turbo (large-v3 accuracy, 2x faster)"
         elif vram >= 4000:
             return "small", f"GPU with {vram} MB VRAM → small (recommended)"
         elif vram >= 2000:
