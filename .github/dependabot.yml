@@ -1,29 +1,38 @@
 version: 2
+# One grouped PR per ecosystem per month: separate weekly PRs piled up unmerged.
 updates:
   - package-ecosystem: "pip"
     directory: "/server"
     schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 5
+      interval: "monthly"
+    groups:
+      server-dependencies:
+        patterns: ["*"]
+    ignore:
+      # faster-whisper 1.2.1's decode_audio breaks with PyAV 19 (TypeError);
+      # lift this when faster-whisper supports it
+      - dependency-name: "av"
+        versions: [">=19"]
     labels:
       - "dependencies"
 
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 2
+      interval: "monthly"
+    groups:
+      dev-dependencies:
+        patterns: ["*"]
     labels:
       - "dependencies"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 3
+      interval: "monthly"
+    groups:
+      actions:
+        patterns: ["*"]
     labels:
       - "dependencies"
       - "ci"

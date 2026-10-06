@@ -286,7 +286,7 @@ async function toggleSubtitles() {
       response = await chrome.tabs.sendMessage(tab.id, { action: 'TOGGLE_SUBTITLES' });
     } catch (e) {
       if (/Receiving end does not exist|Could not establish connection/.test(e.message)) {
-        throw new Error('Yume is not loaded on this tab yet — reload the page (F5), then try again.');
+        throw new Error('Yume is not loaded on this tab yet — reload the page (F5), then try again.', { cause: e });
       }
       throw e;
     }
