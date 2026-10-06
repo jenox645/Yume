@@ -731,6 +731,16 @@ class TestCliOutputEncoding:
         assert r.stdout.decode("utf-8").strip() == "✓ — …"
 
 
+class TestRecommendTurbo:
+    def test_big_gpus_get_turbo_too(self):
+        # measured: large-v3 is no more accurate than turbo on songs, and 2x slower
+        from yume.hardware import recommend_whisper_model
+
+        for vram in (6144, 12288, 24576):
+            gpu = {"has_nvidia": True, "has_amd": False, "vram_mb": vram, "name": "GPU", "vendor": "nvidia"}
+            assert recommend_whisper_model(gpu)[0] == "large-v3-turbo"
+
+
 class TestTable:
     def test_columns_stay_aligned_when_the_last_one_is_too_long(self, capsys, monkeypatch):
         from yume import ui
