@@ -97,7 +97,11 @@ import _romanize  # noqa: E402
 import _security  # noqa: E402
 import _state  # noqa: E402
 import _transcribe  # noqa: E402
-import faster_whisper_server as _fws  # noqa: E402
+import _api  # noqa: E402
+import _model  # noqa: E402
+import _settings  # noqa: E402
+import _startup  # noqa: E402
+import faster_whisper_server  # noqa: E402,F401  (the entry point still imports)
 
 
 class TestValidateUrl(unittest.TestCase):
@@ -1079,28 +1083,28 @@ class TestBgutil(unittest.TestCase):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# faster_whisper_server.py — helper functions (no HTTP context needed)
+# server startup / API / model helpers (no HTTP context needed)
 # ═════════════════════════════════════════════════════════════════════════════
 
 
 class TestCleanupStaleTemps(unittest.TestCase):
-    """_fws._cleanup_stale_temps() must remove dirs older than 1 h."""
+    """_startup.cleanup_stale_temps() must remove dirs older than 1 h."""
 
     def test_no_crash_when_tmp_has_no_yume_dirs(self):
-        _fws._cleanup_stale_temps()  # must not raise
+        _startup.cleanup_stale_temps()  # must not raise
 
     def test_removes_old_yume_dir(self):
         tmp = tempfile.mkdtemp(prefix="yume_")
         # Back-date mtime by 2 hours
         old_mtime = time.time() - 7200
         os.utime(tmp, (old_mtime, old_mtime))
-        _fws._cleanup_stale_temps()
+        _startup.cleanup_stale_temps()
         self.assertFalse(os.path.exists(tmp))
 
     def test_keeps_recent_yume_dir(self):
         tmp = tempfile.mkdtemp(prefix="yume_")
         try:
-            _fws._cleanup_stale_temps()
+            _startup.cleanup_stale_temps()
             # Recent dir (mtime = now) must survive
             self.assertTrue(os.path.exists(tmp))
         finally:
@@ -1111,7 +1115,7 @@ class TestCleanupStaleTemps(unittest.TestCase):
         old_mtime = time.time() - 7200
         os.utime(tmp, (old_mtime, old_mtime))
         try:
-            _fws._cleanup_stale_temps()
+            _startup.cleanup_stale_temps()
             self.assertTrue(os.path.exists(tmp))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -1119,21 +1123,21 @@ class TestCleanupStaleTemps(unittest.TestCase):
 
 class TestGetGpuStats(unittest.TestCase):
     def test_returns_none_when_nvidia_smi_missing(self):
-        with patch("faster_whisper_server.subprocess.run", side_effect=FileNotFoundError("nvidia-smi not found")):
-            result = _fws._get_gpu_stats()
+        with patch("_api.subprocess.run", side_effect=FileNotFoundError("nvidia-smi not found")):
+            result = _api.get_gpu_stats()
         self.assertIsNone(result)
 
     def test_returns_none_when_nvidia_smi_fails(self):
-        with patch("faster_whisper_server.subprocess.run") as mock_run:
+        with patch("_api.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1, stdout="")
-            result = _fws._get_gpu_stats()
+            result = _api.get_gpu_stats()
         self.assertIsNone(result)
 
     def test_returns_dict_on_success(self):
         csv_out = "4096, 8192, 45, 72, NVIDIA GeForce RTX 3080\n"
-        with patch("faster_whisper_server.subprocess.run") as mock_run:
+        with patch("_api.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout=csv_out)
-            result = _fws._get_gpu_stats()
+            result = _api.get_gpu_stats()
         self.assertIsNotNone(result)
         self.assertEqual(result["vram_used_mb"], 4096)
         self.assertEqual(result["vram_total_mb"], 8192)
@@ -1143,17 +1147,17 @@ class TestGetGpuStats(unittest.TestCase):
 
     def test_first_gpu_of_several_and_missing_fields(self):
         csv_out = "4096, 8192, [N/A], [N/A], GPU A\n100, 2048, 5, 40, GPU B\n"
-        with patch("faster_whisper_server.subprocess.run") as mock_run:
+        with patch("_api.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout=csv_out)
-            result = _fws._get_gpu_stats()
+            result = _api.get_gpu_stats()
         self.assertEqual(result["gpu_name"], "GPU A")
         self.assertEqual(result["vram_total_mb"], 8192)
         self.assertIsNone(result["gpu_temp_c"])
 
     def test_returns_none_when_insufficient_columns(self):
-        with patch("faster_whisper_server.subprocess.run") as mock_run:
+        with patch("_api.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="1024, 4096\n")
-            result = _fws._get_gpu_stats()
+            result = _api.get_gpu_stats()
         self.assertIsNone(result)
 
 
@@ -1186,30 +1190,30 @@ class TestApplyConfig(unittest.TestCase):
         return argparse.Namespace(**defaults)
 
     def test_sets_model_name(self):
-        _fws._apply_config(self._make_args(model="turbo"))
+        _settings.apply_config(self._make_args(model="turbo"))
         self.assertEqual(_state.model_name, "turbo")
 
     def test_sets_device(self):
-        _fws._apply_config(self._make_args(device="cpu"))
+        _settings.apply_config(self._make_args(device="cpu"))
         self.assertEqual(_state.device, "cpu")
 
     def test_sets_compute_type(self):
-        _fws._apply_config(self._make_args(compute_type="int8"))
+        _settings.apply_config(self._make_args(compute_type="int8"))
         self.assertEqual(_state.compute_type, "int8")
 
     def test_auto_device_resolves(self):
         """'auto' device must resolve to 'cuda' or 'cpu'."""
-        with patch("faster_whisper_server.subprocess.run") as mock_run:
+        with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1)  # no nvidia-smi
-            _fws._apply_config(self._make_args(device="auto", compute_type="float16"))
+            _settings.apply_config(self._make_args(device="auto", compute_type="float16"))
         self.assertIn(_state.device, ("cuda", "cpu"))
 
     def test_auto_compute_resolves_for_cpu(self):
-        _fws._apply_config(self._make_args(device="cpu", compute_type="auto"))
+        _settings.apply_config(self._make_args(device="cpu", compute_type="auto"))
         self.assertEqual(_state.compute_type, "int8")
 
     def test_low_vram_forces_int8(self):
-        _fws._apply_config(self._make_args(device="cuda", compute_type="float16", low_vram=True))
+        _settings.apply_config(self._make_args(device="cuda", compute_type="float16", low_vram=True))
         self.assertEqual(_state.compute_type, "int8")
 
     def test_config_file_overrides_args(self):
@@ -1220,7 +1224,7 @@ class TestApplyConfig(unittest.TestCase):
             json.dump(cfg, f)
             cfg_path = f.name
         try:
-            _fws._apply_config(self._make_args(model="large-v3", config=cfg_path))
+            _settings.apply_config(self._make_args(model="large-v3", config=cfg_path))
             self.assertEqual(_state.model_name, "base")
             self.assertEqual(_state.cookies_browser, "firefox")
         finally:
@@ -1246,7 +1250,7 @@ class TestConfigureLogging(unittest.TestCase):
         self._reset_logging()
         args = argparse.Namespace(verbose=True)
         with patch.dict(os.environ, {"LOG_LEVEL": ""}):
-            _fws._configure_logging(args)
+            _startup.configure_logging(args)
         self.assertEqual(logging.root.level, logging.DEBUG)
 
     def test_non_verbose_sets_warning(self):
@@ -1256,14 +1260,14 @@ class TestConfigureLogging(unittest.TestCase):
         self._reset_logging()
         args = argparse.Namespace(verbose=False)
         with patch.dict(os.environ, {"LOG_LEVEL": ""}):
-            _fws._configure_logging(args)
+            _startup.configure_logging(args)
         self.assertEqual(logging.root.level, logging.WARNING)
 
 
 class TestParseArgs(unittest.TestCase):
     def test_defaults(self):
         with patch("sys.argv", ["server"]):
-            args = _fws._parse_args()
+            args = _startup.parse_args()
         self.assertEqual(args.model, "large-v3-turbo")  # as accurate as large-v3 on songs, 2x faster
         self.assertEqual(args.device, "cuda")
         self.assertEqual(args.compute_type, "float16")
@@ -1273,29 +1277,29 @@ class TestParseArgs(unittest.TestCase):
 
     def test_custom_model(self):
         with patch("sys.argv", ["server", "--model", "small"]):
-            args = _fws._parse_args()
+            args = _startup.parse_args()
         self.assertEqual(args.model, "small")
 
     def test_custom_port(self):
         with patch("sys.argv", ["server", "--port", "6001"]):
-            args = _fws._parse_args()
+            args = _startup.parse_args()
         self.assertEqual(args.port, 6001)
 
     def test_low_vram_flag(self):
         with patch("sys.argv", ["server", "--low-vram"]):
-            args = _fws._parse_args()
+            args = _startup.parse_args()
         self.assertTrue(args.low_vram)
 
     def test_prewarm_flag(self):
         with patch("sys.argv", ["server", "--prewarm"]):
-            args = _fws._parse_args()
+            args = _startup.parse_args()
         self.assertTrue(args.prewarm)
 
     def test_removed_word_timestamp_flags_rejected(self):
         """--no-word-timestamps/--pause-threshold never affected transcription — gone."""
         with patch("sys.argv", ["server", "--no-word-timestamps"]):
             with self.assertRaises(SystemExit):
-                _fws._parse_args()
+                _startup.parse_args()
 
 
 class TestPrintModelLoadError(unittest.TestCase):
@@ -1306,7 +1310,7 @@ class TestPrintModelLoadError(unittest.TestCase):
 
         buf = io.StringIO()
         with patch("sys.stdout", buf):
-            _fws._print_model_load_error(RuntimeError(msg))
+            _model.print_model_load_error(RuntimeError(msg))
         return buf.getvalue()
 
     def test_oom_error_suggests_smaller_model(self):
@@ -1337,7 +1341,7 @@ class TestPrintModelLoadError(unittest.TestCase):
 class TestSetLowPriority(unittest.TestCase):
     def test_does_not_raise(self):
         """Lowering thread priority is best-effort — must not raise in tests."""
-        _fws._set_low_priority()
+        _model.set_low_priority()
 
 
 class TestWriteTokenFile(unittest.TestCase):
@@ -1350,7 +1354,7 @@ class TestWriteTokenFile(unittest.TestCase):
             _args = argparse.Namespace(port=5001)
 
             # Patch _state.TOKEN_FILE so we know where it writes
-            with patch("faster_whisper_server.Path") as mock_path_cls:
+            with patch("_startup.Path") as mock_path_cls:
                 mock_base = MagicMock()
                 mock_token_file = MagicMock()
                 mock_token_file.__str__ = lambda s: token_path
@@ -1388,21 +1392,21 @@ class TestModelLoadFailure(unittest.TestCase):
         req = MagicMock()
         req.headers = {"Origin": "chrome-extension://abc"}
         with (
-            patch.object(_fws, "request", req),
-            patch.object(_fws, "jsonify", lambda d=None, **kw: d),
-            patch.object(_fws._audio, "check_ytdlp", return_value=True),
+            patch.object(_api, "request", req),
+            patch.object(_api, "jsonify", lambda d=None, **kw: d),
+            patch.object(_api._audio, "check_ytdlp", return_value=True),
         ):
-            return _fws.health()
+            return _api.health()
 
     def test_loader_thread_publishes_error_instead_of_exiting(self):
         _state.model, _state.load_error = None, ""
         args = MagicMock(prewarm=False, port=5001)
         with (
-            patch.object(_fws, "WhisperModel", side_effect=RuntimeError("CUDA out of memory")),
-            patch.object(_fws, "_set_low_priority"),
+            patch.object(_model, "WhisperModel", side_effect=RuntimeError("CUDA out of memory")),
+            patch.object(_model, "set_low_priority"),
             patch("builtins.print"),
         ):
-            _fws._load_model(args)  # must not raise SystemExit
+            _model.load_model(args)  # must not raise SystemExit
         self.assertIn("out of memory", _state.load_error)
 
     def test_health_reports_error_status(self):

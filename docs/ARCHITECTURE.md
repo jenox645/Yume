@@ -6,14 +6,18 @@ Three processes on the user's machine:
 
 ```text
 ┌─ Browser extension ─────────────────┐      ┌─ Yume server (port 5001) ─────────────────────────┐
-│ content.js   page lifecycle, SPA nav │      │ faster_whisper_server.py   routes, auth, startup   │
-│ session.js   create job, poll, render│ ───▶ │ _jobs.py       job manager + 2 worker threads      │
+│ content.js   page lifecycle, SPA nav │      │ faster_whisper_server.py   main(): startup order    │
+│ session.js   create job, poll, render│ ───▶ │ _api.py        routes, auth (Host, token, CORS)    │
+│                                      │      │ _settings.py   config + live reload, blacklist     │
+│                                      │      │ _model.py      Whisper load / hot swap             │
+│                                      │      │ _jobs.py       job manager + 2 worker threads      │
 │ subtitle-window.js  shadow-DOM overlay│ HTTP │ _audio.py      yt-dlp / ffmpeg download            │
-│ background.js  authenticated proxy   │ ◀─── │ _regions.py    split audio at quiet points         │
+│ background.js  authenticated proxy   │ ◀─── │ _separate.py   vocal isolation (optional, CUDA)    │
+│                                      │      │ _regions.py    split audio at quiet points         │
 │ popup.js     settings, library, stats│      │ _transcribe.py Whisper (music-tuned params)         │
 └─────────────────────────────────────┘      │ _filter.py     hallucination filter + blacklist    │
                                              │ _translate.py  LLM client, structured output        │
-                                             │ _romanize.py   pykakasi / pypinyin / KO / RU       │
+                                             │ _romanize.py   cutlet / pypinyin / KO / RU         │
                                              │ _store.py      SQLite cache (config/yume_cache.db) │
                                              └───────────────────────┬────────────────────────────┘
                                                                      │ OpenAI-compatible API
@@ -22,7 +26,8 @@ Three processes on the user's machine:
                                              │ / LM Studio / any /v1/chat/completions server       │
                                              └────────────────────────────────────────────────────┘
 
-CLI: pocket_yume.py (entry point) + yume/ package — setup, launch, menus, health, installers.
+CLI: pocket_yume.py (entry point) + yume/ package — setup, menus, health, installers;
+servers.py runs the server processes for both launch.py (interactive) and service.py (one-click).
 ```
 
 The extension only renders. Everything that costs time or needs to persist —

@@ -7,7 +7,6 @@ import platform
 import re
 import shutil
 import sys
-import time
 import unicodedata
 
 PLAT = platform.system()
@@ -186,25 +185,6 @@ class Spinner:
         self._line(f"{marks[outcome]}{C.RESET}", notes.get(outcome, f"{self.elapsed}s"))
         sys.stdout.write("\n")
         sys.stdout.flush()
-
-
-def spin_wait(check_fn, message: str, timeout: int = 180, interval: float = 0.5) -> bool:
-    """Spinner until check_fn() returns True."""
-    spin = Spinner(message)
-    start = time.time()
-    try:
-        while time.time() - start < timeout:
-            spin.tick(time.time() - start)
-            if check_fn():
-                spin.finish("ok")
-                return True
-            time.sleep(interval)
-        spin.elapsed = timeout
-        spin.finish("timeout")
-        return False
-    except KeyboardInterrupt:
-        spin.finish("cancelled")
-        raise
 
 
 # ── Console helpers ────────────────────────────────────────────────────────────

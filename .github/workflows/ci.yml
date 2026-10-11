@@ -116,7 +116,7 @@ jobs:
         run: radon mi pocket_yume.py server/ config.py -nc -e "server/_vendor/*"
 
       - name: Dead code detection
-        run: vulture pocket_yume.py config.py server/faster_whisper_server.py vulture_whitelist.py --min-confidence 80
+        run: vulture pocket_yume.py config.py server/ yume/ vulture_whitelist.py --exclude "server/_vendor" --min-confidence 80
 
   requirements:
     # The server's pinned requirements must install on every Python Yume
@@ -179,7 +179,7 @@ jobs:
         run: |
           mkdir -p reports
           pyan3 pocket_yume.py --dot --no-defines --grouped | dot -Tsvg -o reports/callgraph_pocket_yume.svg || true
-          pyan3 server/faster_whisper_server.py --dot --no-defines --grouped | dot -Tsvg -o reports/callgraph_server.svg || true
+          pyan3 server/faster_whisper_server.py server/_api.py server/_startup.py --dot --no-defines --grouped | dot -Tsvg -o reports/callgraph_server.svg || true
 
       - name: Upload call graphs
         uses: actions/upload-artifact@v7

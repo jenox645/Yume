@@ -39,10 +39,6 @@ def set_setup_context(backend_info: dict, models_dir: Path, gguf_dir: Path, vers
 _TOTAL_STEPS = 5
 
 
-class _SkipCheck(Exception):
-    """Internal: skip a component check that does not apply to this setup."""
-
-
 def _step(n: int, name: str) -> None:
     """Print a step indicator: Step N/5: Name."""
     info(f"\n{C.GOLD}Step {n}/{_TOTAL_STEPS}: {C.BOLD}{name}{C.RESET}")

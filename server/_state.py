@@ -12,6 +12,9 @@ shared.  Always use attribute access: _state.model = x, not model = x.
 import threading
 import time
 
+# Must match pocket_yume.VERSION and extension/manifest.json (tests check it)
+SERVER_VERSION = "0.2.0"
+
 # ── Whisper model ────────────────────────────────────────────────────────────
 model = None
 model_name = "large-v3-turbo"
