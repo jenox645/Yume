@@ -121,8 +121,8 @@ def _guide_models(cfg: dict) -> None:
     section("Whisper (speech → text) — accuracy vs. VRAM")
     bullet(f"tiny / base      ~1 GB   {C.DIM}fastest, weakest — okay for clear speech{C.RESET}")
     bullet(f"small            ~2 GB   {C.DIM}decent for podcasts and vlogs{C.RESET}")
-    bullet(f"large-v3-turbo   ~6 GB   {C.DIM}best speed/quality balance on 8 GB GPUs{C.RESET}")
-    bullet(f"large-v3         ~10 GB  {C.DIM}most accurate — music, mumbling, noise{C.RESET}")
+    bullet(f"large-v3-turbo   ~3 GB   {C.DIM}best on any GPU: as accurate as large-v3 on songs, 2x faster{C.RESET}")
+    bullet(f"large-v3         ~4.5 GB {C.DIM}slower, and no more accurate in Yume's tests{C.RESET}")
     info(f"{C.DIM}Avoid distil-* models: they are English-only and can't transcribe JA/ZH/KO/RU/AR.{C.RESET}")
     info(f"{C.DIM}Switch any time: Settings → Whisper settings, or live from the runtime menu.{C.RESET}")
 

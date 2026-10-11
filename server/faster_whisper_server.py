@@ -435,6 +435,12 @@ def create_job():
     if not math.isfinite(duration) or duration < 0 or duration > _MAX_DURATION_S:
         duration = 0.0
     try:
+        playhead = float(data.get("t") or 0)
+    except (TypeError, ValueError):
+        playhead = 0.0
+    if not math.isfinite(playhead) or playhead < 0 or playhead > _MAX_DURATION_S:
+        playhead = 0.0
+    try:
         job = _state.jobs.create(
             {
                 "video_id": data.get("video_id"),
@@ -445,6 +451,7 @@ def create_job():
                 "romanize": bool(data.get("romanize")),
                 "title": str(data.get("title") or ""),
                 "duration": duration,
+                "playhead": playhead,
             }
         )
     except ValueError as e:

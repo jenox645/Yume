@@ -26,6 +26,18 @@ from _security import validate_url
 # same time again.
 DOWNLOAD_TIMEOUT_S = 900
 
+LIVE_ERROR = (
+    "This is a live stream. Yume transcribes a video's whole audio, so it works on the "
+    "recording once the stream has ended."
+)
+
+
+def _is_live(stderr_lower):
+    """yt-dlp failed on a live stream: its HLS URLs say so (ffmpeg only reports
+    "exited with code 3199971767")."""
+    return "yt_live_broadcast" in stderr_lower or "/live/1/" in stderr_lower
+
+
 # Browser cookies that yt-dlp could not read. Chromium browsers on Windows lock
 # their cookie database while running and encrypt it with app-bound keys, so
 # every cookie attempt fails the same way; skip them for a while once seen.
@@ -492,6 +504,11 @@ def download_full_audio(url):
                         f"[Yume] Browser cookies unreadable — skipping cookie strategies for {_COOKIES_RETRY_S // 60} min"
                     )
                     break
+
+                if _is_live(stderr_lower):
+                    # The fallbacks below would record the live stream until the timeout
+                    remove_temp(output_path)
+                    return None, LIVE_ERROR
 
                 if _state.ERR_REQUESTED_FORMAT in stderr_lower and fmt_pass == "bestaudio":
                     continue  # skip to nofmt pass of same auth strategy

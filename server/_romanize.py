@@ -112,27 +112,106 @@ def romanize_chinese(text):
         return None
 
 
-# ── Korean (Revised Romanization, per syllable) ──────────────────────────────
-# Ported from the extension (audio-capture.js) so all romanization lives here.
+# ── Korean (Revised Romanization, as pronounced) ─────────────────────────────
+# RR writes the sound changes between syllables of a word: 좋은 joeun (not
+# joteun), 감사합니다 gamsahamnida, 말을 mareul, 멀리 meolli, 어떻게 eotteoke.
 _KO_INITIALS = ["g", "kk", "n", "d", "tt", "r", "m", "b", "pp", "s", "ss", "", "j", "jj", "ch", "k", "t", "p", "h"]
 _KO_MEDIALS = [
     "a", "ae", "ya", "yae", "eo", "e", "yeo", "ye", "o", "wa", "wae", "oe", "yo", "u", "wo", "we", "wi", "yu", "eu", "ui", "i",
 ]  # fmt: skip
 _KO_FINALS = [
-    "", "k", "k", "k", "n", "n", "n", "t", "l", "l", "l", "l", "l", "l", "l", "l",
+    "", "k", "k", "k", "n", "n", "n", "t", "l", "k", "m", "l", "l", "l", "p", "l",
     "m", "p", "p", "t", "t", "ng", "t", "t", "k", "t", "p", "t",
 ]  # fmt: skip
 
+# Initial (choseong) indexes
+_G, _N, _D, _R, _M, _S, _SS, _O, _J, _CH, _K, _T, _P, _H = 0, 2, 3, 5, 6, 9, 10, 11, 12, 14, 15, 16, 17, 18
+_VOWEL_I = 20
+# Final (jongseong) index → the initial it becomes before a vowel (liaison)
+_KO_LIAISON = {1: 0, 2: 1, 4: 2, 7: 3, 8: 5, 16: 6, 17: 7, 19: 9, 20: 10, 22: 12, 23: 14, 24: 15, 25: 16, 26: 17}
+# Double finals: (stays, moves)
+_KO_SPLIT = {3: (1, 19), 5: (4, 22), 6: (4, 27), 9: (8, 1), 10: (8, 16), 11: (8, 17), 12: (8, 19),
+             13: (8, 25), 14: (8, 26), 15: (8, 27), 18: (17, 19)}  # fmt: skip
+# Finals sounding k / t / p: nasalized to ng / n / m before ㄴ or ㅁ
+_KO_K = {1, 2, 3, 9, 24}
+_KO_T = {5, 7, 19, 20, 22, 23, 25, 27}
+_KO_P = {14, 17, 18, 26}
+_KO_ASPIRATE = {_G: _K, _D: _T, _J: _CH}  # after ㅎ: 좋다 jota, 그렇게 geureoke
+_KO_H_FINAL = {27: 0, 6: 4, 15: 8}  # ㅎ, ㄶ, ㅀ → what is left without the ㅎ
+
+
+def _ko_assimilate(f, i, v):
+    """Sound change between a final f and the next syllable's initial i (vowel v)."""
+    if i == _O and f not in (0, 21):  # liaison: the final moves to the empty initial
+        if f in _KO_H_FINAL:  # the ㅎ is silent: 좋은 joeun, 많이 mani
+            stay = _KO_H_FINAL[f]
+            return (0, _KO_LIAISON[stay]) if stay else (0, _O)
+        if f in _KO_SPLIT:
+            stay, move = _KO_SPLIT[f]
+            f, i = stay, _KO_LIAISON[move]
+        else:
+            f, i = 0, _KO_LIAISON[f]
+        if v == _VOWEL_I and i in (_D, _T):  # palatalization: 같이 gachi, 굳이 guji
+            i = _J if i == _D else _CH
+        return f, i
+    if i == _H:  # ㄱㄷㅂㅈ + ㅎ → aspirated: 축하 chuka, 못해 motae
+        for finals, new in (({1, 2, 24}, _K), ({7, 19, 20, 25}, _T), ({17, 26}, _P), ({22, 23}, _CH)):
+            if f in finals:
+                return 0, new
+        if f == 9:  # ㄺ: 밝히다 balkida
+            return 8, _K
+        if f == 11:  # ㄼ
+            return 8, _P
+        return f, i
+    if f in _KO_H_FINAL:
+        if i in _KO_ASPIRATE:
+            return _KO_H_FINAL[f], _KO_ASPIRATE[i]
+        if i == _S:  # 좋습니다 josseumnida
+            return _KO_H_FINAL[f], _SS
+        if i == _N:
+            f = 4 if f in (27, 6) else 8  # 놓는 nonneun; ㅀ falls through to ㄹ + ㄴ
+    if f in (8, 13, 15) and i == _N:  # ㄹ + ㄴ → ll: 설날 seollal
+        return 8, _R
+    if i in (_N, _M):
+        if f in _KO_K:
+            return 21, i  # 작년 jangnyeon
+        if f in _KO_T:
+            return 4, i  # 있는 inneun
+        if f in _KO_P:
+            return 16, i  # 합니다 hamnida
+    if i == _R:
+        if f == 4:
+            return 8, _R  # 신라 silla
+        if f in (16, 21):
+            return f, _N  # 심리 simni, 종로 jongno
+        if f in _KO_K:
+            return 21, _N  # 독립 dongnip
+        if f in _KO_P:
+            return 16, _N  # 협력 hyeomnyeok
+    return f, i
+
 
 def romanize_korean(text):
-    out = []
+    # Syllables as [initial, vowel, final]; other characters as themselves
+    items = []
     for ch in text:
-        code = ord(ch)
-        if 0xAC00 <= code <= 0xD7A3:
-            off = code - 0xAC00
-            out.append(_KO_INITIALS[off // 588] + _KO_MEDIALS[(off % 588) // 28] + _KO_FINALS[off % 28])
-        else:
-            out.append(ch)
+        code = ord(ch) - 0xAC00
+        items.append([code // 588, (code % 588) // 28, code % 28] if 0 <= code <= 0xD7A3 - 0xAC00 else ch)
+    # Sound changes within a word (between adjacent syllables)
+    for a, b in zip(items, items[1:]):
+        if isinstance(a, list) and isinstance(b, list):
+            a[2], b[0] = _ko_assimilate(a[2], b[0], b[1])
+    out = []
+    prev_final = 0
+    for it in items:
+        if isinstance(it, str):
+            out.append(it)
+            prev_final = 0
+            continue
+        i, v, f = it
+        # ㄹㄹ is "ll" (멀리 meolli), an initial ㄹ elsewhere "r"
+        out.append(("l" if i == _R and prev_final == 8 else _KO_INITIALS[i]) + _KO_MEDIALS[v] + _KO_FINALS[f])
+        prev_final = f
     return "".join(out)
 
 

@@ -323,7 +323,19 @@ def main_menu() -> None:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 
+def _utf8_output() -> None:
+    """Piped or redirected, Python writes the ANSI code page (cp932, cp1252),
+    which cannot encode the CLI's ✓ — …: `pocket_yume.py health > log.txt`
+    crashed with UnicodeEncodeError. (A console is UTF-8 already.)"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main() -> None:
+    _utf8_output()
     verbose = "--verbose" in sys.argv or "-v" in sys.argv
     env_level = os.environ.get("LOG_LEVEL", "").upper()
     log_level = (

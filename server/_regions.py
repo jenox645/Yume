@@ -13,10 +13,13 @@ import numpy as np
 
 SAMPLE_RATE = 16000
 
-# Region 0 is always [0, FIRST_REGION_S): it is the one transcribed from a stream
-# preview while the full download is still running, and the preview must cover
-# exactly the same span as the region it stands in for.
+# Region 0 ends at the quietest point in [FIRST_MIN_S, FIRST_REGION_S]. It is the
+# one transcribed from a stream preview of the first FIRST_REGION_S seconds while
+# the full download is still running; the preview covers it, and the lines it
+# heard after the cut are dropped (region 1 transcribes them whole). A fixed cut
+# at 30 s split the first sung line in two.
 FIRST_REGION_S = 30.0
+FIRST_MIN_S = 20.0
 
 TARGET_S = 26.0  # aim for a cut every ~26 s ...
 SEARCH_BEFORE_S = 6.0  # ... at the quietest point in [target - 6, target + 4]
@@ -47,16 +50,20 @@ def plan_regions(audio, sr=SAMPLE_RATE):
         return [(0.0, round(duration, 2))]
 
     energy = _energy(audio, sr)
-    regions = []
-    start = FIRST_REGION_S
-    regions.append((0.0, FIRST_REGION_S))
-    while duration - start > MAX_REGION_S:
-        lo = start + TARGET_S - SEARCH_BEFORE_S
-        hi = min(start + TARGET_S + SEARCH_AFTER_S, start + MAX_REGION_S)
+
+    def quietest(lo, hi, fallback):
         i0, i1 = int(lo / HOP_S), int(hi / HOP_S)
         window = energy[i0:i1]
-        cut = (i0 + int(np.argmin(window))) * HOP_S if len(window) else start + TARGET_S
-        cut = round(cut, 2)
+        return round((i0 + int(np.argmin(window))) * HOP_S if len(window) else fallback, 2)
+
+    start = quietest(FIRST_MIN_S, FIRST_REGION_S, FIRST_REGION_S)
+    regions = [(0.0, start)]
+    while duration - start > MAX_REGION_S:
+        cut = quietest(
+            start + TARGET_S - SEARCH_BEFORE_S,
+            min(start + TARGET_S + SEARCH_AFTER_S, start + MAX_REGION_S),
+            start + TARGET_S,
+        )
         regions.append((start, cut))
         start = cut
     end = round(duration, 2)

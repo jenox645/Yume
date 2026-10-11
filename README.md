@@ -97,15 +97,21 @@ The extension only renders: it asks the server for a job for the current video a
 
 Real-world numbers on an **RTX 3060 12 GB VRAM** (a mid-range card):
 
+Measured with `large-v3-turbo` and Qwen2.5-7B Q3_K_M on the GPU build of `llama-server`:
+
 | Step | Time | Details |
 |------|------|---------|
-| Whisper model load | ~15 s | `large-v3` (~3 GB download, ~4.5 GB VRAM in float16) — one-time on launch |
-| Translation model load | ~12 s | ~10 GB GGUF file — one-time on launch |
-| Section (dialogue-heavy) | ~25 s | ~25 s of audio with dense speech: transcribe + translate + romanize |
+| Start Yume | ~8 s | Enable in the extension → both servers ready (models already downloaded) |
+| First subtitle of a new 4–5 min song | 4–9 s | audio download + first section, translated (Korean, Chinese, Russian, Arabic music videos) |
+| Whole 4–5 min song | 25–60 s | every line transcribed, translated and romanized |
+| 75-minute video opened at 40:00 | ~20 s | to the first translated line at 40:00 (the 75 min of audio download in ~17 s) |
+| Whisper, one ~25 s section | ~0.6 s | `large-v3` takes twice as long |
+| Translation, 10 lines | 4–6 s | keeps up with dense speech: the line on screen was translated 97% of the time |
+| A video watched before | instant | everything is cached |
 
-After both models are loaded, a section with moderate dialogue processes in under 25 seconds. Sections with silence or sparse speech are faster. Section N+1 is already being transcribed while section N is being translated, so perceived delay is lower than the raw per-section time.
+`large-v3-turbo` is the recommended Whisper model on any GPU: on two Japanese songs measured against their lyrics it had 23% and 21% character errors, `large-v3` 22% and 32%, in twice the time.
 
-Smaller models are significantly faster — a 3B translation model and `small` Whisper cut per-section time roughly in half, at the cost of some accuracy. Use `python pocket_yume.py benchmark` to measure your own hardware, and `python pocket_yume.py recommend` to get a model suggestion based on your GPU.
+Smaller models are faster at the cost of accuracy — a 3B translation model, or `small` Whisper on a CPU. Use `python pocket_yume.py benchmark` to measure your own hardware, and `python pocket_yume.py recommend` to get a model suggestion based on your GPU.
 
 ---
 

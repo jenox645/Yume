@@ -49,6 +49,11 @@ test('videoId: YouTube id only on YouTube hosts; page identity elsewhere', () =>
   const id = (location, video = null) => load('session.js', { location, video }).ctx.SubtitleSession.videoId(video);
   assert.equal(id('https://www.youtube.com/watch?v=abc123&t=42s'), 'abc123');
   assert.equal(id('https://music.youtube.com/watch?v=xyz'), 'xyz');
+  // Shorts, live and embeds are the same video as watch?v= (one cache entry)
+  assert.equal(id('https://www.youtube.com/shorts/jdL68J2oprw', { duration: 59 }), 'jdL68J2oprw');
+  assert.equal(id('https://www.youtube.com/live/6PNb0Jv6qbU?si=x'), '6PNb0Jv6qbU');
+  assert.equal(id('https://www.youtube-nocookie.com/embed/0OIVIkmBdL8'), '0OIVIkmBdL8');
+  assert.equal(id('https://youtu.be/0OIVIkmBdL8?t=30'), '0OIVIkmBdL8');
   // ?v= elsewhere is not a video id, and two sites never share an id
   assert.notEqual(id('https://site-a.com/watch?v=1'), '1');
   assert.notEqual(id('https://site-a.com/watch?v=1'), id('https://site-b.com/watch?v=1'));
@@ -117,15 +122,22 @@ test('background only proxies known server paths', () => {
 test('a recreated job (after a 404) clears the old cues', async () => {
   const video = { currentTime: 2 };
   const { ctx, events } = load('session.js', { video });
-  ctx.chrome.runtime.sendMessage = (_msg, cb) => cb({ ok: true, status: 200, data: { id: 'new', status: 'downloading', rev: 0, progress: {}, segments: [] } });
+  let body = null;
+  ctx.chrome.runtime.sendMessage = (msg, cb) => {
+    body = msg.request.body;
+    cb({ ok: true, status: 200, data: { id: 'new', status: 'downloading', rev: 0, progress: {}, segments: [] } });
+  };
   const s = new ctx.SubtitleSession();
   s.video = video;
   s.active = true;
-  s.params = {};
+  s.params = { video_id: 'abc123' };
   s._apply({ status: 'done', rev: 5, progress: {}, segments: [{ id: 1, start: 1, end: 3, text: 'old', hidden: false }] });
   await s._createJob();
   assert.equal(s.cues.length, 0);
   assert.equal(s.jobId, 'new');
+  // where playback is, so a video resumed at 40:00 is transcribed from there first
+  assert.equal(body.t, 2);
+  assert.equal(body.video_id, 'abc123');
   assert.equal(events.filter((e) => e.type === 'display-subtitle').pop().detail.original, '');
 });
 
