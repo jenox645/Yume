@@ -118,6 +118,26 @@ jobs:
       - name: Dead code detection
         run: vulture pocket_yume.py config.py server/faster_whisper_server.py vulture_whitelist.py --min-confidence 80
 
+  requirements:
+    # The server's pinned requirements must install on every Python Yume
+    # supports: numpy==2.5.3 needs 3.12 and left 3.10/3.11 nothing to install.
+    name: Requirements (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.11', '3.12', '3.14']
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Resolve server/requirements.txt
+        run: pip install --dry-run --ignore-installed --quiet -r server/requirements.txt
+
   security:
     name: Security Scan
     runs-on: ubuntu-latest

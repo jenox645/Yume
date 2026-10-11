@@ -394,9 +394,28 @@ class TestDependencyPinning:
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            if ">=" in line or ">" in line.split("==")[0]:
+            spec = line.split("#", 1)[0].split(";", 1)[0]  # environment markers may use >=
+            if ">=" in spec or ">" in spec.split("==")[0] or "==" not in spec:
                 violations.append(f"  line {i + 1}: {line}")
         assert not violations, "requirements.txt has unpinned dependencies (use == not >=):\n" + "\n".join(violations)
+
+    def test_requirements_pin_one_version_per_supported_python(self):
+        """The environment markers give every package exactly one pin on every Python
+        Yume supports (3.10+). Whether that pin exists for that Python is checked by
+        CI's "Requirements" job (numpy==2.5.3 alone left 3.10/3.11 nothing)."""
+        from packaging.requirements import Requirement
+
+        req = ROOT / "server" / "requirements.txt"
+        reqs = [
+            Requirement(line.split("#", 1)[0].strip())
+            for line in req.read_text(encoding="utf-8").splitlines()
+            if line.split("#", 1)[0].strip()
+        ]
+        names = {r.name.lower() for r in reqs}
+        for minor in range(10, 15):
+            env = {"python_version": f"3.{minor}", "python_full_version": f"3.{minor}.0"}
+            active = [r.name.lower() for r in reqs if r.marker is None or r.marker.evaluate(env)]
+            assert sorted(active) == sorted(names), f"Python 3.{minor}: {active}"
 
 
 class TestHardcodedURLs:
