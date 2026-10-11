@@ -254,7 +254,7 @@ class SubtitleSession {
       const msg = allFailed
         ? 'Transcription failed — see Diagnostics in the popup; press Enable again to retry'
         : {
-          starting: 'Starting...', downloading: 'Downloading audio...',
+          starting: 'Starting...', downloading: 'Downloading audio...', separating: 'Separating the vocals...',
           transcribing: 'Transcribing...', translating: 'Translating...',
           done: 'No vocals detected in this video',
         }[snap.status];

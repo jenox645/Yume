@@ -11,15 +11,15 @@ jobs:
     name: Lint & Syntax
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
 
@@ -68,10 +68,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -88,7 +88,7 @@ jobs:
             --cov=. --cov-report=xml:reports/coverage.xml --cov-report=term-missing
 
       - name: Upload coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always() && matrix.os == 'ubuntu-latest'
         with:
           name: coverage-report
@@ -99,10 +99,10 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -110,22 +110,42 @@ jobs:
         run: pip install radon vulture
 
       - name: Cyclomatic complexity
-        run: radon cc pocket_yume.py server/ config.py -a -nc
+        run: radon cc pocket_yume.py server/ config.py -a -nc -e "server/_vendor/*"
 
       - name: Maintainability index
-        run: radon mi pocket_yume.py server/ config.py -nc
+        run: radon mi pocket_yume.py server/ config.py -nc -e "server/_vendor/*"
 
       - name: Dead code detection
         run: vulture pocket_yume.py config.py server/faster_whisper_server.py vulture_whitelist.py --min-confidence 80
+
+  requirements:
+    # The server's pinned requirements must install on every Python Yume
+    # supports: numpy==2.5.3 needs 3.12 and left 3.10/3.11 nothing to install.
+    name: Requirements (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.11', '3.12', '3.14']
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Resolve server/requirements.txt
+        run: pip install --dry-run --ignore-installed --quiet -r server/requirements.txt
 
   security:
     name: Security Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -143,10 +163,10 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -162,7 +182,7 @@ jobs:
           pyan3 server/faster_whisper_server.py --dot --no-defines --grouped | dot -Tsvg -o reports/callgraph_server.svg || true
 
       - name: Upload call graphs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: call-graphs
@@ -173,10 +193,10 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
 

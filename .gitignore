@@ -70,9 +70,6 @@ tools/llama.cpp/
 tools/llama.cpp.new/
 tools/llama.cpp.old/
 
-# ── Yume: banner image (referenced via GitHub raw URL in README) ──
-# Already on remote — no need to re-download on every clone
-assets/banner.png
 
 # ── Node (ESLint dev tooling only) ──
 node_modules/
@@ -87,11 +84,13 @@ pyrightconfig.json
 tools/analyze.py
 tools/analyze-requirements.txt
 
-# ── Claude Code session data (machine-specific, not project docs) ──
+# ── Claude Code session data (machine-specific; CLAUDE.md itself is tracked) ──
 .claude/
-CLAUDE.md
+# ── Local media (the README's images and video are hosted on GitHub) ──
 Sunset_Blu_Swing.png
 Transcribing.png
 Yume Showcase.mp4
+# ── Local dev harnesses (not part of Yume) ──
 dev/
+# ── Yume: yt-dlp self-update timestamp ──
 tools/.yt-dlp-update-check

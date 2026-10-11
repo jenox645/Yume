@@ -310,8 +310,10 @@ class SubtitleWindow {
     // Say what is being counted: it switches from audio sections to translated
     // lines once Whisper is done, and translations arrive a batch at a time
     if (!total) {
-      badge.textContent = status === 'downloading' ? 'Downloading\u2026' : '\u2026';
-      badge.title = status === 'downloading' ? 'Downloading audio' : 'Starting';
+      const phase = { downloading: ['Downloading\u2026', 'Downloading audio'],
+        separating: ['Separating\u2026', 'Separating the vocals from the music'] }[status];
+      badge.textContent = phase ? phase[0] : '\u2026';
+      badge.title = phase ? phase[1] : 'Starting';
     } else if (status === 'translating') {
       badge.textContent = `Translating ${translated}/${lines}`;
       badge.title = 'Lines translated (the translator works through them in batches, lines near the playhead first)';

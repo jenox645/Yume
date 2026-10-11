@@ -758,3 +758,24 @@ class TestTable:
         assert len({ui._width(ln[: ln.index("PASS")]) for ln in lines}) == 1
         # CJK characters take two columns
         assert ui._width("今日は") == 6 and ui._width("\033[1mab\033[0m") == 2
+
+
+class TestVocalIsolationCli:
+    def test_torch_build_follows_the_driver(self):
+        from yume.vocals import torch_index
+
+        assert torch_index((13, 3)).endswith("/cu128")
+        assert torch_index((12, 8)).endswith("/cu128")
+        assert torch_index((12, 6)).endswith("/cu126")
+        assert torch_index((12, 4)) is None  # too old for PyTorch 2.11: update the driver
+        assert torch_index(None) is None
+
+    def test_health_row_is_never_a_failure(self, monkeypatch):
+        from yume import vocals
+
+        monkeypatch.setattr(vocals, "status", lambda: (False, "not installed"))
+        name, ok, detail = vocals.health_row({"vocal_isolation": True})
+        assert ok and "optional" in detail
+        assert vocals.health_row({"vocal_isolation": False})[2].startswith("off")
+        monkeypatch.setattr(vocals, "status", lambda: (True, "htdemucs, PyTorch 2.11.0+cu128"))
+        assert vocals.health_row({})[2].startswith("on")

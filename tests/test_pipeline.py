@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import threading
 import time
 import types
 import urllib.error
@@ -23,6 +24,7 @@ import _audio  # noqa: E402
 import _jobs  # noqa: E402
 import _regions  # noqa: E402
 import _romanize  # noqa: E402
+import _separate  # noqa: E402
 import _state  # noqa: E402
 import _store  # noqa: E402
 import _translate  # noqa: E402
@@ -294,7 +296,8 @@ def pipeline(tmp_path):
         w.setsampwidth(2)
         w.setframerate(SR)
         w.writeframes((_tone_with_gaps(95) * 32767).astype(np.int16).tobytes())
-    saved = (_state.model, _state.store, _state.jobs, _state.user_blacklist)
+    saved = (_state.model, _state.store, _state.jobs, _state.user_blacklist, _state.vocal_isolation)
+    _state.vocal_isolation = False  # never a real separator (or a torch import) in tests
     _state.model = _FakeModel()
     _state.store = _store.Store(tmp_path / "c.db")
     _state.user_blacklist = []
@@ -303,14 +306,20 @@ def pipeline(tmp_path):
     with (
         patch.object(_audio, "download_full_audio", return_value=(str(wav), None)) as dl,
         patch.object(_audio, "download_audio_segment", return_value=None),
+        patch.object(_audio, "get_stream_url", return_value=None),
         patch.object(_audio, "remove_temp"),
     ):
         yield types.SimpleNamespace(jobs=_state.jobs, translator=translator, download=dl)
-    _state.jobs._stop = True
-    _state.jobs.drop_all("teardown")
+        _state.jobs._stop = True
+        _state.jobs.drop_all("teardown")
+        # Wait for the jobs' download threads while the fakes are still in place: one
+        # that outlived the test ran the real yt-dlp (network) and hit other tests' mocks
+        for t in threading.enumerate():
+            if t.name.startswith(("prepare-", "preview-")):
+                t.join(timeout=10)
     time.sleep(0.2)  # let a worker mid-region finish before the store closes
     _state.store.close()
-    _state.model, _state.store, _state.jobs, _state.user_blacklist = saved
+    _state.model, _state.store, _state.jobs, _state.user_blacklist, _state.vocal_isolation = saved
 
 
 def _run(jobs, job, timeout=20, playhead=0):
@@ -390,6 +399,78 @@ def test_stream_preview_covers_a_region_0_cut_before_30s(pipeline):
         assert job.region_state == ["done", "pending"]
     # and it is cached under the plan's region only
     assert set(_state.store.get_transcripts("pv", "ja", job.model)) == {(0.0, 21.5)}
+
+
+# ── vocal isolation ───────────────────────────────────────────────────────────
+
+
+def test_songs_are_transcribed_from_the_separated_vocals(pipeline, monkeypatch):
+    vocals = _tone_with_gaps(95) * 0.5  # recognisably not the mix
+    heard = []
+    real_transcribe = _jobs.transcribe_audio
+
+    def transcribe(audio, *a, **kw):
+        heard.append(float(np.abs(audio).max()))
+        return real_transcribe(audio, *a, **kw)
+
+    monkeypatch.setattr(_separate, "wanted", lambda duration: True)
+    monkeypatch.setattr(_separate, "read_stereo", lambda path: np.zeros((2, 10), np.float32))
+    monkeypatch.setattr(_separate, "isolate", lambda stereo: vocals)
+    monkeypatch.setattr(_jobs, "transcribe_audio", transcribe)
+    job = pipeline.jobs.create({**PARAMS, "video_id": "song", "duration": 95})
+    assert job.isolate and job.model == _state.model_name + _separate.MODEL_SUFFIX
+    snap = _run(pipeline.jobs, job)
+    assert snap["status"] == "done"
+    assert pipeline.download.call_args.kwargs == {"stereo": True}  # stereo: what the separator needs
+    assert heard and max(heard) <= 0.15 + 1e-6  # every region came from the vocals (the mix peaks at 0.3)
+    assert any("Vocals separated" in e["msg"] for e in job.events)
+    # cached apart from transcripts of the mix
+    assert _state.store.get_transcripts("song", "ja", job.model)
+    assert not _state.store.get_transcripts("song", "ja", _state.model_name)
+
+
+def test_a_failed_separation_transcribes_the_mix(pipeline, monkeypatch):
+    def boom(stereo):
+        raise RuntimeError("CUDA out of memory")
+
+    monkeypatch.setattr(_separate, "wanted", lambda duration: True)
+    monkeypatch.setattr(_separate, "read_stereo", lambda path: np.zeros((2, 10), np.float32))
+    monkeypatch.setattr(_separate, "isolate", boom)
+    job = pipeline.jobs.create({**PARAMS, "video_id": "song2", "duration": 95})
+    snap = _run(pipeline.jobs, job)
+    assert snap["status"] == "done" and snap["progress"]["lines"] > 0
+    assert job.model == _state.model_name and not job.isolate  # cached as the mix's
+    assert any("Vocal isolation failed" in e["msg"] and "out of memory" in e["msg"] for e in job.events)
+
+
+def test_which_videos_are_separated(monkeypatch):
+    monkeypatch.setattr(_separate, "available", lambda: (True, ""))
+    monkeypatch.setattr(_state, "vocal_isolation", True)
+    assert _separate.wanted(240)
+    assert not _separate.wanted(0)  # unknown length (a live stream)
+    assert not _separate.wanted(_separate.MAX_S + 1)  # a talk, not a song
+    monkeypatch.setattr(_state, "vocal_isolation", False)
+    assert not _separate.wanted(240)
+    monkeypatch.setattr(_state, "vocal_isolation", True)
+    monkeypatch.setattr(_separate, "available", lambda: (False, "not installed"))
+    assert not _separate.wanted(240)
+
+
+def test_stereo_downloads_are_read_for_the_separator(tmp_path):
+    import wave
+
+    def wav(path, rate, channels):
+        with wave.open(str(path), "wb") as w:
+            w.setnchannels(channels)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            w.writeframes(np.array([16384, -16384] * 50, np.int16).tobytes())
+        return str(path)
+
+    st = _separate.read_stereo(wav(tmp_path / "s.wav", 44100, 2))
+    assert st.shape == (2, 50) and st[0, 0] == pytest.approx(0.5) and st[1, 0] == pytest.approx(-0.5)
+    assert _separate.read_stereo(wav(tmp_path / "m.wav", 16000, 1)) is None
+    assert _separate.read_stereo(str(tmp_path / "missing.wav")) is None
 
 
 def test_no_stream_preview_of_the_start_for_a_resumed_video(pipeline):
@@ -632,9 +713,52 @@ def test_old_ytdlp_self_updates_once_a_day(tmp_path, monkeypatch):
 def test_japanese_small_tsu_doubles_the_next_consonant():
     if _romanize.get_kakasi() is None:
         pytest.skip("pykakasi not installed")
-    assert _romanize.romanize("ja", "走って") == "hashitte"  # was "hashitsu te"
-    assert _romanize.romanize("ja", "知った") == "shitta"
-    assert _romanize.romanize("ja", "ちょっと待って") == "chotto matte"
+    ja = _romanize._romanize_japanese_kakasi  # the fallback when cutlet is missing
+    assert ja("走って") == "hashitte"  # was "hashitsu te"
+    assert ja("知った") == "shitta"
+    assert ja("ちょっと待って") == "chotto matte"
+
+
+@pytest.mark.parametrize(
+    "line, romaji",
+    [
+        # pykakasi's readings and word splits, from a live test against the lyrics
+        ("甘いセリフを囁いてほしいわ", "Amai serifu wo sasayaite hoshii wa"),  # was "shou itehoshiiwa"
+        ("掠れた声で", "Kasureta koe de"),  # was "ryaku reta koe de"
+        ("そんなひと時を", "Sonna hitotoki wo"),  # was "sonnahito toki wo"
+        ("紫に染まる街は", "Murasaki ni somaru machi wa"),  # was "soma ru"
+        ("痛いほど分かっていても", "Itai hodo wakatte ite mo"),  # was "waka tteitemo"
+        ("ドリンクを片手にちらり", "Dorinku wo katate ni chirari"),  # katakana as read, not "Drink"
+        ("窓ガラスに映る私", "Mado garasu ni utsuru watashi"),  # not the formal "watakushi"
+        ("こんにちは、世界", "Konnichiwa, sekai"),
+        ("走って", "Hashitte"),
+        ("私は学校へ行く", "Watashi wa gakkou e iku"),
+    ],
+)
+def test_japanese_romanization_by_word(line, romaji):
+    pytest.importorskip("fugashi")
+    pytest.importorskip("unidic_lite")
+    assert _romanize.romanize("ja", line) == romaji
+
+
+def test_vendored_cutlet_needs_no_mojimoji():
+    # mojimoji has no wheels for Python 3.13+ (installing it needs a C compiler);
+    # NFKC normalization does both of its conversions
+    import ast
+
+    src = Path(__file__).parent.parent / "server" / "_vendor" / "cutlet" / "cutlet.py"
+    imported = {
+        alias.name.split(".")[0]
+        for node in ast.walk(ast.parse(src.read_text(encoding="utf-8")))
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        for alias in node.names
+    }
+    assert "mojimoji" not in imported
+    assert (src.parent / "LICENSE").exists()
+    pytest.importorskip("fugashi")
+    from _vendor.cutlet import cutlet as vendored
+
+    assert vendored.normalize_text("ＡＢＣ１２３ｶﾀｶﾅ") == "ABC123カタカナ"
 
 
 def test_missing_server_requirements_are_reported(tmp_path, monkeypatch):
@@ -745,7 +869,7 @@ def test_first_translation_batch_is_small_even_when_nothing_is_near_the_playhead
 def test_japanese_particles_are_written_as_pronounced():
     if _romanize.get_kakasi() is None:
         pytest.skip("pykakasi not installed")
-    ja = lambda t: _romanize.romanize("ja", t)  # noqa: E731
+    ja = _romanize._romanize_japanese_kakasi  # the fallback when cutlet is missing
     assert ja("私は学校へ行く") == "watashi wa gakkou e iku"
     assert ja("本当はもっと") == "hontou wa motto"  # は glued to the next word by pykakasi
     assert ja("こんにちは") == "konnichiwa"
@@ -777,3 +901,25 @@ def test_cookie_hint_only_where_cookies_could_help(monkeypatch):
     monkeypatch.setattr(_state, "youtube_auth_method", "cookies")
     _path, err = _audio.download_full_audio("https://www.youtube.com/watch?v=gone")
     assert "unavailable" in err and "cookies" not in err.lower()
+
+
+def test_audio_that_is_not_16k_mono_is_converted_by_ffmpeg(tmp_path):
+    # The stereo downloads for vocal isolation. faster-whisper's decode_audio
+    # fails with PyAV 19 (TypeError), so Yume converts with ffmpeg itself.
+    import shutil
+    import wave
+
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg not installed")
+    path = tmp_path / "stereo.wav"
+    tone = (0.25 * np.sin(2 * np.pi * 440 * np.arange(44100) / 44100) * 32767).astype(np.int16)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(44100)
+        w.writeframes(np.repeat(tone, 2).tobytes())
+    audio = _audio.load_audio(str(path))
+    assert audio.dtype == np.float32 and abs(len(audio) - 16000) <= 32
+    assert 0.2 < np.abs(audio).max() < 0.3
+    with pytest.raises(RuntimeError, match="ffmpeg could not read"):
+        _audio.load_audio(str(tmp_path / "missing.wav"))

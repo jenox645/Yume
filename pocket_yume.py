@@ -43,7 +43,7 @@ from config import (  # noqa: E402
 # Japanese text may appear in logs. Wrapping stdout here breaks ANSI
 # color rendering on Windows terminals.
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 KiB = 1024
 MiB = 1024**2
