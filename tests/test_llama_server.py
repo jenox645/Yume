@@ -107,17 +107,17 @@ def test_command_uses_one_slot_and_the_gpu(tmp_path, monkeypatch):
     assert "--n-gpu-layers" not in llama_server.command("m.gguf", "127.0.0.1", 5000, gpu_layers=False)
 
 
-def test_launch_prefers_llama_server_when_installed(tmp_path, monkeypatch):
-    from yume import launch
+def test_translation_server_prefers_llama_server_when_installed(tmp_path, monkeypatch):
+    from yume import servers
 
     exe = tmp_path / llama_server.EXE_NAME
     exe.write_bytes(b"")
     (tmp_path / "build.json").write_text(json.dumps({"tag": "b1", "variant": "cuda-12.4"}))
     monkeypatch.setattr(llama_server, "LLAMA_DIR", tmp_path)
     monkeypatch.setattr(llama_server, "BUILD_FILE", tmp_path / "build.json")
-    cmd = launch.llamacpp_command({"translation_host": "127.0.0.1"}, "m.gguf", 5000)
+    cmd = servers.llamacpp_command({"translation_host": "127.0.0.1"}, "m.gguf", 5000)
     assert cmd[0] == str(exe) and "--n-gpu-layers" in cmd
 
     monkeypatch.setattr(llama_server, "LLAMA_DIR", tmp_path / "missing")
-    cmd = launch.llamacpp_command({"translation_host": "127.0.0.1"}, "m.gguf", 5000)
+    cmd = servers.llamacpp_command({"translation_host": "127.0.0.1"}, "m.gguf", 5000)
     assert cmd[1:3] == ["-m", "llama_cpp.server"]  # falls back to llama-cpp-python

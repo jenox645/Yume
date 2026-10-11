@@ -160,29 +160,50 @@ def _pick_spinner() -> list:
     return SPINNERS["dots"]
 
 
+class Spinner:
+    """A one-line spinner driven from outside: tick(elapsed) while waiting, then
+    finish(). Used as the progress callback of yume.servers.wait_ready."""
+
+    def __init__(self, message: str):
+        self.message = message
+        self.frames = _pick_spinner()
+        self.i = 0
+        self.elapsed = 0
+
+    def _line(self, mark: str, note: str) -> None:
+        sys.stdout.write(f"\r  {mark}  {self.message} {C.DIM}({note}){C.RESET}   ")
+        sys.stdout.flush()
+
+    def tick(self, elapsed: float = 0) -> None:
+        self.elapsed = int(elapsed)
+        self._line(f"{C.CYAN}{self.frames[self.i % len(self.frames)]}{C.RESET}", f"{self.elapsed}s")
+        self.i += 1
+
+    def finish(self, outcome: str) -> None:
+        """outcome: "ok", "timeout", "failed" or "cancelled"."""
+        marks = {"ok": f"{C.GREEN}✓", "timeout": f"{C.YELLOW}⏱", "failed": f"{C.RED}✗", "cancelled": f"{C.RED}✗"}
+        notes = {"timeout": f"timed out after {self.elapsed}s", "cancelled": "cancelled"}
+        self._line(f"{marks[outcome]}{C.RESET}", notes.get(outcome, f"{self.elapsed}s"))
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+
+
 def spin_wait(check_fn, message: str, timeout: int = 180, interval: float = 0.5) -> bool:
     """Spinner until check_fn() returns True."""
-    frames = _pick_spinner()
+    spin = Spinner(message)
     start = time.time()
-    i = 0
     try:
         while time.time() - start < timeout:
-            frame = frames[i % len(frames)]
-            elapsed = int(time.time() - start)
-            sys.stdout.write(f"\r  {C.CYAN}{frame}{C.RESET}  {message} {C.DIM}({elapsed}s){C.RESET}   ")
-            sys.stdout.flush()
+            spin.tick(time.time() - start)
             if check_fn():
-                sys.stdout.write(f"\r  {C.GREEN}✓{C.RESET}  {message} {C.DIM}({elapsed}s){C.RESET}   \n")
-                sys.stdout.flush()
+                spin.finish("ok")
                 return True
             time.sleep(interval)
-            i += 1
-        sys.stdout.write(f"\r  {C.YELLOW}⏱{C.RESET}  {message} {C.DIM}(timed out after {timeout}s){C.RESET}   \n")
-        sys.stdout.flush()
+        spin.elapsed = timeout
+        spin.finish("timeout")
         return False
     except KeyboardInterrupt:
-        sys.stdout.write(f"\r  {C.RED}✗{C.RESET}  {message} {C.DIM}(cancelled){C.RESET}   \n")
-        sys.stdout.flush()
+        spin.finish("cancelled")
         raise
 
 

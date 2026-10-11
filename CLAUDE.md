@@ -121,9 +121,10 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 |------|---------|
 | `pocket_yume.py` | Thin entry point: arg parsing, module wiring via `_init_modules()`, top-level menu dispatch |
 | `config.py` | Config load/save/validate, `DEFAULT_CONFIG` |
-| `yume/launch.py` | Server lifecycle: start llama.cpp / Ollama / Whisper, runtime menu, `LLAMA_SERVER_DEPS`; shared builders `whisper_command` / `llamacpp_command` / `build_server_env` (also used by `serve`) |
+| `yume/servers.py` | Server processes, shared by the launcher and `serve`: commands/env (`whisper_command`, `llamacpp_command`, `build_server_env`, `LLAMA_SERVER_DEPS`), rotating logs, `Processes` (spawn/stop), `start_whisper`/`start_llamacpp`/`start_ollama` → `StartResult`, crash `diagnose()` |
+| `yume/launch.py` | Interactive launcher: port/install prompts, spinner and crash advice around `yume.servers`, then the runtime menu |
 | `yume/llama_server.py` | Installs/locates llama.cpp's prebuilt `llama-server` (tools/llama.cpp/); `launch.llamacpp_command` prefers it over llama-cpp-python |
-| `yume/service.py` | Headless `serve` supervisor: hidden children, `config/service.json` state, idle auto-stop (`auto_stop_minutes`), detached spawn that survives the browser's job object |
+| `yume/service.py` | Headless `serve` supervisor on `yume.servers`: `config/service.json` state (errors carry the crash diagnosis), idle auto-stop (`auto_stop_minutes`), detached spawn that survives the browser's job object |
 | `yume/vocals.py` | Vocal isolation from the CLI: status, install (PyTorch CUDA build matched to the driver + demucs), on/off |
 | `yume/native_host.py` | Native messaging host `com.pocketyume.yume` (status/start/stop) + registration; allowed extension ID must match the manifest `key` |
 | `yume/setup.py` | Setup wizard, extension guide, uninstall |
