@@ -1,6 +1,8 @@
 [tool.ruff]
 line-length = 120
 target-version = "py310"
+# Third-party code shipped as-is (each package keeps its own LICENSE)
+extend-exclude = ["server/_vendor"]
 
 [tool.ruff.format]
 # A list of bare names for vulture, laid out with aligned comments on purpose
@@ -17,7 +19,7 @@ ignore = [
 "tests/*" = ["E402"]         # imports after sys.path setup
 
 [tool.bandit]
-exclude_dirs = ["tests", "tools"]
+exclude_dirs = ["tests", "tools", "server/_vendor"]
 skips = ["B310", "B404", "B603"]  # B310=urlopen (all localhost/GitHub), B404=import subprocess, B603=subprocess without shell
 
 [tool.pytest.ini_options]
@@ -26,7 +28,7 @@ addopts = "-v --tb=short"
 
 [tool.coverage.run]
 source = ["."]
-omit = ["tests/*", "tools/*"]
+omit = ["tests/*", "tools/*", "server/_vendor/*"]
 
 [tool.coverage.report]
 fail_under = 0

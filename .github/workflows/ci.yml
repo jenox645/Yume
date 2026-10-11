@@ -110,10 +110,10 @@ jobs:
         run: pip install radon vulture
 
       - name: Cyclomatic complexity
-        run: radon cc pocket_yume.py server/ config.py -a -nc
+        run: radon cc pocket_yume.py server/ config.py -a -nc -e "server/_vendor/*"
 
       - name: Maintainability index
-        run: radon mi pocket_yume.py server/ config.py -nc
+        run: radon mi pocket_yume.py server/ config.py -nc -e "server/_vendor/*"
 
       - name: Dead code detection
         run: vulture pocket_yume.py config.py server/faster_whisper_server.py vulture_whitelist.py --min-confidence 80

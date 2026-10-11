@@ -713,9 +713,52 @@ def test_old_ytdlp_self_updates_once_a_day(tmp_path, monkeypatch):
 def test_japanese_small_tsu_doubles_the_next_consonant():
     if _romanize.get_kakasi() is None:
         pytest.skip("pykakasi not installed")
-    assert _romanize.romanize("ja", "走って") == "hashitte"  # was "hashitsu te"
-    assert _romanize.romanize("ja", "知った") == "shitta"
-    assert _romanize.romanize("ja", "ちょっと待って") == "chotto matte"
+    ja = _romanize._romanize_japanese_kakasi  # the fallback when cutlet is missing
+    assert ja("走って") == "hashitte"  # was "hashitsu te"
+    assert ja("知った") == "shitta"
+    assert ja("ちょっと待って") == "chotto matte"
+
+
+@pytest.mark.parametrize(
+    "line, romaji",
+    [
+        # pykakasi's readings and word splits, from a live test against the lyrics
+        ("甘いセリフを囁いてほしいわ", "Amai serifu wo sasayaite hoshii wa"),  # was "shou itehoshiiwa"
+        ("掠れた声で", "Kasureta koe de"),  # was "ryaku reta koe de"
+        ("そんなひと時を", "Sonna hitotoki wo"),  # was "sonnahito toki wo"
+        ("紫に染まる街は", "Murasaki ni somaru machi wa"),  # was "soma ru"
+        ("痛いほど分かっていても", "Itai hodo wakatte ite mo"),  # was "waka tteitemo"
+        ("ドリンクを片手にちらり", "Dorinku wo katate ni chirari"),  # katakana as read, not "Drink"
+        ("窓ガラスに映る私", "Mado garasu ni utsuru watashi"),  # not the formal "watakushi"
+        ("こんにちは、世界", "Konnichiwa, sekai"),
+        ("走って", "Hashitte"),
+        ("私は学校へ行く", "Watashi wa gakkou e iku"),
+    ],
+)
+def test_japanese_romanization_by_word(line, romaji):
+    pytest.importorskip("fugashi")
+    pytest.importorskip("unidic_lite")
+    assert _romanize.romanize("ja", line) == romaji
+
+
+def test_vendored_cutlet_needs_no_mojimoji():
+    # mojimoji has no wheels for Python 3.13+ (installing it needs a C compiler);
+    # NFKC normalization does both of its conversions
+    import ast
+
+    src = Path(__file__).parent.parent / "server" / "_vendor" / "cutlet" / "cutlet.py"
+    imported = {
+        alias.name.split(".")[0]
+        for node in ast.walk(ast.parse(src.read_text(encoding="utf-8")))
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        for alias in node.names
+    }
+    assert "mojimoji" not in imported
+    assert (src.parent / "LICENSE").exists()
+    pytest.importorskip("fugashi")
+    from _vendor.cutlet import cutlet as vendored
+
+    assert vendored.normalize_text("ＡＢＣ１２３ｶﾀｶﾅ") == "ABC123カタカナ"
 
 
 def test_missing_server_requirements_are_reported(tmp_path, monkeypatch):
@@ -826,7 +869,7 @@ def test_first_translation_batch_is_small_even_when_nothing_is_near_the_playhead
 def test_japanese_particles_are_written_as_pronounced():
     if _romanize.get_kakasi() is None:
         pytest.skip("pykakasi not installed")
-    ja = lambda t: _romanize.romanize("ja", t)  # noqa: E731
+    ja = _romanize._romanize_japanese_kakasi  # the fallback when cutlet is missing
     assert ja("私は学校へ行く") == "watashi wa gakkou e iku"
     assert ja("本当はもっと") == "hontou wa motto"  # は glued to the next word by pykakasi
     assert ja("こんにちは") == "konnichiwa"

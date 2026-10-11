@@ -1,8 +1,9 @@
 """Romanization of transcribed lines.
 
-Deterministic for Japanese (pykakasi), Chinese (pypinyin), Korean (Revised
-Romanization) and Russian (BGN/PCGN) — <5 ms per line instead of an LLM call.
-pykakasi/pypinyin are loaded lazily (antivirus scans make the import slow).
+Deterministic for Japanese (cutlet — MeCab + UniDic, vendored in _vendor/ —
+or pykakasi without it), Chinese (pypinyin), Korean (Revised Romanization) and
+Russian (BGN/PCGN) — <5 ms per line instead of an LLM call. The libraries are
+loaded lazily (antivirus scans make the import slow).
 
 romanize() returns None when the LLM must do it: Arabic and other non-Latin
 scripts, or JA/ZH when the library is not installed.
@@ -69,7 +70,64 @@ def _particles(orig, roma, prev):
 _GREETINGS = {"konnichiha": "konnichiwa", "konbanha": "konbanwa"}
 
 
+# ── cutlet (MeCab + UniDic: real word boundaries and readings) ───────────────
+# pykakasi reads character by character from a small dictionary: 囁いて came
+# out "shou ite", 掠れた "ryaku reta", ひと時 "hito toki", and words were split
+# mid-verb ("soma ru", "waka tteitemo"). cutlet romanizes MeCab's morphological
+# analysis: "sasayaite", "kasureta", "hitotoki", "somaru", "wakatte ite mo".
+_cutlet = None
+_cutlet_checked = False
+_cutlet_lock = threading.Lock()
+
+
+def get_cutlet():
+    """Lazy-load cutlet (needs fugashi + unidic-lite). Thread-safe; None if missing."""
+    global _cutlet, _cutlet_checked
+    with _cutlet_lock:
+        if not _cutlet_checked:
+            _cutlet_checked = True
+            try:
+                from _vendor.cutlet import Cutlet
+
+                # Lyrics keep katakana as read ("dorinku", not "Drink"), and
+                # sing 私 "watashi" (UniDic's reading is the formal "watakushi")
+                _cutlet = Cutlet(use_foreign_spelling=False, ensure_ascii=False)
+                _cutlet.add_exception("私", "watashi")
+                print("[Yume] cutlet loaded — Japanese romanization by word (MeCab + UniDic)")
+            except ImportError as e:
+                print(f"[Yume] cutlet unavailable ({e.name or e}) — Japanese romanization uses pykakasi")
+            except Exception as e:  # a broken dictionary must not stop the server
+                print(f"[Yume] cutlet failed: {type(e).__name__}: {e} — using pykakasi")
+    return _cutlet
+
+
+def _greeting(word):
+    """こんにちは is said konnichiwa: the は is the particle (Konnichiha → Konnichiwa)."""
+    core = word.rstrip(".,!?;:")
+    fixed = _GREETINGS.get(core.lower())
+    if fixed is None:
+        return word
+    return (fixed.capitalize() if word[:1].isupper() else fixed) + word[len(core) :]
+
+
+def preload():
+    """Load the Japanese romanizer at startup (antivirus scans make it slow)."""
+    if get_cutlet() is None:
+        get_kakasi()
+
+
 def romanize_japanese(text):
+    """Japanese text (kanji/kana) to romaji: cutlet, else pykakasi. ~1 ms."""
+    katsu = get_cutlet()
+    if katsu is not None:
+        try:
+            return " ".join(_greeting(w) for w in katsu.romaji(text).split())
+        except Exception as e:
+            print(f"[Yume] cutlet error: {e} — using pykakasi")
+    return _romanize_japanese_kakasi(text)
+
+
+def _romanize_japanese_kakasi(text):
     """Convert Japanese text (kanji/kana) to romaji using pykakasi. ~1 ms."""
     kakasi = get_kakasi()
     if not kakasi:

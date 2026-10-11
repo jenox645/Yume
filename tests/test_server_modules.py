@@ -620,7 +620,11 @@ class TestRomanize(unittest.TestCase):
             {"hepburn": "tou", "passport": "to", "orig": "東"},
             {"hepburn": "kyou", "passport": "kyo", "orig": "京"},
         ]
-        with patch.object(_romanize, "_kakasi", mock_kakasi), patch.object(_romanize, "_kakasi_checked", True):
+        with (
+            patch.object(_romanize, "_kakasi", mock_kakasi),
+            patch.object(_romanize, "_kakasi_checked", True),
+            patch.object(_romanize, "get_cutlet", lambda: None),  # the pykakasi fallback
+        ):
             result = _romanize.romanize_japanese("東京")
         self.assertIsNotNone(result)
         self.assertIn("tou", result)
@@ -629,7 +633,11 @@ class TestRomanize(unittest.TestCase):
     def test_romanize_japanese_kakasi_exception_returns_none(self):
         mock_kakasi = MagicMock()
         mock_kakasi.convert.side_effect = RuntimeError("kakasi exploded")
-        with patch.object(_romanize, "_kakasi", mock_kakasi), patch.object(_romanize, "_kakasi_checked", True):
+        with (
+            patch.object(_romanize, "_kakasi", mock_kakasi),
+            patch.object(_romanize, "_kakasi_checked", True),
+            patch.object(_romanize, "get_cutlet", lambda: None),
+        ):
             result = _romanize.romanize_japanese("東京")
         self.assertIsNone(result)
 

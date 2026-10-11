@@ -674,9 +674,9 @@ def main():
     print("  Loading Whisper model in background thread...")
     print("")
 
-    # Pre-load kakasi dictionary in background to hide its 30-120 s startup cost
-    # (Windows Defender scans each file in the dictionary).
-    threading.Thread(target=lambda: _romanize.get_kakasi(), daemon=True).start()
+    # Pre-load the Japanese romanizer in the background to hide its startup cost
+    # (Windows Defender scans each dictionary file: 30-120 s for pykakasi).
+    threading.Thread(target=_romanize.preload, daemon=True).start()
     # Importing torch takes seconds: check vocal isolation now, not in the first job
     threading.Thread(target=_report_vocal_isolation, daemon=True).start()
 
@@ -878,9 +878,14 @@ def _print_startup_banner(args):
     print(f"  Python exe:       {sys.executable}")
     roma_parts = []
     try:
-        import pykakasi  # noqa: F401
+        import importlib.util
 
-        roma_parts.append("ja(pykakasi)")
+        if importlib.util.find_spec("fugashi") and importlib.util.find_spec("unidic_lite"):
+            roma_parts.append("ja(cutlet, by word)")
+        else:
+            import pykakasi  # noqa: F401
+
+            roma_parts.append("ja(pykakasi)")
     except Exception as e:
         import site
 
@@ -896,7 +901,7 @@ def _print_startup_banner(args):
     if roma_parts:
         print(f"  Romanization:     {', '.join(roma_parts)} (instant)")
     else:
-        print("  Romanization:     LLM-only (pip install pykakasi pypinyin for instant)")
+        print("  Romanization:     LLM-only (pip install -r server/requirements.txt for instant)")
     print("=" * 70)
 
     # Tool version checks — deferred to background so they don't block model load

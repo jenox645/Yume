@@ -76,7 +76,7 @@ See `docs/ARCHITECTURE.md`. In short:
 
 **Cache:** `config/yume_cache.db` (SQLite, `_store.py`): videos + region plans, raw transcripts per (video, language, Whisper model — `+htdemucs` when separated, region), translations per (source, target, LLM model, text), LLM romanizations.
 
-**Romanization:** pykakasi (JA) and pypinyin (ZH) on the server, built-in KO/RU tables; `None` from `_romanize.romanize()` means "LLM needed" (Arabic, or JA/ZH without the libraries). The pykakasi dictionary is pre-loaded in a background thread at startup.
+**Romanization:** JA by word with cutlet (MeCab + UniDic via fugashi/unidic-lite; vendored in `server/_vendor/cutlet` without its mojimoji dependency, which has no Python 3.13+ wheels), falling back to pykakasi; pypinyin (ZH); built-in KO/RU tables. `None` from `_romanize.romanize()` means "LLM needed" (Arabic, or JA/ZH without the libraries). The JA romanizer is pre-loaded in a background thread at startup. `server/_vendor/` is excluded from ruff/bandit/radon/coverage.
 
 ## Configuration
 

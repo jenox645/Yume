@@ -9,5 +9,10 @@ waitress==3.0.2
 numpy==2.2.6; python_version < "3.11"
 numpy==2.4.6; python_version == "3.11"
 numpy==2.5.3; python_version >= "3.12"
+# Japanese romanization: cutlet (vendored in server/_vendor) on MeCab + UniDic;
+# pykakasi is the fallback when these are missing
+fugashi==1.5.2
+unidic-lite==1.0.8
+jaconv==0.5.0
 pykakasi==2.3.0
 pypinyin==0.55.0

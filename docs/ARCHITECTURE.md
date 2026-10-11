@@ -66,8 +66,9 @@ from a content script and an MV3 service worker; see "Why server-side" below.)
      retroactively). Region-level too: a line alone in its region stamped across
      Whisper's whole 30 s window is what Whisper writes when it hears no words
      (in every language), and "thank you" in a region's last seconds.
-   - **Romanize** deterministically (JA pykakasi, ZH pypinyin, KO Revised
-     Romanization, RU BGN/PCGN); Arabic, and JA/ZH without the libraries, go to
+   - **Romanize** deterministically (JA by word with cutlet on MeCab + UniDic,
+     pykakasi as the fallback; ZH pypinyin; KO Revised Romanization with its
+     sound changes; RU BGN/PCGN); Arabic, and JA/ZH without the libraries, go to
      the LLM when the user enabled romanization.
    - **LLM worker** (one thread): batches of ≤10 untranslated lines, playhead
      first, with the video title and the previous 3 line pairs as context.

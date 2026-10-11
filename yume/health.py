@@ -128,6 +128,16 @@ def health_check(cfg: dict) -> None:
         except ImportError:
             return (pkg, True, f"optional, not installed — {desc} will use the LLM (slower)")
 
+    def _chk_cutlet():
+        # Optional like the others: without it, pykakasi romanizes Japanese
+        try:
+            import fugashi  # noqa: F401
+            import unidic_lite  # noqa: F401
+
+            return ("Japanese by word", True, "installed — cutlet on MeCab + UniDic (best romaji)")
+        except ImportError as e:
+            return ("Japanese by word", True, f"optional, not installed ({e.name}) — pykakasi is used instead")
+
     def _chk_config():
         c = load_config()
         wp = c.get("whisper_port", DEFAULT_WHISPER_PORT)
@@ -197,7 +207,8 @@ def health_check(cfg: dict) -> None:
         native = llama_server.server_path() is not None  # llama-server replaces llama-cpp-python
         f_llama = ex.submit(_chk_pkg, "llama_cpp", "llama-cpp-python") if uses_llamacpp and not native else None
         f_llama_cuda = ex.submit(_chk_llama_cuda) if uses_llamacpp else None
-        f_kakasi = ex.submit(_chk_roma, "pykakasi", "Japanese romaji (kanji→reading)")
+        f_cutlet = ex.submit(_chk_cutlet)
+        f_kakasi = ex.submit(_chk_roma, "pykakasi", "Japanese romaji fallback")
         f_pinyin = ex.submit(_chk_roma, "pypinyin", "Chinese pinyin")
         f_config = ex.submit(_chk_config)
         from yume import vocals
@@ -228,7 +239,7 @@ def health_check(cfg: dict) -> None:
             if llama_cuda is not None:
                 results.append(llama_cuda)
 
-        roma_results = [f_kakasi.result(), f_pinyin.result()]
+        roma_results = [f_cutlet.result(), f_kakasi.result(), f_pinyin.result()]
         roma_installed = sum(1 for _, ok, detail in roma_results if ok and "not installed" not in detail)
         results.extend(roma_results)
         results.append(f_vocals.result())
