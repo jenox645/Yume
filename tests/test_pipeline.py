@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import threading
 import time
 import types
 import urllib.error
@@ -305,11 +306,17 @@ def pipeline(tmp_path):
     with (
         patch.object(_audio, "download_full_audio", return_value=(str(wav), None)) as dl,
         patch.object(_audio, "download_audio_segment", return_value=None),
+        patch.object(_audio, "get_stream_url", return_value=None),
         patch.object(_audio, "remove_temp"),
     ):
         yield types.SimpleNamespace(jobs=_state.jobs, translator=translator, download=dl)
-    _state.jobs._stop = True
-    _state.jobs.drop_all("teardown")
+        _state.jobs._stop = True
+        _state.jobs.drop_all("teardown")
+        # Wait for the jobs' download threads while the fakes are still in place: one
+        # that outlived the test ran the real yt-dlp (network) and hit other tests' mocks
+        for t in threading.enumerate():
+            if t.name.startswith(("prepare-", "preview-")):
+                t.join(timeout=10)
     time.sleep(0.2)  # let a worker mid-region finish before the store closes
     _state.store.close()
     _state.model, _state.store, _state.jobs, _state.user_blacklist, _state.vocal_isolation = saved

@@ -416,7 +416,7 @@ class JobManager:
             # The preview is for a video watched from the start, not one resumed at 40:00
             preview = job.playhead < _regions.FIRST_REGION_S
             if preview and not job.stream_url and not any(r[0] == 0.0 for r in cached):
-                threading.Thread(target=self._preview, args=(job,), daemon=True).start()
+                threading.Thread(target=self._preview, args=(job,), name=f"preview-{job.id[:6]}", daemon=True).start()
 
             if job.stream_url:
                 path, err = _audio.download_direct(job.stream_url)
