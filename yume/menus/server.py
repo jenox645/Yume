@@ -295,108 +295,118 @@ def _menu_blacklist(cfg: dict) -> None:
             pause()
 
 
+_CT2_FILES = ["model.bin", "config.json", "tokenizer.json", "vocabulary.txt"]
+
+
+def _is_path(model: str) -> bool:
+    return os.path.sep in model or "/" in model
+
+
+def _short_name(model: str) -> str:
+    """A model's name; a custom model's folder name instead of its path."""
+    return Path(model).name if _is_path(model) else model
+
+
+def _ask_custom_model(cfg: dict) -> str | None:
+    """Ask for a CTranslate2 model folder (+ a friendly name); None when cancelled or invalid."""
+    print()
+    info(f"{C.DIM}Paste the path to a CTranslate2 Whisper model directory.{C.RESET}")
+    info(f"{C.DIM}The folder must contain: {', '.join(_CT2_FILES)}{C.RESET}")
+    info(f"{C.DIM}See README > Whisper Models > Using a custom or fine-tuned model for details.{C.RESET}")
+    print()
+    raw = input(f"  {C.CYAN}>{C.RESET} Path: ").strip().strip('"').strip("'")
+    if not raw:
+        info("Cancelled.")
+        return None
+    folder = Path(raw).resolve()
+    if not folder.is_dir():
+        error(f"Directory not found: {folder}")
+        return None
+    missing = [f for f in _CT2_FILES if not (folder / f).exists()]
+    if missing:
+        error(f"Not a valid CTranslate2 model — missing: {', '.join(missing)}")
+        info(f"{C.DIM}Convert your model first:{C.RESET}")
+        info(f"{C.DIM}  ct2-openai-whisper-converter --model <checkpoint> --output_dir <output>{C.RESET}")
+        info(
+            f"{C.DIM}  ct2-transformers-converter --model <hf-model> --output_dir <output> --quantization float16{C.RESET}"
+        )
+        return None
+    print()
+    info("Give this model a friendly name (shown in menus and popup).")
+    cfg["whisper_model_name"] = input(f"  {C.CYAN}>{C.RESET} Name [{folder.name}]: ").strip() or folder.name
+    return str(folder)
+
+
+def _pick_whisper_model(cur: str) -> int:
+    """Index into WHISPER_MODELS_INFO, len(models) for a custom model, -1 for Back."""
+    from yume.benchmark import WHISPER_MODELS_INFO, _is_whisper_model_cached
+
+    opts = []
+    for name, _params, vr, _desc in WHISPER_MODELS_INFO:
+        tag = (
+            f" {C.GREEN}[downloaded]{C.RESET}"
+            if _is_whisper_model_cached(name)
+            else f" {C.DIM}[not downloaded]{C.RESET}"
+        )
+        english = ", English only" if name.startswith("distil") else ""
+        opts.append((f"{name} ({vr}{english}){tag}", "active" if name == cur else None))
+    n = len(opts)
+    custom = _is_path(cur)
+    opts.append(
+        (f"Custom model (local path){f' {C.GREEN}[active]{C.RESET}' if custom else ''}", "active" if custom else None)
+    )
+    opts.append(("Back", None))
+    names = [name for name, *_ in WHISPER_MODELS_INFO]
+    ch = ask_arrow("Switch to:", opts, default=names.index(cur) if cur in names else (n if custom else n + 1))
+    return -1 if ch in (-1, n + 1) else ch
+
+
 def _menu_whisper_model(cfg: dict) -> None:
     """Interactive whisper model hot-swap."""
     from config import save_config
-    from yume.benchmark import _is_whisper_model_cached
+    from yume.benchmark import WHISPER_MODELS_INFO
 
     header("Whisper Model")
     h, p = cfg["whisper_host"], cfg["whisper_port"]
     data = _server_get(h, p, "/stats")
     cur = data.get("model", cfg.get("whisper_model", "?")) if data else cfg.get("whisper_model", "large-v3-turbo")
-    is_custom = os.path.sep in cur or "/" in cur
-    friendly_name = cfg.get("whisper_model_name", "")
+    display = cfg.get("whisper_model_name", "") or _short_name(cur)
     if data:
-        display = friendly_name or (Path(cur).name if is_custom else cur)
         info(f"Active: {C.BOLD}{display}{C.RESET}  ({data.get('device', '?')})")
-        if is_custom:
+        if _is_path(cur):
             info(f"{C.DIM}Path: {cur}{C.RESET}")
         if data.get("gpu"):
             g = data["gpu"]
             info(f"GPU: {g['gpu_name']} ({g['vram_used_mb']}/{g['vram_total_mb']} MB)")
     else:
-        display = friendly_name or (Path(cur).name if is_custom else cur)
         warn(f"Server not running. Config: {display}")
-    from yume.benchmark import WHISPER_MODELS_INFO
 
-    models = [name for name, *_ in WHISPER_MODELS_INFO]
-    vram = {
-        name: f"{vr}{', English only' if name.startswith('distil') else ''}"
-        for name, _params, vr, _desc in WHISPER_MODELS_INFO
-    }
-    opts = []
-    for m in models:
-        cached = _is_whisper_model_cached(m)
-        tag = f" {C.GREEN}[downloaded]{C.RESET}" if cached else f" {C.DIM}[not downloaded]{C.RESET}"
-        if m == cur:
-            opts.append((f"{m} ({vram.get(m, '?')}){tag}", "active"))
-        else:
-            opts.append((f"{m} ({vram.get(m, '?')}){tag}", None))
-    custom_tag = f" {C.GREEN}[active]{C.RESET}" if is_custom else ""
-    opts.append((f"Custom model (local path){custom_tag}", "active" if is_custom else None))
-    opts.append(("Back", None))
-    di = models.index(cur) if cur in models else (len(models) if is_custom else len(models) + 1)
-    ch = ask_arrow("Switch to:", opts, default=di)
-    if ch == -1 or ch == len(models) + 1:
+    ch = _pick_whisper_model(cur)
+    if ch == -1:
         return
-
-    if ch == len(models):
-        print()
-        info(f"{C.DIM}Paste the path to a CTranslate2 Whisper model directory.{C.RESET}")
-        info(f"{C.DIM}The folder must contain: model.bin, config.json, tokenizer.json, vocabulary.txt{C.RESET}")
-        info(f"{C.DIM}See README > Whisper Models > Using a custom or fine-tuned model for details.{C.RESET}")
-        print()
-        custom_path = input(f"  {C.CYAN}>{C.RESET} Path: ").strip().strip('"').strip("'")
-        if not custom_path:
-            info("Cancelled.")
+    if ch == len(WHISPER_MODELS_INFO):
+        new_model = _ask_custom_model(cfg)
+        if new_model is None:
             pause()
             return
-        custom_path = str(Path(custom_path).resolve())
-        if not Path(custom_path).is_dir():
-            error(f"Directory not found: {custom_path}")
-            pause()
-            return
-        required = ["model.bin", "config.json", "tokenizer.json", "vocabulary.txt"]
-        missing = [f for f in required if not (Path(custom_path) / f).exists()]
-        if missing:
-            error(f"Not a valid CTranslate2 model — missing: {', '.join(missing)}")
-            info(f"{C.DIM}Convert your model first:{C.RESET}")
-            info(f"{C.DIM}  ct2-openai-whisper-converter --model <checkpoint> --output_dir <output>{C.RESET}")
-            info(
-                f"{C.DIM}  ct2-transformers-converter --model <hf-model> --output_dir <output> --quantization float16{C.RESET}"
-            )
-            pause()
-            return
-        new_model = custom_path
-        dir_name = Path(custom_path).name
-        print()
-        info("Give this model a friendly name (shown in menus and popup).")
-        friendly = input(f"  {C.CYAN}>{C.RESET} Name [{dir_name}]: ").strip()
-        if not friendly:
-            friendly = dir_name
-        cfg["whisper_model_name"] = friendly
     else:
-        new_model = models[ch]
+        new_model = WHISPER_MODELS_INFO[ch][0]
         cfg["whisper_model_name"] = ""
 
     if new_model == cur:
         info("Already active")
-        pause()
-        return
-    if not data:
+    elif not data:
         cfg["whisper_model"] = new_model
         save_config(cfg)
-        display = Path(new_model).name if os.path.sep in new_model or "/" in new_model else new_model
-        success(f"Config set to {display} (applies on next launch)")
-        pause()
-        return
-    info(f"Switching to {Path(new_model).name if os.path.sep in new_model or '/' in new_model else new_model}...")
-    info(f"{C.DIM}A model's first use downloads it — this can take several minutes.{C.RESET}")
-    result = _server_post(h, p, "/model/switch", {"model": new_model}, timeout=1800)
-    if result and not result.get("error"):
-        success(f"Switched to {result.get('model', new_model)}")
-        cfg["whisper_model"] = result.get("model", new_model)
-        save_config(cfg)
+        success(f"Config set to {_short_name(new_model)} (applies on next launch)")
     else:
-        error(f"Failed: {result.get('error', 'unknown') if result else 'server unreachable'}")
+        info(f"Switching to {_short_name(new_model)}...")
+        info(f"{C.DIM}A model's first use downloads it — this can take several minutes.{C.RESET}")
+        result = _server_post(h, p, "/model/switch", {"model": new_model}, timeout=1800)
+        if result and not result.get("error"):
+            success(f"Switched to {result.get('model', new_model)}")
+            cfg["whisper_model"] = result.get("model", new_model)
+            save_config(cfg)
+        else:
+            error(f"Failed: {result.get('error', 'unknown') if result else 'server unreachable'}")
     pause()
