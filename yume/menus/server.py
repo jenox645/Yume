@@ -71,47 +71,33 @@ def cli_server_stats(cfg: dict) -> None:
 
 def cli_blacklist(cfg: dict, args: list) -> None:
     """CLI blacklist management."""
-    h, p = cfg["whisper_host"], cfg["whisper_port"]
-    if len(args) < 1:
+    if not args:
         _menu_blacklist(cfg)
         return
-    subcmd = args[0].lower()
-    # Server down: edit config/blacklist.json, which it loads at startup (like the menu)
-    data = _server_get(h, p, "/blacklist")
-    current = data.get("blacklist", []) if data else _bl_read_offline()
-    where = "" if data else f"  {C.DIM}(server not running — saved list){C.RESET}"
-
-    def _save(items: list) -> bool:
-        if not data:
-            return _bl_write_offline(items)
-        r = _server_post(h, p, "/blacklist/update", {"blacklist": items})
-        return bool(r and r.get("success"))
-
-    text = " ".join(args[1:]).strip()
+    bl = _Blacklist(cfg)
+    where = "" if bl.online else f"  {C.DIM}(server not running — saved list){C.RESET}"
+    subcmd, text = args[0].lower(), " ".join(args[1:]).strip()
     if subcmd == "list":
-        if not current:
-            info(f"Blacklist is empty{where}")
-            return
-        info(f"Blacklist ({len(current)} items):{where}")
-        for item in current:
+        info(f"Blacklist ({len(bl.items)} items):{where}" if bl.items else f"Blacklist is empty{where}")
+        for item in bl.items:
             bullet(item)
     elif subcmd == "add" and text:
-        if text.lower() in (b.lower() for b in current):
+        if bl.has(text):
             warn(f"Already blocked: {text}")
-        elif _save([*current, text]):
+        elif bl.save([*bl.items, text]):
             success(f"Added: {text}{where}")
         else:
             error("Failed to save")
     elif subcmd in ("remove", "rm") and text:
-        keep = [b for b in current if b.lower() != text.lower()]
-        if len(keep) == len(current):
+        keep = [b for b in bl.items if b.lower() != text.lower()]
+        if len(keep) == len(bl.items):
             warn(f"Not in blacklist: {text}")
-        elif _save(keep):
+        elif bl.save(keep):
             success(f"Removed: {text}{where}")
         else:
             error("Failed to save")
     elif subcmd == "clear":
-        if _save([]):
+        if bl.save([]):
             success(f"Blacklist cleared{where}")
         else:
             error("Failed to save")
@@ -209,9 +195,75 @@ def _bl_write_offline(items: list) -> bool:
         return False
 
 
+class _Blacklist:
+    """The blacklist on the running server, or config/blacklist.json (loaded at
+    server startup) when the server is down."""
+
+    def __init__(self, cfg: dict):
+        self.h, self.p = cfg["whisper_host"], cfg["whisper_port"]
+        data = _server_get(self.h, self.p, "/blacklist")
+        self.online = bool(data)
+        self.items = data.get("blacklist", []) if data else _bl_read_offline()
+
+    def save(self, items: list) -> bool:
+        if self.online:
+            r = _server_post(self.h, self.p, "/blacklist/update", {"blacklist": items})
+            ok = bool(r and r.get("success"))
+        else:
+            ok = _bl_write_offline(items)
+        if ok:
+            self.items = items
+        return ok
+
+    def has(self, text: str) -> bool:
+        return text.lower() in (b.lower() for b in self.items)
+
+
+def _bl_add(bl: _Blacklist) -> None:
+    text = ask_input("Phrase to block", "")
+    if not text:
+        pass
+    elif bl.has(text):
+        warn("Already blocked")
+    elif bl.save([*bl.items, text]):
+        success(f"Added: {text}")
+    else:
+        error("Failed")
+    pause()
+
+
+def _bl_remove(bl: _Blacklist) -> None:
+    if not bl.items:
+        info("Empty")
+        pause()
+        return
+    shown = bl.items[:20]
+    if len(bl.items) > 20:
+        info(f"Showing first 20 of {len(bl.items)} — remove others with:")
+        info(f"{C.DIM}  python pocket_yume.py blacklist remove <text>{C.RESET}")
+    ch = ask_arrow("Remove which?", [(item, None) for item in shown] + [("Back", None)], default=len(shown))
+    # Against len(shown), not len(items): with >20 items "Back" is index 20, a valid item index
+    if 0 <= ch < len(shown):
+        removed = bl.items[ch]
+        if bl.save(bl.items[:ch] + bl.items[ch + 1 :]):
+            success(f"Removed: {removed}")
+    pause()
+
+
+def _bl_clear(bl: _Blacklist) -> None:
+    if ask_yn("Clear ALL?", False) and bl.save([]):
+        success("Cleared")
+    pause()
+
+
 def _menu_blacklist(cfg: dict) -> None:
     """Blacklist management menu. Works offline too — the list lives in
     config/blacklist.json, which the server loads at startup."""
+    entries = [
+        ("Add entry", "Block a phrase from subtitles", _bl_add),
+        ("Remove entry", "Unblock a phrase", _bl_remove),
+        ("Clear all", "Remove all entries", _bl_clear),
+    ]
     while True:
         header("Subtitle Filter (Blacklist)")
         info("Whisper sometimes generates fake text that wasn't actually spoken —")
@@ -219,80 +271,20 @@ def _menu_blacklist(cfg: dict) -> None:
         info("'hallucinations'. Yume blocks known patterns automatically, but you can")
         info("add your own phrases to block here.")
         print()
-        h, p = cfg["whisper_host"], cfg["whisper_port"]
-        data = _server_get(h, p, "/blacklist")
-        offline = not data
-        if offline:
-            bl = _bl_read_offline()
+        bl = _Blacklist(cfg)
+        if not bl.online:
             warn(f"Server not running — editing the saved list ({_bl_file().name}).")
             info(f"{C.DIM}Changes apply automatically the next time the server starts.{C.RESET}")
             print()
-        else:
-            bl = data.get("blacklist", [])
-
-        def _bl_save(items: list) -> bool:
-            if offline:
-                return _bl_write_offline(items)
-            r = _server_post(h, p, "/blacklist/update", {"blacklist": items})
-            return bool(r and r.get("success"))
-
-        info(f"Blacklist: {len(bl)} items")
-        if bl:
-            for item in bl[:15]:
-                bullet(item)
-            if len(bl) > 15:
-                info(f"  ... and {len(bl) - 15} more")
-        ch = ask_arrow(
-            "Options:",
-            [
-                ("Add entry", "Block a phrase from subtitles"),
-                ("Remove entry", "Unblock a phrase"),
-                ("Clear all", "Remove all entries"),
-                ("Back", None),
-            ],
-            default=3,
-        )
-        if ch == -1 or ch == 3:
+        info(f"Blacklist: {len(bl.items)} items")
+        for item in bl.items[:15]:
+            bullet(item)
+        if len(bl.items) > 15:
+            info(f"  ... and {len(bl.items) - 15} more")
+        ch = ask_arrow("Options:", [(label, desc) for label, desc, _ in entries] + [("Back", None)], default=3)
+        if not 0 <= ch < len(entries):
             return
-        elif ch == 0:
-            text = ask_input("Phrase to block", "")
-            if text:
-                current = bl[:]
-                if text in current:
-                    warn("Already blocked")
-                    pause()
-                    continue
-                current.append(text)
-                if _bl_save(current):
-                    success(f"Added: {text}")
-                else:
-                    error("Failed")
-            pause()
-        elif ch == 1:
-            if not bl:
-                info("Empty")
-                pause()
-                continue
-            shown = bl[:20]
-            if len(bl) > 20:
-                info(f"Showing first 20 of {len(bl)} — remove others with:")
-                info(f"{C.DIM}  python pocket_yume.py blacklist remove <text>{C.RESET}")
-            opts = [(item, None) for item in shown] + [("Back", None)]
-            rc = ask_arrow("Remove which?", opts, default=len(opts) - 1)
-            # Guard against len(shown), not len(bl) — with >20 items the "Back"
-            # entry sits at index 20, which is a valid bl index.
-            if 0 <= rc < len(shown):
-                removed = bl[rc]
-                current = bl[:]
-                current.pop(rc)
-                if _bl_save(current):
-                    success(f"Removed: {removed}")
-            pause()
-        elif ch == 2:
-            if ask_yn("Clear ALL?", False):
-                if _bl_save([]):
-                    success("Cleared")
-            pause()
+        entries[ch][2](bl)
 
 
 _CT2_FILES = ["model.bin", "config.json", "tokenizer.json", "vocabulary.txt"]

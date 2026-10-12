@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import types
 from contextlib import ExitStack
@@ -371,3 +372,95 @@ def test_hf_other_repo_cpu_mode_and_back():
 def test_hf_repo_without_ggufs():
     r = browse([0, len(hf._HF_RECOMMENDED_REPOS) + 1], {"translation_backend": "llamacpp"}, files=[])
     assert len(r.prompts) == 2  # back at the repo list
+
+
+# ── Blacklist: menu and `blacklist` command, server up or down ───────────────
+
+
+class Blacklist:
+    """The server's list (`server` None = server down: config/blacklist.json in tmp)."""
+
+    def __init__(self, tmp_path, server=None, saved_file=()):
+        self.server = None if server is None else list(server)
+        self.file = tmp_path / "blacklist.json"
+        if saved_file:
+            self.file.write_text(json.dumps(list(saved_file)), encoding="utf-8")
+        self.said: list[str] = []
+
+    def _get(self, h, p, path):
+        return {"blacklist": list(self.server)} if self.server is not None else None
+
+    def _post(self, h, p, path, body, **kw):
+        assert path == "/blacklist/update"
+        self.server = list(body["blacklist"])
+        return {"success": True}
+
+    def saved(self):
+        return self.server if self.server is not None else json.loads(self.file.read_text(encoding="utf-8"))
+
+    def run(self, fn, *args, choices=(), inputs=(), yns=()):
+        say = lambda msg="", *a, **k: self.said.append(str(msg))  # noqa: E731
+        fakes = {
+            "_server_get": self._get,
+            "_server_post": self._post,
+            "_bl_file": lambda: self.file,
+            "ask_arrow": MagicMock(side_effect=list(choices)),
+            "ask_input": MagicMock(side_effect=list(inputs)),
+            "ask_yn": MagicMock(side_effect=list(yns)),
+            "header": MagicMock(),
+            "pause": MagicMock(),
+            **{n: say for n in ("info", "warn", "error", "success", "bullet")},
+        }
+        with ExitStack() as stack:
+            for name, fake in fakes.items():
+                stack.enter_context(patch.object(srv, name, fake))
+            fn({"whisper_host": "127.0.0.1", "whisper_port": 5001}, *args)
+        return self
+
+
+def test_blacklist_command_add_remove_clear_on_the_server(tmp_path):
+    b = Blacklist(tmp_path, server=["Subscribe"])
+    b.run(srv.cli_blacklist, ["add", "Thank", "you"])
+    assert b.saved() == ["Subscribe", "Thank you"]
+    b.run(srv.cli_blacklist, ["add", "thank you"])
+    assert b.saved() == ["Subscribe", "Thank you"] and any("Already blocked" in s for s in b.said)
+    b.run(srv.cli_blacklist, ["rm", "SUBSCRIBE"])
+    assert b.saved() == ["Thank you"]
+    b.run(srv.cli_blacklist, ["clear"])
+    assert b.saved() == []
+
+
+def test_blacklist_command_edits_the_saved_file_when_the_server_is_down(tmp_path):
+    b = Blacklist(tmp_path, saved_file=["Subscribe"])
+    b.run(srv.cli_blacklist, ["add", "Thanks"])
+    assert b.saved() == ["Subscribe", "Thanks"]
+    b.run(srv.cli_blacklist, ["list"])
+    assert any("server not running" in s for s in b.said)
+    b.run(srv.cli_blacklist, ["remove", "nope"])
+    assert any("Not in blacklist" in s for s in b.said)
+
+
+def test_blacklist_menu_add_remove_clear(tmp_path):
+    b = Blacklist(tmp_path, server=["Subscribe"])
+    b.run(srv._menu_blacklist, choices=[0, 3], inputs=["Thank you"])
+    assert b.saved() == ["Subscribe", "Thank you"]
+    b.run(srv._menu_blacklist, choices=[1, 0, 3])  # remove the first
+    assert b.saved() == ["Thank you"]
+    b.run(srv._menu_blacklist, choices=[2, 3], yns=[False])
+    assert b.saved() == ["Thank you"]
+    b.run(srv._menu_blacklist, choices=[2, 3], yns=[True])
+    assert b.saved() == []
+
+
+def test_blacklist_menu_offline_and_back_from_remove(tmp_path):
+    items = [f"phrase {i}" for i in range(25)]
+    b = Blacklist(tmp_path, saved_file=items)
+    b.run(srv._menu_blacklist, choices=[1, 20, 3])  # index 20 is "Back" (20 shown), not phrase 20
+    assert b.saved() == items
+    assert any("Server not running" in s for s in b.said)
+
+
+def test_blacklist_menu_ignores_case_like_the_command(tmp_path):
+    b = Blacklist(tmp_path, server=["Subscribe"])
+    b.run(srv._menu_blacklist, choices=[0, 3], inputs=["subscribe"])  # the menu used to add it twice
+    assert b.saved() == ["Subscribe"] and "Already blocked" in b.said
