@@ -297,3 +297,64 @@ test('Enable pressed twice while the video loads runs ONE session; Disable durin
   assert.equal(sessions.filter((s) => !s.stopped).length, 0);
   assert.equal(sessions.length, before);  // the cancelled start never created a session
 });
+
+// ── popup.js ───────────────────────────────────────────────────────────────
+
+// The popup's settings form against fake controls (ids, min/max as in popup.html)
+function loadPopup() {
+  const controls = {};
+  const control = (id, init = {}) => (controls[id] ??= { value: '', checked: false, min: '', max: '', style: {}, ...init });
+  let stored = {};
+  const ctx = vm.createContext({
+    console: { log: noop, warn: noop, error: noop },
+    chrome: {
+      runtime: { sendMessage: noop, getManifest: () => ({ version: '0' }) },
+      storage: { local: { get: async () => ({ settings: stored }), set: async (o) => { stored = o.settings; } } },
+    },
+    document: { addEventListener: noop, getElementById: (id) => control(id), querySelectorAll: () => [] },
+    setInterval: noop, clearInterval: noop, setTimeout, clearTimeout,
+  });
+  vm.runInContext(readFileSync(new URL('../popup.js', ROOT), 'utf8'), ctx);
+  control('glassBlur', { min: '0', max: '40' });
+  control('glassRadius', { min: '0', max: '40' });
+  control('originalFontSize', { min: '12', max: '36' });
+  control('showRomaji', { closest: () => null });
+  return { ctx, controls, stored: () => stored, setStored: (s) => { stored = s; } };
+}
+
+test('popup settings: a saved form loads back the same', async () => {
+  const { ctx, controls, stored, setStored } = loadPopup();
+  await ctx.loadSettings();  // nothing stored: the defaults
+  assert.equal(controls.showEnglish.checked, true);
+  assert.equal(controls.showRomaji.checked, false);
+  assert.equal(controls.windowTitle.value, 'Yume');
+  controls.glassBlur.value = '0';  // no blur: was saved as 18
+  controls.glassRadius.value = '0';
+  controls.showRomaji.checked = true;
+  controls.windowTitle.value = '';  // cleared: back to the default
+  await ctx.saveSettings(false);
+  assert.equal(stored().glassBlur, 0);
+  assert.equal(stored().glassRadius, 0);
+  assert.equal(stored().showRomaji, true);
+  assert.equal(stored().windowTitle, 'Yume');
+  assert.equal(stored().whisperPort, undefined);  // the port is saved by savePorts
+  setStored({ ...stored(), showEnglish: false });
+  await ctx.loadSettings();
+  assert.equal(controls.glassBlur.value, 0);
+  assert.equal(controls.showEnglish.checked, false);
+  assert.equal(controls.glassBlurVal.textContent, '0px');
+});
+
+test('popup settings: typed numbers are kept inside the control range', async () => {
+  const { ctx, controls, stored } = loadPopup();
+  await ctx.loadSettings();
+  controls.originalFontSize.value = '0';
+  await ctx.saveSettings(false);
+  assert.equal(stored().originalFontSize, 12);
+  controls.originalFontSize.value = '99';
+  await ctx.saveSettings(false);
+  assert.equal(stored().originalFontSize, 36);
+  controls.originalFontSize.value = '';
+  await ctx.saveSettings(false);
+  assert.equal(stored().originalFontSize, 19);  // empty: the default
+});
