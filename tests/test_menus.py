@@ -464,3 +464,17 @@ def test_blacklist_menu_ignores_case_like_the_command(tmp_path):
     b = Blacklist(tmp_path, server=["Subscribe"])
     b.run(srv._menu_blacklist, choices=[0, 3], inputs=["subscribe"])  # the menu used to add it twice
     assert b.saved() == ["Subscribe"] and "Already blocked" in b.said
+
+
+def test_tools_menu_opens_each_tool_once():
+    names = ["_menu_ytdlp", "_menu_ffmpeg", "_menu_deno", "_menu_backend", "_menu_llama_server", "_vocals_menu",
+             "browse_hf", "_menu_pydeps", "_test_translation", "_benchmark", "_fonts", "_extension_help"]  # fmt: skip
+    calls = {n: MagicMock() for n in names}
+    with ExitStack() as stack:
+        for n, m in calls.items():
+            stack.enter_context(patch.object(tools, n, m))
+        stack.enter_context(patch.object(tools, "ask_arrow", MagicMock(side_effect=[*range(len(names)), -1])))
+        stack.enter_context(patch.object(tools, "header", MagicMock()))
+        stack.enter_context(patch.object(tools, "find_tool", lambda t: None))
+        tools.tools_menu({})
+    assert all(m.call_count == 1 for m in calls.values()), {n: m.call_count for n, m in calls.items()}

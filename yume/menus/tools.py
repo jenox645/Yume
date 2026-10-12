@@ -34,76 +34,65 @@ _log = logging.getLogger("pocket_yume")
 # ── Tools menu ─────────────────────────────────────────────────────────────────
 
 
+def _vocals_menu(cfg: dict) -> None:
+    from yume import vocals
+
+    vocals.menu(cfg)
+
+
+def _benchmark(cfg: dict) -> None:
+    from yume.benchmark import benchmark_whisper
+
+    benchmark_whisper(cfg)
+
+
+def _fonts(cfg: dict) -> None:
+    from yume.health import detect_fonts
+
+    detect_fonts()
+
+
+def _extension_help(cfg: dict) -> None:
+    from yume.setup import _extension_guide
+
+    header("Browser Extension")
+    _extension_guide()
+    pause()
+
+
 def tools_menu(cfg: dict) -> None:
     """Tools management menu."""
-    from yume.benchmark import benchmark_whisper
-    from yume.health import detect_fonts
+    from yume import llama_server
 
     while True:
         # Same name as the main-menu entry that leads here
         header("Tools & Fonts")
-        yt = find_tool("yt-dlp")
-        ff = find_tool("ffmpeg")
-        dn = find_tool("deno")
         # ✓/✗ carry the meaning; colour is reinforcement only (colourblind-safe)
         ok = f"{C.GREEN}✓ installed{C.RESET}"
         miss = f"{C.RED}✗ missing{C.RESET}"
         opt_miss = f"{C.DIM}– not installed{C.RESET}"
-        from yume import llama_server
-
         build = llama_server.installed_build() if llama_server.server_path() else {}
         engine = f"{C.GREEN}✓ {build.get('variant', '?')}{C.RESET}" if build else opt_miss
+        entries = [
+            (f"yt-dlp          {ok if find_tool('yt-dlp') else miss}", "Downloads audio from YouTube and 1000+ video sites", _menu_ytdlp),
+            (f"FFmpeg          {ok if find_tool('ffmpeg') else miss}", "Converts audio between formats (required)", lambda cfg: _menu_ffmpeg()),
+            (f"Deno            {ok if find_tool('deno') else opt_miss}", "Helps bypass YouTube bot detection (optional)", _menu_deno),
+            ("Translation Backend", "Choose how Yume translates: llama.cpp / Ollama / LM Studio / Custom", _menu_backend),
+            (f"Translation Engine  {engine}", "Install / update llama.cpp's prebuilt GPU server (llama-server)", lambda cfg: _menu_llama_server()),
+            ("Vocal Isolation", "Separate the singer from the music before transcribing (better lyrics)", _vocals_menu),
+            ("Download Translation Model", "Browse and download GGUF models (the files your translator uses)", browse_hf),
+            ("Python Dependencies", "Install required Python packages + romanization libraries", lambda cfg: _menu_pydeps()),
+            ("Test Translation", "Send a test sentence to check if translation is working", _test_translation),
+            ("Benchmark Whisper", "Measure how fast each speech recognition model runs on your hardware", _benchmark),
+            ("Detect Fonts", "Find subtitle-compatible fonts installed on your system", _fonts),
+            ("Browser Extension", "How to load Yume in Chrome, Edge, Brave or Firefox", _extension_help),
+        ]  # fmt: skip
         ch = ask_arrow(
-            "Select a tool:",
-            [
-                (f"yt-dlp          {ok if yt else miss}", "Downloads audio from YouTube and 1000+ video sites"),
-                (f"FFmpeg          {ok if ff else miss}", "Converts audio between formats (required)"),
-                (f"Deno            {ok if dn else opt_miss}", "Helps bypass YouTube bot detection (optional)"),
-                ("Translation Backend", "Choose how Yume translates: llama.cpp / Ollama / LM Studio / Custom"),
-                (f"Translation Engine  {engine}", "Install / update llama.cpp's prebuilt GPU server (llama-server)"),
-                ("Vocal Isolation", "Separate the singer from the music before transcribing (better lyrics)"),
-                ("Download Translation Model", "Browse and download GGUF models (the files your translator uses)"),
-                ("Python Dependencies", "Install required Python packages + romanization libraries"),
-                ("Test Translation", "Send a test sentence to check if translation is working"),
-                ("Benchmark Whisper", "Measure how fast each speech recognition model runs on your hardware"),
-                ("Detect Fonts", "Find subtitle-compatible fonts installed on your system"),
-                ("Browser Extension", "How to load Yume in Chrome, Edge, Brave or Firefox"),
-                ("Back", None),
-            ],
-            default=12,
+            "Select a tool:", [(label, desc) for label, desc, _ in entries] + [("Back", None)], default=len(entries)
         )
-        if ch == -1 or ch == 12:
+        if not 0 <= ch < len(entries):
             return
-        elif ch == 0:
-            _menu_ytdlp(cfg)
-        elif ch == 1:
-            _menu_ffmpeg()
-        elif ch == 2:
-            _menu_deno(cfg)
-        elif ch == 3:
-            _menu_backend(cfg)
-        elif ch == 4:
-            _menu_llama_server()
-        elif ch == 5:
-            from yume import vocals
-
-            vocals.menu(cfg)
-        elif ch == 6:
-            browse_hf(cfg)
-        elif ch == 7:
-            _menu_pydeps()
-        elif ch == 8:
-            _test_translation(cfg)
-        elif ch == 9:
-            benchmark_whisper(cfg)
-        elif ch == 10:
-            detect_fonts()
-        elif ch == 11:
-            from yume.setup import _extension_guide
-
-            header("Browser Extension")
-            _extension_guide()
-            pause()
+        entries[ch][2](cfg)
 
 
 def _menu_llama_server() -> None:
