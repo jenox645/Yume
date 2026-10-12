@@ -494,6 +494,32 @@ class _TimedOut(Exception):
     pass
 
 
+def _ytdlp_audio_cmd(url, fmt_args, auth_args, output_template, pp_opts):
+    return [
+        *ytdlp_cmd(),
+        *fmt_args,
+        "-x",
+        "--audio-format",
+        "wav",
+        "--postprocessor-args",
+        pp_opts,
+        "--no-playlist",
+        "--no-cache-dir",
+        "--no-exec",
+        *auth_args,
+        "-o",
+        output_template,
+        "--",
+        url,
+    ]
+
+
+def _ytdlp_error(result):
+    """A failed run's last ERROR line, as advice for the user."""
+    lines = [ln.strip() for ln in (result.stderr or "").split("\n") if ln.strip() and "ERROR" in ln.upper()]
+    return friendlify_ytdlp_error(lines[-1][:300] if lines else f"exit code {result.returncode}")
+
+
 def _ytdlp_strategies(url, strategies, output_template, output_path, pp_opts):
     """Strategy 1: yt-dlp with each auth strategy × format pass.
 
@@ -507,25 +533,8 @@ def _ytdlp_strategies(url, strategies, output_template, output_path, pp_opts):
         for fmt_pass, fmt_args in _FORMAT_PASSES:
             tag = f"{label}/{fmt_pass}"
             print(f"[Yume] Trying yt-dlp ({tag}): {url[:80]}...")
-            cmd = [
-                *ytdlp_cmd(),
-                *fmt_args,
-                "-x",
-                "--audio-format",
-                "wav",
-                "--postprocessor-args",
-                pp_opts,
-                "--no-playlist",
-                "--no-cache-dir",
-                "--no-exec",
-                *extra_args,
-                "-o",
-                output_template,
-                "--",
-                url,
-            ]
             try:
-                result = _run_tool(cmd)
+                result = _run_tool(_ytdlp_audio_cmd(url, fmt_args, extra_args, output_template, pp_opts))
             except subprocess.TimeoutExpired:
                 print(f"[Yume] yt-dlp ({label}) timed out")
                 raise _TimedOut from None
@@ -548,11 +557,7 @@ def _ytdlp_strategies(url, strategies, output_template, output_path, pp_opts):
             if _state.ERR_REQUESTED_FORMAT in stderr_lower and fmt_pass == "bestaudio":
                 continue  # skip to nofmt pass of same auth strategy
 
-            error_lines = [
-                ln.strip() for ln in (result.stderr or "").split("\n") if ln.strip() and "ERROR" in ln.upper()
-            ]
-            raw_err = error_lines[-1][:300] if error_lines else f"exit code {result.returncode}"
-            last_error = friendlify_ytdlp_error(raw_err)
+            last_error = _ytdlp_error(result)
             print(f"[Yume] yt-dlp ({tag}) failed: {last_error[:150]}")
             if any(w in stderr_lower for w in _AUTH_ERROR_WORDS):
                 break  # auth error — skip nofmt pass, move to next auth strategy
