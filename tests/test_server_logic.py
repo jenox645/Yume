@@ -198,33 +198,3 @@ class TestHallucinationDetection:
         ]
         for text in real_speech:
             assert text not in self.COMMON_HALLUCINATIONS
-
-
-class TestVersionConsistency:
-    """Verify version strings are consistent across project files."""
-
-    def test_pocket_yume_version_format(self):
-        content = Path(__file__).parent.parent.joinpath("pocket_yume.py").read_text(encoding="utf-8")
-        import re
-
-        match = re.search(r'VERSION\s*=\s*"(\d+\.\d+\.\d+)"', content)
-        assert match, "VERSION not found in pocket_yume.py"
-        version = match.group(1)
-        parts = version.split(".")
-        assert len(parts) == 3
-        assert all(p.isdigit() for p in parts)
-
-    def test_manifest_version_matches(self):
-        import json
-
-        content = Path(__file__).parent.parent.joinpath("pocket_yume.py").read_text(encoding="utf-8")
-        import re
-
-        match = re.search(r'VERSION\s*=\s*"(\d+\.\d+\.\d+)"', content)
-        assert match, "VERSION not found in pocket_yume.py"
-        py_version = match.group(1)
-
-        manifest = json.loads(Path(__file__).parent.parent.joinpath("extension/manifest.json").read_text())
-        assert manifest["version"] == py_version, (
-            f"manifest.json ({manifest['version']}) != pocket_yume.py ({py_version})"
-        )

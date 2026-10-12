@@ -14,14 +14,9 @@ import sys
 from pathlib import Path
 
 from yume import servers
-from yume.hardware import IS_WIN, detect_gpu
-from yume.network import (
-    check_ollama_models,
-    check_server,
-    check_translation_server,
-    discover_servers,
-    reset_api_token,
-)
+from yume.constants import VERSION, GGUF_DIR, LOGS_DIR, IS_WIN, BACKEND_INFO, backend_info
+from yume.hardware import detect_gpu
+from yume.network import check_ollama_models, check_server, check_translation_server, discover_servers, reset_api_token
 from yume.ports import ensure_port_free, find_free_port, is_port_free, kill_port_process
 from yume.ui import (
     C,
@@ -38,13 +33,9 @@ from yume.ui import (
     success,
     warn,
 )
-from yume.utils import LOGS_DIR, _run
+from yume.utils import _run
 
 _log = logging.getLogger("pocket_yume")
-
-# Injected at startup by pocket_yume
-_BACKEND_INFO: dict = {}
-_VERSION: str = "0.1.0"
 
 
 def _offer_llama_server() -> bool:
@@ -67,13 +58,6 @@ def _offer_llama_server() -> bool:
     from yume import llama_server
 
     return llama_server.install(gpu)
-
-
-def set_launch_context(backend_info: dict, version: str) -> None:
-    """Called by pocket_yume at startup to inject BACKEND_INFO and VERSION."""
-    global _BACKEND_INFO, _VERSION
-    _BACKEND_INFO = backend_info
-    _VERSION = version
 
 
 # ── Resource detection helpers ────────────────────────────────────────────────
@@ -260,7 +244,7 @@ def _launch_inner(cfg: dict, procs: servers.Processes) -> None:
     from config import DEFAULT_TRANSLATION_PORT, DEFAULT_WHISPER_PORT, save_config
 
     # --- Check for already-running servers ---
-    existing = discover_servers(cfg, _BACKEND_INFO)
+    existing = discover_servers(cfg, BACKEND_INFO)
     if existing.get("whisper") and existing.get("translation"):
         info("Both servers are already running!")
         if ask_yn("Open runtime menu with existing servers?", True):
@@ -330,7 +314,7 @@ def _launch_inner(cfg: dict, procs: servers.Processes) -> None:
         warn("AMD RDNA1 GPU detected. Setting HSA_OVERRIDE_GFX_VERSION=10.3.0")
         info("Add 'export HSA_OVERRIDE_GFX_VERSION=10.3.0' to ~/.bashrc to make this permanent.")
 
-    bi = _BACKEND_INFO.get(bk, _BACKEND_INFO.get("custom", {"hp": "/health"}))
+    bi = backend_info(bk)
 
     # --- START TRANSLATION BACKEND ---
     if bk == "llamacpp":
@@ -340,7 +324,7 @@ def _launch_inner(cfg: dict, procs: servers.Processes) -> None:
         if not _start_ollama(cfg, procs, env):
             return
     else:
-        bn = _BACKEND_INFO.get(bk, {}).get("name", bk)
+        bn = BACKEND_INFO.get(bk, {}).get("name", bk)
         info(f"{bn} -- make sure it's running at {cfg['translation_host']}:{cfg['translation_port']}")
 
     # --- START WHISPER SERVER ---
@@ -350,8 +334,8 @@ def _launch_inner(cfg: dict, procs: servers.Processes) -> None:
     # --- READY ---
     clear()
     print()
-    success(f"Yume is running!  {C.DIM}v{_VERSION}{C.RESET}")
-    tn = _BACKEND_INFO.get(bk, {}).get("name", bk)
+    success(f"Yume is running!  {C.DIM}v{VERSION}{C.RESET}")
+    tn = BACKEND_INFO.get(bk, {}).get("name", bk)
     print(f"  {C.CYAN}Whisper{C.RESET}      http://{cfg['whisper_host']}:{cfg['whisper_port']}")  # noqa: S5332 — display only, local server
     print(f"  {C.MAGENTA}Translation{C.RESET}  http://{cfg['translation_host']}:{cfg['translation_port']}  ({tn})")  # noqa: S5332 — display only, local server
     print()
@@ -399,8 +383,6 @@ def _start_llamacpp(cfg: dict, procs: servers.Processes, bi: dict, env: dict) ->
     configured = cfg.get("gguf_model_path", "")
     gp = servers.resolve_gguf(cfg)
     if gp is None:
-        from yume.utils import GGUF_DIR
-
         error("No .gguf model found in models/translation/")
         info("Fix: Main Menu → Tools → Download GGUF Model")
         info(f"Or: place a .gguf file in {GGUF_DIR}")
@@ -547,7 +529,7 @@ def _runtime_menu(cfg: dict, procs: servers.Processes, bk: str) -> None:
     from yume.benchmark import benchmark_whisper
     from yume.menus import _menu_blacklist, _menu_whisper_model, _test_translation, cli_server_stats
 
-    bi = _BACKEND_INFO.get(bk, _BACKEND_INFO.get("custom", {}))
+    bi = backend_info(bk)
 
     def _stop_all() -> None:
         print(f"\n  {C.YELLOW}Shutting down...{C.RESET}")

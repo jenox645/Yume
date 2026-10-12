@@ -4,39 +4,34 @@ from __future__ import annotations
 
 import concurrent.futures
 import os
-import platform
 import re
 import sys
 import time
 from pathlib import Path
 
+from yume.constants import (
+    BASE_DIR,
+    SERVER_DIR,
+    EXT_DIR,
+    PLAT,
+    IS_WIN,
+    IS_MAC,
+    ARCH,
+    GiB,
+    HEALTH_PATH_OPENAI,
+    backend_info,
+)
 from yume.hardware import detect_gpu, detect_ram_gb, disk_free_gb, recommend_whisper_model
 from yume.network import check_server, check_translation_server
 from yume.ports import get_port_process, is_port_free
 from yume.ui import C, bullet, header, info, panel, pause, section, success, table, warn
-from yume.utils import BASE_DIR, GiB, find_gguf_models, find_tool
+from yume.utils import find_gguf_models, find_tool
 
-_PLAT = platform.system()
-_IS_WIN = _PLAT == "Windows"
-_IS_MAC = _PLAT == "Darwin"
-_ARCH = platform.machine().lower()
-
-SERVER_DIR = BASE_DIR / "server"
-EXT_DIR = BASE_DIR / "extension"
-
-# Populated by pocket_yume at startup via set_backend_info()
-_BI: dict = {}
 
 # 30-second hardware info cache — avoids re-calling nvidia-smi on every status render
 _hw_cache: dict | None = None
 _hw_cache_ts: float = 0.0
 _HW_CACHE_TTL = 30.0
-
-
-def set_backend_info(bi: dict) -> None:
-    """Inject the BACKEND_INFO dict from pocket_yume at startup."""
-    global _BI
-    _BI = bi
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
@@ -175,7 +170,7 @@ def _chk_whisper_srv(wp):
 
 def _chk_translation_srv(c, tp):
     bk = c.get("translation_backend", "llamacpp")
-    bi = _BI.get(bk, _BI.get("custom", {"hp": "/health"}))
+    bi = backend_info(bk)
     ts = check_translation_server(c.get("translation_host", "127.0.0.1"), tp, bi)
     rows = [_port_row("Translation", tp, ts["up"], bk == "llamacpp")]
     if ts["up"]:
@@ -349,7 +344,6 @@ def show_status(cfg: dict) -> None:
     global _hw_cache, _hw_cache_ts
 
     from config import DEFAULT_TRANSLATION_PORT
-    from yume.network import HEALTH_PATH_OPENAI
     from yume.benchmark import _is_whisper_model_cached
 
     header("System Status")
@@ -380,7 +374,7 @@ def show_status(cfg: dict) -> None:
             ["GPU", gpu_txt],
             ["RAM", f"{ram:.1f} GB" + (f"  {C.GREEN}OK{C.RESET}" if ram >= 8 else f"  {C.YELLOW}low{C.RESET}")],
             ["Disk", f"{disk:.1f} GB free" + (f"  {C.GREEN}OK{C.RESET}" if disk >= 10 else f"  {C.RED}low!{C.RESET}")],
-            ["OS", f"{_PLAT} ({_ARCH})"],
+            ["OS", f"{PLAT} ({ARCH})"],
         ],
         col_styles=[C.BOLD, C.RESET],
         title="Hardware",
@@ -412,7 +406,7 @@ def show_status(cfg: dict) -> None:
     table(["Package", "Status"], pkg_rows, col_styles=[C.CYAN, C.RESET], title="Python Packages")
 
     bk = cfg.get("translation_backend", "llamacpp")
-    bi = _BI.get(bk, _BI.get("custom", {"hp": HEALTH_PATH_OPENAI}))
+    bi = backend_info(bk)
     ws = check_server(cfg["whisper_host"], cfg["whisper_port"], "/health")
     ts = check_server(cfg["translation_host"], cfg["translation_port"], bi["hp"])
     if not ts["up"]:
@@ -478,10 +472,10 @@ def detect_fonts() -> None:
     print()
 
     font_dirs = []
-    if _IS_WIN:
+    if IS_WIN:
         winfonts = Path(os.environ.get("WINDIR", "C:\\Windows")) / "Fonts"
         font_dirs = [winfonts]
-    elif _IS_MAC:
+    elif IS_MAC:
         font_dirs = [Path("/Library/Fonts"), Path.home() / "Library/Fonts", Path("/System/Library/Fonts")]
     else:
         font_dirs = [Path("/usr/share/fonts"), Path.home() / ".local/share/fonts", Path("/usr/local/share/fonts")]

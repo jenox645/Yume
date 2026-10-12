@@ -7,10 +7,8 @@ import logging
 import sys
 import urllib.request
 
-from yume.network import (
-    check_ollama_models,
-    check_translation_server,
-)
+from yume.constants import TOOLS_DIR, GGUF_DIR, GiB, BACKEND_INFO, backend_info
+from yume.network import check_ollama_models, check_translation_server
 from yume.ports import find_free_port, get_port_process, is_port_free
 from yume.ui import (
     C,
@@ -26,9 +24,8 @@ from yume.ui import (
     success,
     warn,
 )
-from yume.utils import GGUF_DIR, TOOLS_DIR, GiB, find_gguf_models, find_tool
+from yume.utils import find_gguf_models, find_tool
 
-from yume.menus import _shared
 from yume.menus.hf_browser import browse_hf
 
 _log = logging.getLogger("pocket_yume")
@@ -415,7 +412,7 @@ def _menu_backend(cfg: dict) -> None:
     while True:
         header("Translation Backend")
         cur = cfg.get("translation_backend", "llamacpp")
-        bi = _shared.BI.get(cur, _shared.BI.get("custom", {}))
+        bi = backend_info(cur)
         info(f"Current: {C.BOLD}{bi.get('name', cur)}{C.RESET}")
         info(
             f"Address: {C.CYAN}{cfg.get('translation_host', '127.0.0.1')}:"
@@ -469,15 +466,15 @@ def _select_backend(cfg: dict) -> None:
     from config import save_config
 
     header("Select Backend")
-    keys = list(_shared.BI.keys())
-    opts = [(_shared.BI[k]["name"], _shared.BI[k]["desc"]) for k in keys] + [("Back", None)]
+    keys = list(BACKEND_INFO.keys())
+    opts = [(BACKEND_INFO[k]["name"], BACKEND_INFO[k]["desc"]) for k in keys] + [("Back", None)]
     cur = cfg.get("translation_backend", "llamacpp")
     di = keys.index(cur) if cur in keys else 0
     ch = ask_arrow("Choose:", opts, default=di)
     if ch == -1 or ch == len(keys):
         return
     k = keys[ch]
-    bi = _shared.BI[k]
+    bi = BACKEND_INFO[k]
     cfg["translation_backend"] = k
     cfg["translation_host"] = bi["dh"]
     cfg["translation_port"] = bi["dp"]
@@ -547,7 +544,7 @@ def _manage_model(cfg: dict) -> None:
         bk = cfg.get("translation_backend", "llamacpp")
         mdl = cfg.get("translation_model", "")
         gp = cfg.get("gguf_model_path", "")
-        bi = _shared.BI.get(bk, {})
+        bi = BACKEND_INFO.get(bk, {})
         info(f"Backend: {C.BOLD}{bi.get('name', bk)}{C.RESET}")
         if mdl:
             info(f"Model:   {C.BOLD}{mdl}{C.RESET}")
@@ -640,7 +637,7 @@ def _manage_model(cfg: dict) -> None:
                 success(f"Selected: {gf[fc].name}")
                 if cfg["translation_backend"] != "llamacpp":
                     if ask_yn("Switch to llama.cpp backend?"):
-                        bi2 = _shared.BI.get("llamacpp", {})
+                        bi2 = BACKEND_INFO.get("llamacpp", {})
                         cfg["translation_backend"] = "llamacpp"
                         cfg["translation_host"] = bi2.get("dh", "127.0.0.1")
                         cfg["translation_port"] = bi2.get("dp", 5000)
@@ -728,14 +725,13 @@ def _menu_pydeps() -> None:
 
 def _test_translation(cfg: dict) -> None:
     from config import DEFAULT_TRANSLATION_PORT
-    from yume.network import HEALTH_PATH_OPENAI  # type: ignore[attr-defined]
 
     header("Test Translation")
     bk = cfg.get("translation_backend", "llamacpp")
     h = cfg.get("translation_host", "127.0.0.1")
     p = cfg.get("translation_port", DEFAULT_TRANSLATION_PORT)
     m = cfg.get("translation_model", "")
-    bi = _shared.BI.get(bk, _shared.BI.get("custom", {"ap": "/v1/chat/completions", "hp": HEALTH_PATH_OPENAI}))
+    bi = backend_info(bk)
 
     info(f"Backend: {bi.get('name', bk)} ({h}:{p})")
     if m:

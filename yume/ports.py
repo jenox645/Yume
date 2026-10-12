@@ -5,15 +5,14 @@ from __future__ import annotations
 import logging
 import re
 import socket as _socket
-import sys
 import time
 
 from config import DEFAULT_TRANSLATION_PORT, DEFAULT_WHISPER_PORT
+from yume.constants import IS_WIN
 from yume.ui import C, ask_arrow, ask_input, ask_yn, error, info, success, warn
 
 _log = logging.getLogger("pocket_yume")
 
-IS_WIN = sys.platform == "win32"
 
 MIN_PORT = 1
 MAX_PORT = 65535

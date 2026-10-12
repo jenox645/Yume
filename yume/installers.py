@@ -12,21 +12,17 @@ import threading
 import time
 import zipfile
 
+from yume.constants import BASE_DIR, TOOLS_DIR, IS_WIN, IS_MAC, IS_LIN, EXE, DOWNLOAD_URLS
 from yume.ui import C, error, info, success, warn
-from yume.utils import BASE_DIR, TOOLS_DIR, _run, find_tool
+from yume.utils import _run, find_tool
 
 _log = logging.getLogger("pocket_yume")
 
-IS_WIN = sys.platform == "win32"
-IS_MAC = sys.platform == "darwin"
-IS_LIN = sys.platform.startswith("linux")
-EXE = ".exe" if IS_WIN else ""
 UNIX_EXEC_MODE = 0o750
 
 _pip_venv_warned = False
 
 # Download URLs are supplied by pocket_yume at runtime to avoid duplication
-_DOWNLOAD_URLS: dict = {}
 
 # Published checksum files next to "latest" release assets. Verified when
 # available; a mismatch aborts the install. (Same origin as the binary, so this
@@ -57,7 +53,7 @@ def _expected_sha256(url: str) -> str | None:
 def _download_verified(key: str, dest, label: str) -> bool:
     from yume.network import download_file
 
-    url = _DOWNLOAD_URLS.get(key, "")
+    url = DOWNLOAD_URLS.get(key, "")
     sha = _expected_sha256(url) if url else None
     if sha:
         info(f"{C.DIM}Verifying against the published SHA-256 checksum{C.RESET}")
@@ -76,12 +72,6 @@ def _safe_extractall(zf: zipfile.ZipFile, target_dir: "os.PathLike[str]") -> Non
         except ValueError as exc:
             raise ValueError(f"Unsafe path in archive member: {member!r}") from exc
     zf.extractall(target_dir)  # nosec B202 — every member validated above
-
-
-def set_download_urls(urls: dict) -> None:
-    """Called by pocket_yume to inject platform-specific URLs."""
-    global _DOWNLOAD_URLS
-    _DOWNLOAD_URLS = urls
 
 
 # ── Pip helpers ───────────────────────────────────────────────────────────────
@@ -251,7 +241,7 @@ def install_ffmpeg() -> bool:
             r = _run(["brew", "install", "ffmpeg"], timeout=600)
             return r.returncode == 0
         zp = TOOLS_DIR / "ffmpeg.zip"
-        if not download_file(_DOWNLOAD_URLS.get("ffmpeg", ""), zp, "FFmpeg"):
+        if not download_file(DOWNLOAD_URLS.get("ffmpeg", ""), zp, "FFmpeg"):
             return False
         try:
             with zipfile.ZipFile(zp) as zf:
@@ -357,7 +347,7 @@ def install_ollama() -> bool:
     if IS_WIN:
         TOOLS_DIR.mkdir(parents=True, exist_ok=True)
         inst = TOOLS_DIR / "OllamaSetup.exe"
-        if not download_file(_DOWNLOAD_URLS.get("ollama", ""), inst, "Ollama installer"):
+        if not download_file(DOWNLOAD_URLS.get("ollama", ""), inst, "Ollama installer"):
             return False
         print(f"\n  {C.YELLOW}The Ollama installer will now open. Follow the prompts.{C.RESET}\n")
         from yume.ui import pause
@@ -381,7 +371,7 @@ def install_ollama() -> bool:
         from yume.network import download_file
 
         zp = TOOLS_DIR / "Ollama.zip"
-        if not download_file(_DOWNLOAD_URLS.get("ollama", ""), zp, "Ollama"):
+        if not download_file(DOWNLOAD_URLS.get("ollama", ""), zp, "Ollama"):
             return False
         info("Extract and move to Applications manually.")
         return True
@@ -392,7 +382,7 @@ def install_ollama() -> bool:
         try:
             from yume.network import download_file
 
-            if not download_file(_DOWNLOAD_URLS.get("ollama", ""), script, "Ollama install script"):
+            if not download_file(DOWNLOAD_URLS.get("ollama", ""), script, "Ollama install script"):
                 return False
             script.chmod(UNIX_EXEC_MODE)
             # Not captured: the script asks for the sudo password

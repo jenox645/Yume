@@ -68,7 +68,6 @@ class Check:
             "info": lambda msg="", *a: self.advice.append(str(msg)),
             "warn": lambda msg="", *a: self.advice.append(str(msg)),
             "success": MagicMock(),
-            "_BI": {"llamacpp": {"hp": "/health"}, "ollama": {"hp": "/api/tags"}, "custom": {"hp": "/health"}},
         }
         with ExitStack() as stack:
             for name, fake in fakes.items():

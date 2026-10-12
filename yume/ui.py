@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import os
-import platform
 import re
 import shutil
 import sys
 import unicodedata
-
-PLAT = platform.system()
-IS_WIN = PLAT == "Windows"
+from yume.constants import IS_WIN
 
 
 # ── Colour codes ──────────────────────────────────────────────────────────────

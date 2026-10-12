@@ -50,7 +50,7 @@ jobs:
 
       - name: Version consistency
         run: |
-          VERSION=$(python -c "import re; m=re.search(r'VERSION\s*=\s*\"([\d.]+)\"', open('pocket_yume.py').read()); print(m.group(1))")
+          VERSION=$(python -c "from yume.constants import VERSION; print(VERSION)")
           echo "Expected version: $VERSION"
           python -c "
           import json, sys
@@ -107,13 +107,17 @@ jobs:
           python-version: '3.11'
 
       - name: Install tools
-        run: pip install radon vulture
+        run: pip install radon vulture xenon
 
       - name: Cyclomatic complexity
-        run: radon cc pocket_yume.py server/ config.py -a -nc -e "server/_vendor/*"
+        run: radon cc pocket_yume.py config.py server/ yume/ -a -nc -e "server/_vendor/*"
+
+      # Fails when a function gets more complex than the worst one today
+      - name: Complexity gate
+        run: xenon --max-absolute E --exclude "server/_vendor/*" pocket_yume.py config.py server yume
 
       - name: Maintainability index
-        run: radon mi pocket_yume.py server/ config.py -nc -e "server/_vendor/*"
+        run: radon mi pocket_yume.py config.py server/ yume/ -nc -e "server/_vendor/*"
 
       - name: Dead code detection
         run: vulture pocket_yume.py config.py server/ yume/ vulture_whitelist.py --exclude "server/_vendor" --min-confidence 80
@@ -178,7 +182,7 @@ jobs:
       - name: Generate call graphs
         run: |
           mkdir -p reports
-          pyan3 pocket_yume.py --dot --no-defines --grouped | dot -Tsvg -o reports/callgraph_pocket_yume.svg || true
+          pyan3 yume/cli.py --dot --no-defines --grouped | dot -Tsvg -o reports/callgraph_cli.svg || true
           pyan3 server/faster_whisper_server.py server/_api.py server/_startup.py --dot --no-defines --grouped | dot -Tsvg -o reports/callgraph_server.svg || true
 
       - name: Upload call graphs

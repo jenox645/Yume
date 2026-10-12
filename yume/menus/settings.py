@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+from yume.constants import BASE_DIR, IS_WIN, backend_info
 from yume.hardware import detect_gpu, recommend_whisper_model
 from yume.ui import (
     C,
@@ -18,9 +19,7 @@ from yume.ui import (
     success,
     table,
 )
-from yume.utils import BASE_DIR
 
-from yume.menus import _shared
 from yume.menus.server import _menu_whisper_model
 from yume.menus.tools import _change_addr, _menu_backend, _menu_yt_auth, menu_one_click
 
@@ -45,7 +44,7 @@ def settings_menu(cfg: dict) -> None:
 
     while True:
         header("Settings")
-        bi = _shared.BI.get(cfg.get("translation_backend", "llamacpp"), _shared.BI.get("custom", {}))
+        bi = backend_info(cfg.get("translation_backend", "llamacpp"))
         ym = cfg["youtube_auth_method"]
         if ym == "cookies":
             ym += f" ({cfg.get('cookies_browser', 'chrome')})"
@@ -54,11 +53,9 @@ def settings_menu(cfg: dict) -> None:
         comp_raw = cfg["whisper_compute_type"]
         gpu = detect_gpu()
         if dev_raw == "auto":
-            from yume.hardware import IS_WIN as _IS_WIN
-
             if gpu["has_nvidia"]:
                 dev_display = f"{C.GREEN}cuda{C.RESET} (auto)"
-            elif gpu.get("has_amd") and not _IS_WIN:
+            elif gpu.get("has_amd") and not IS_WIN:
                 dev_display = f"{C.RED}cuda{C.RESET} (auto, ROCm)"
             else:
                 dev_display = "cpu (auto)"

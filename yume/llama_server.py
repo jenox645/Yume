@@ -22,7 +22,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from yume.utils import TOOLS_DIR, _run
+from yume.constants import TOOLS_DIR
+from yume.utils import _run
 
 _log = logging.getLogger("pocket_yume")
 

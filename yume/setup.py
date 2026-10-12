@@ -10,27 +10,24 @@ import sys
 import time
 from pathlib import Path
 
-from yume.hardware import IS_WIN, detect_gpu, detect_ram_gb, disk_free_gb, recommend_whisper_model
-from yume.network import HEALTH_PATH_OLLAMA, check_server
+from yume.constants import (
+    BASE_DIR,
+    TOOLS_DIR,
+    MODELS_DIR,
+    GGUF_DIR,
+    LOGS_DIR,
+    EXT_DIR,
+    IS_WIN,
+    EXE,
+    HEALTH_PATH_OLLAMA,
+    BACKEND_INFO,
+)
+from yume.hardware import detect_gpu, detect_ram_gb, disk_free_gb, recommend_whisper_model
+from yume.network import check_server
 from yume.ui import C, ask_arrow, ask_yn, center, error, header, info, pause, section, success, warn
-from yume.utils import BASE_DIR, EXE, LOGS_DIR, TOOLS_DIR, _run, _try_import, find_gguf_models, find_tool
+from yume.utils import _run, _try_import, find_gguf_models, find_tool
 
 _log = logging.getLogger("pocket_yume")
-
-# Injected at startup by pocket_yume
-_BACKEND_INFO: dict = {}
-_MODELS_DIR: Path = BASE_DIR / "models"
-_GGUF_DIR: Path = BASE_DIR / "models" / "translation"
-_VERSION: str = "0.1.0"
-
-
-def set_setup_context(backend_info: dict, models_dir: Path, gguf_dir: Path, version: str) -> None:
-    """Called by pocket_yume at startup to inject shared state."""
-    global _BACKEND_INFO, _MODELS_DIR, _GGUF_DIR, _VERSION
-    _BACKEND_INFO = backend_info
-    _MODELS_DIR = models_dir
-    _GGUF_DIR = gguf_dir
-    _VERSION = version
 
 
 # ── Setup wizard ──────────────────────────────────────────────────────────────
@@ -96,7 +93,6 @@ def _extension_guide() -> None:
     models, but subtitles only appear once the extension is loaded in the
     browser — and nothing else in the first-run path explains how.
     """
-    from yume.utils import EXT_DIR
 
     print()
     section("Browser Extension  (required — this is where subtitles appear)")
@@ -309,7 +305,7 @@ def _check_components(cfg: dict, gpu: dict) -> tuple[list[str], bool]:
 
     print()
     detected = False
-    for k, bi in _BACKEND_INFO.items():
+    for k, bi in BACKEND_INFO.items():
         if k != "custom" and check_server(bi["dh"], bi["dp"], bi["hp"])["up"]:
             detected = True
             success(f"Detected: {bi['name']} on port {bi['dp']}")
@@ -401,7 +397,7 @@ def _use_ollama(cfg: dict) -> None:
 
     from yume.installers import install_ollama, pull_ollama_model
 
-    bi = _BACKEND_INFO["ollama"]
+    bi = BACKEND_INFO["ollama"]
     cfg["translation_backend"] = "ollama"
     cfg["translation_host"] = bi["dh"]
     cfg["translation_port"] = bi["dp"]
@@ -568,7 +564,7 @@ def uninstall_yume() -> None:
     whisper_caches = sorted(hf_hub.glob("models--*faster*whisper*")) if hf_hub.exists() else []
     dirs = [
         ("Tools (yt-dlp, ffmpeg, deno)", TOOLS_DIR),
-        ("Translation models (downloaded AI model files)", _GGUF_DIR),
+        ("Translation models (downloaded AI model files)", GGUF_DIR),
         ("Configuration, blacklist, saved subtitles", CONFIG_DIR),
         ("Logs", LOGS_DIR),
     ] + [(f"Whisper model {d.name.split('--')[-1]}", d) for d in whisper_caches]
@@ -646,9 +642,9 @@ def uninstall_yume() -> None:
                 except Exception as e:
                     error(f"Failed to remove {label}: {e}")
 
-        if _MODELS_DIR.exists():
+        if MODELS_DIR.exists():
             try:
-                shutil.rmtree(_MODELS_DIR)
+                shutil.rmtree(MODELS_DIR)
             except Exception as e:
                 _log.debug("[uninstall_yume] cleanup failed: %s", e)
 

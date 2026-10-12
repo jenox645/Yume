@@ -188,4 +188,4 @@ one place for prompts, caching, the blacklist and scheduling.
 - **No build step** for the extension — plain scripts, one cross-browser
   manifest (`service_worker` for Chromium, `scripts` for Firefox 121+).
 - **CLI package layout** — `pocket_yume.py` is the entry point; logic lives in
-  `yume/`, with shared state injected through `set_*()` setters.
+  `yume/` (`cli.py` dispatches commands), shared constants in `yume/constants.py`.

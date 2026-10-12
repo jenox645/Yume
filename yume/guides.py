@@ -7,9 +7,9 @@ an outcome, end to end, without reading the README. Keep each guide short
 
 from __future__ import annotations
 
+from yume.constants import LOGS_DIR, EXT_DIR
 from yume.hardware import detect_gpu, recommend_whisper_model
 from yume.ui import C, ask_arrow, bullet, header, info, pause, section
-from yume.utils import EXT_DIR, LOGS_DIR
 
 
 def _steps(*lines: str) -> None:

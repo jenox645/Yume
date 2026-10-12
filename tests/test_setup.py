@@ -82,7 +82,7 @@ class Wizard:
             "yume.llama_server": ls,
         }
         fakes = {
-            "_BACKEND_INFO": BACKEND_INFO,
+            "BACKEND_INFO": BACKEND_INFO,
             "detect_gpu": MagicMock(return_value=self.gpu),
             "detect_ram_gb": MagicMock(return_value=32.0),
             "disk_free_gb": MagicMock(return_value=100.0),

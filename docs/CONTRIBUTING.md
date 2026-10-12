@@ -81,7 +81,7 @@ Check [Issues](https://github.com/jenox645/Yume/issues) for open tasks. Look for
 2. Keep PRs focused — one feature or fix per PR
 3. Run the full test suite: `pytest tests/ -v` and `npm test`
 4. Run the linters: `ruff check .` and `npx eslint extension/`
-5. When releasing, bump the version in `pocket_yume.py`, `server/_state.py` (`SERVER_VERSION`), `extension/manifest.json` and the README badge
+5. When releasing, bump the version in `yume/constants.py`, `server/_state.py` (`SERVER_VERSION`), `extension/manifest.json` and the README badge
 6. Describe what you changed and why in the PR description
 
 ## Architecture Quick Reference

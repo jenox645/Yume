@@ -6,17 +6,10 @@ import logging
 import platform
 import shutil
 from pathlib import Path
+from yume.constants import IS_WIN, IS_MAC, MiB, GiB
 
 _log = logging.getLogger("pocket_yume")
 
-PLAT = platform.system()
-IS_WIN = PLAT == "Windows"
-IS_MAC = PLAT == "Darwin"
-IS_LIN = PLAT == "Linux"
-
-KiB = 1024
-MiB = 1024**2
-GiB = 1024**3
 
 # Whisper models offered by Yume — the single list every menu, the benchmark,
 # the launcher's resource check and the recommendation use.

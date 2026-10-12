@@ -22,9 +22,8 @@ import sys
 import time
 
 from yume import servers
-from yume.hardware import IS_WIN
+from yume.constants import BASE_DIR, IS_WIN, backend_info
 from yume.servers import console_python, windowless_python  # noqa: F401 (spawn_detached, native host)
-from yume.utils import BASE_DIR
 
 _log = logging.getLogger("pocket_yume.service")
 
@@ -253,9 +252,8 @@ def request_stop(timeout: float = 20) -> bool:
 
 
 class _Supervisor:
-    def __init__(self, cfg: dict, backend_info: dict):
+    def __init__(self, cfg: dict):
         self.cfg = cfg
-        self.backend_info = backend_info
         self.procs = servers.Processes(hidden=True)
         self.started = time.time()
 
@@ -264,7 +262,7 @@ class _Supervisor:
     def _start_translation(self, env: dict) -> str | None:
         cfg = self.cfg
         bk = cfg.get("translation_backend", "llamacpp")
-        bi = self.backend_info.get(bk, self.backend_info.get("custom", {}))
+        bi = backend_info(bk)
         if bk == "llamacpp":
             r = servers.start_llamacpp(
                 cfg, bi, self.procs, env, stop=self._stop_requested, timeout=TRANSLATION_START_TIMEOUT_S
@@ -346,7 +344,7 @@ class _Supervisor:
             TOKEN_FILE.unlink(missing_ok=True)  # that server's token is dead now
 
 
-def serve(cfg: dict, backend_info: dict) -> int:
+def serve(cfg: dict) -> int:
     """Run Yume headless until idle/stopped. Returns a process exit code."""
     log_fh = servers.open_rotating_log(SERVICE_LOG)
     # pythonw has no stdout/stderr; anything printed by shared helpers goes to the log
@@ -361,7 +359,7 @@ def serve(cfg: dict, backend_info: dict) -> int:
         _log.info("another supervisor is running — exiting")
         return 0
     STOP_FILE.unlink(missing_ok=True)
-    sup = _Supervisor(cfg, backend_info)
+    sup = _Supervisor(cfg)
     code = 1
     try:
         code = sup.run()

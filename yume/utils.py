@@ -7,25 +7,12 @@ import logging
 import os
 import shutil
 import subprocess
-import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+from yume.constants import BASE_DIR, TOOLS_DIR, GGUF_DIR, EXE
 
 _log = logging.getLogger("pocket_yume")
-
-BASE_DIR = Path(__file__).parent.parent.resolve()
-TOOLS_DIR = BASE_DIR / "tools"
-SERVER_DIR = BASE_DIR / "server"
-EXT_DIR = BASE_DIR / "extension"
-GGUF_DIR = BASE_DIR / "models" / "translation"
-LOGS_DIR = BASE_DIR / "logs"
-
-EXE = ".exe" if sys.platform == "win32" else ""
-
-KiB = 1024
-MiB = 1024**2
-GiB = 1024**3
 
 
 def _run(cmd: list, timeout: int = 30, **kw) -> subprocess.CompletedProcess:
