@@ -192,7 +192,9 @@ def is_hallucination(text):
 # ("…パープルドリームしてみてみてみてみて…" x150). Real lyrics rarely repeat a
 # word 5 times inside one line without spaces; "la la la la" is caught as a
 # whole-line hallucination above.
-_LOOP_RE = re.compile(r"(.{1,12}?)\1{4,}", re.DOTALL)
+# The repeated unit: a syllable ("みて") up to a phrase ("عن ماذا يتحدث ", 14 chars, which a
+# 12-char limit let through: a 27 s Arabic loop line was shown)
+_LOOP_RE = re.compile(r"(.{1,40}?)\1{4,}", re.DOTALL)
 LOOP_LINES = 3  # this many identical consecutive lines = a hallucination loop
 
 

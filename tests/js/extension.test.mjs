@@ -358,3 +358,17 @@ test('popup settings: typed numbers are kept inside the control range', async ()
   await ctx.saveSettings(false);
   assert.equal(stored().originalFontSize, 19);  // empty: the default
 });
+
+test('a server notice (wrong language picked) is shown as a warning, once', () => {
+  const { ctx, events } = load('session.js');
+  const s = new ctx.SubtitleSession();
+  const snap = { status: 'transcribing', segments: [], progress: {}, rev: 1, notice: 'This video sounds like English' };
+  s._apply(snap);
+  const warnings = () => events.filter((e) => e.type === 'display-status' && e.detail.type === 'warning');
+  assert.equal(warnings().at(-1).detail.message, 'This video sounds like English');
+  const shown = warnings().length;
+  s._apply({ ...snap, rev: 2, segments: [{ id: 1, start: 0, end: 2, text: 'x' }] });
+  assert.equal(warnings().length, shown);  // not repeated once lines arrive
+  s._apply({ ...snap, rev: 3, notice: '' });
+  assert.equal(s.notice, '');
+});

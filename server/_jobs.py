@@ -28,8 +28,8 @@ import _romanize
 import _separate
 import _state
 from _filter import clean_raw_segments, is_credits_line, is_fragment, is_hallucination, window_hallucinations
-from _transcribe import transcribe_audio
-from _translate import BATCH_SIZE, TranslationError, _unshout
+from _transcribe import detect_language, transcribe_audio
+from _translate import BATCH_SIZE, TranslationError, _unshout, src_name
 
 SR = _regions.SAMPLE_RATE
 ACTIVE_S = 30  # a job polled within this window is being watched
@@ -41,6 +41,9 @@ MAX_TRANSLATE_TRIES = 3
 NEAR_S = 20  # lines starting this soon after the playhead are translated first...
 NEAR_BATCH = 3  # ...in batches this small
 READING_LANGS = {"ja", "zh", "ko"}  # romanization sent with each line to translate
+LANG_SURE = 0.85  # Whisper this sure a region is another language...
+LANG_MISSES = 2  # ...in this many regions: the user picked the wrong language
+LANG_CHECKS = 4  # regions checked at most (a song's English chorus is one region)
 
 
 MAX_SECONDS = 24 * 3600
@@ -113,6 +116,9 @@ class Job:
         self.playhead = seconds(params.get("playhead"))  # YouTube resumes where you left off
         self.last_poll = time.time()
         self.events = collections.deque(maxlen=60)
+        self.notice = ""  # shown in the overlay: the video sounds like another language
+        self.lang_checks = 0 if self.language else LANG_CHECKS  # nothing to check on auto-detect
+        self.lang_misses = collections.Counter()
         self.context = []  # recent (source, translation) pairs for the LLM
         self.llm_backoff_until = 0.0
         self.lock = threading.RLock()
@@ -177,6 +183,26 @@ class Job:
             with _state.stats_lock:
                 _state.server_stats["hallucinations_filtered"] += dropped
         self._update_status()
+
+    def check_language(self, heard, prob):
+        """Whisper forced into the wrong language writes garbage: an English
+        news video set to Arabic came out as English lines, "ترجمة نانسي قنقر"
+        and loops. Tell the user once two regions clearly sound like another
+        language; stop at the first region that clearly matches."""
+        if self.lang_checks >= LANG_CHECKS or heard is None or prob < LANG_SURE:
+            return
+        self.lang_checks += 1
+        if heard == self.language:
+            self.lang_checks = LANG_CHECKS
+            return
+        self.lang_misses[heard] += 1
+        if self.lang_misses[heard] >= LANG_MISSES:
+            self.lang_checks = LANG_CHECKS
+            self.notice = (
+                f"This video sounds like {src_name(heard)}, but Yume is set to {src_name(self.language)}. "
+                f"If the subtitles look wrong, change the source language in the Yume popup."
+            )
+            self.event(self.notice, "warn")
 
     def _hide_boundary_fragments(self, idx):
         """Regions are transcribed apart, so a word spoken across a cut can end
@@ -278,6 +304,7 @@ class Job:
                 "error": self.error,
                 "duration": self.duration,
                 "rev": self.rev,
+                "notice": self.notice,
                 "language": self.language,
                 "target": self.target,
                 "progress": {
@@ -630,6 +657,10 @@ class JobManager:
                         raise RuntimeError("stream segment download failed")
                     audio = _audio.load_audio(path)
                 raw = transcribe_audio(audio, job.language, start, is_first_region=(idx == 0))
+                if job.lang_checks < LANG_CHECKS:
+                    heard, prob = detect_language(audio)
+                    with job.lock:
+                        job.check_language(heard, prob)
                 _state.store.put_transcript(job.video_key, job.lang_key, job.model, start, end, raw)
                 with job.lock:
                     job.event(f"Region {idx + 1}/{len(job.regions)} [{start:.0f}-{end:.0f}s]: {len(raw)} lines")

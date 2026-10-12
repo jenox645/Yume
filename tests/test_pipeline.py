@@ -1152,3 +1152,40 @@ def test_an_unexpected_translation_error_does_not_stop_the_worker(pipeline):
         time.sleep(0.05)
     assert job.status == "done" and len(calls) > 1
     assert any("Translation failed: unexpected reply" in e["msg"] for e in job.snapshot(0, events=True)["events"])
+
+
+@pytest.mark.parametrize(
+    ("heard", "notice"),
+    [
+        ([("en", 0.97), ("en", 0.95)], "sounds like English, but Yume is set to Arabic"),
+        ([("ar", 0.99), ("en", 0.97), ("en", 0.97)], ""),  # a region clearly in Arabic settles it
+        ([("en", 0.6), ("en", 0.7), ("en", 0.5)], ""),  # not sure enough
+        ([("en", 0.97), ("fr", 0.95), ("en", 0.6), ("ja", 0.9)], ""),  # no language twice in 4 checks
+    ],
+)
+def test_the_user_is_told_when_the_video_sounds_like_another_language(heard, notice):
+    job = _jobs.Job(("v", "ar", "", "m"), {"language": "ar"})
+    for lang, prob in heard:
+        job.check_language(lang, prob)
+    assert (notice in job.notice) if notice else job.notice == ""
+
+
+def test_language_is_checked_while_transcribing_and_shown_in_the_snapshot(pipeline):
+    with patch.object(_jobs, "detect_language", return_value=("en", 0.97)) as det:
+        snap = _run(pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "wrong-lang"}))
+    assert "sounds like English, but Yume is set to Japanese" in snap["notice"]
+    assert det.call_count == _jobs.LANG_MISSES  # stops checking once decided
+    with patch.object(_jobs, "detect_language", return_value=("ja", 0.99)) as det:
+        snap = _run(pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "right-lang"}))
+    assert snap["notice"] == "" and det.call_count == 1
+    with patch.object(_jobs, "detect_language") as det:  # auto-detect: nothing to check
+        _run(pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "auto", "language": None}))
+    det.assert_not_called()
+
+
+def test_a_loop_of_a_long_phrase_is_cut():
+    import _filter
+
+    line = "هل تتحدث عن ماذا يمكن أن يتحدث " + "عن ماذا يتحدث " * 30  # 14-char unit: was let through
+    out, hide = _filter.clean_raw_segments([_seg(50.0, 77.5, line)])
+    assert out[0]["text"] == "هل تتحدث عن ماذا يمكن أن يتحدث عن ماذا يتحدث" and not hide
