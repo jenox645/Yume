@@ -169,18 +169,18 @@ def _time_model(model_name: str, device: str, compute: str, test_wav: Path, wher
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
-    t0 = time.time()
+    t0 = time.perf_counter()
     model = WhisperModel(model_name, device=device, compute_type=compute)
-    load_time = time.time() - t0
+    load_time = time.perf_counter() - t0
     success(f"Loaded{where} in {load_time:.1f}s")
 
     info(f"{C.DIM}Running 3 transcription passes ({TEST_SECONDS}s test audio each)...{C.RESET}")
     times = []
     for _ in range(3):
-        t0 = time.time()
+        t0 = time.perf_counter()
         segs, _info = model.transcribe(str(test_wav), language="ja", vad_filter=False, word_timestamps=False)
         list(segs)
-        times.append(time.time() - t0)
+        times.append(time.perf_counter() - t0)
     median_time = sorted(times)[len(times) // 2]
     speed = TEST_SECONDS / median_time if median_time > 0 else 0
     success(f"Median{where}: {median_time:.3f}s for {TEST_SECONDS}s audio ({speed:.1f}x realtime)")
