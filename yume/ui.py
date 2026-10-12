@@ -7,6 +7,7 @@ import re
 import shutil
 import sys
 import unicodedata
+
 from yume.constants import IS_WIN
 
 

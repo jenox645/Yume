@@ -22,6 +22,7 @@ import os
 import struct
 import sys
 from pathlib import Path
+
 from yume.constants import BASE_DIR, IS_WIN
 
 if __package__ in (None, ""):  # run as a script by the browser

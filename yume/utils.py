@@ -10,6 +10,7 @@ import subprocess
 import urllib.error
 import urllib.request
 from pathlib import Path
+
 from yume.constants import BASE_DIR, TOOLS_DIR, GGUF_DIR, EXE
 
 _log = logging.getLogger("pocket_yume")

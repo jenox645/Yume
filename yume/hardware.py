@@ -6,6 +6,7 @@ import logging
 import platform
 import shutil
 from pathlib import Path
+
 from yume.constants import IS_WIN, IS_MAC, MiB, GiB
 
 _log = logging.getLogger("pocket_yume")
