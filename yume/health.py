@@ -39,232 +39,277 @@ def set_backend_info(bi: dict) -> None:
     _BI = bi
 
 
-def health_check(cfg: dict) -> None:
-    """Comprehensive health check — all checks run in parallel for speed."""
-    from config import DEFAULT_TRANSLATION_PORT, DEFAULT_WHISPER_PORT, load_config
+# ── Health check ──────────────────────────────────────────────────────────────
+# Each check returns one (name, passed, detail) row, a list of rows, or None.
+
+
+def _chk_system():
+    gpu = detect_gpu()
+    ram = detect_ram_gb()
+    disk = disk_free_gb()
+    return [
+        ("GPU detection", True, gpu["name"] or "CPU mode"),
+        ("RAM ≥ 4 GB", ram >= 4, f"{ram:.1f} GB"),
+        ("Disk ≥ 5 GB", disk >= 5, f"{disk:.1f} GB free"),
+    ]
+
+
+def _chk_tool(t):
     from yume.utils import _run
 
-    header("Health Check")
-    info(f"{C.DIM}Running checks in parallel...{C.RESET}")
-    print()
-
-    # ── Define individual check functions (run concurrently) ──────────────────
-
-    def _chk_system():
-        gpu = detect_gpu()
-        ram = detect_ram_gb()
-        disk = disk_free_gb()
-        return [
-            ("GPU detection", True, gpu["name"] or "CPU mode"),
-            ("RAM ≥ 4 GB", ram >= 4, f"{ram:.1f} GB"),
-            ("Disk ≥ 5 GB", disk >= 5, f"{disk:.1f} GB free"),
-        ]
-
-    def _chk_tool(t):
-        p = find_tool(t)
-        if p:
-            r = _run([p, "--version" if t == "yt-dlp" else "-version"], timeout=5)
-            ok = r.returncode == 0
-            return (f"{t} installed", ok, p if ok else f"found at {p} but fails to run")
+    p = find_tool(t)
+    if not p:
         return (f"{t} installed", False, "not found")
+    r = _run([p, "--version" if t == "yt-dlp" else "-version"], timeout=5)
+    ok = r.returncode == 0
+    return (f"{t} installed", ok, p if ok else f"found at {p} but fails to run")
 
-    def _chk_deno():
-        dn = find_tool("deno")
-        if cfg.get("youtube_auth_method") != "cookies":
-            return [("deno installed", dn is not None, dn or "not found (needed for YouTube)")]
-        return []
 
-    def _chk_pip():
-        r = _run([sys.executable, "-m", "pip", "--version"], timeout=10)
-        if r.returncode == 0:
-            parts = r.stdout.strip().split()
-            ver = parts[1] if len(parts) >= 2 else "unknown"
-        else:
-            ver = "not found — install python3-pip"
-        return ("pip available", r.returncode == 0, ver)
+def _chk_deno(cfg):
+    if cfg.get("youtube_auth_method") == "cookies":
+        return None
+    dn = find_tool("deno")
+    return ("deno installed", dn is not None, dn or "not found (needed for YouTube)")
 
-    def _chk_pkg(pkg, name):
-        try:
-            __import__(pkg)
-            return (name, True, "installed")
-        except ImportError:
-            return (name, False, "not installed")
 
-    def _chk_requirements():
-        from yume.utils import missing_requirements
+def _chk_pip():
+    from yume.utils import _run
 
-        miss = missing_requirements()
-        return ("Server packages", not miss, "all installed" if not miss else "missing: " + ", ".join(miss))
+    r = _run([sys.executable, "-m", "pip", "--version"], timeout=10)
+    if r.returncode != 0:
+        return ("pip available", False, "not found — install python3-pip")
+    parts = r.stdout.strip().split()
+    return ("pip available", True, parts[1] if len(parts) >= 2 else "unknown")
 
-    def _chk_llama_cuda():
-        from yume import llama_server
 
-        if llama_server.server_path():
-            build = llama_server.installed_build()
-            variant = build.get("variant", "?")
-            return ("Translation engine", True, f"llama-server {build.get('tag', '')} ({variant})")
-        gpu = detect_gpu()
-        if not (gpu.get("has_nvidia") or gpu.get("has_amd")):
-            return None  # not relevant on CPU-only machines
-        try:
-            import llama_cpp.llama_cpp as _lib  # type: ignore[import]
+def _chk_pkg(pkg, name):
+    try:
+        __import__(pkg)
+        return (name, True, "installed")
+    except ImportError:
+        return (name, False, "not installed")
 
-            cuda_ok = callable(getattr(_lib, "ggml_backend_cuda_reg", None))
-            if cuda_ok:
-                return ("llama-cpp CUDA support", True, "GPU offloading available")
-            return (
-                "llama-cpp CUDA support",
-                False,
-                "CPU-only build — model will use RAM, not VRAM. Re-run setup to reinstall with CUDA",
-            )
-        except ImportError:
-            return ("llama-cpp CUDA support", False, "llama-cpp-python not installed")
 
-    def _chk_roma(pkg, desc):
-        # Optional lib: always PASS, but the detail must not read like a failure
-        try:
-            __import__(pkg)
-            return (pkg, True, f"installed — {desc}")
-        except ImportError:
-            return (pkg, True, f"optional, not installed — {desc} will use the LLM (slower)")
+def _chk_requirements():
+    from yume.utils import missing_requirements
 
-    def _chk_cutlet():
-        # Optional like the others: without it, pykakasi romanizes Japanese
-        try:
-            import fugashi  # noqa: F401
-            import unidic_lite  # noqa: F401
+    miss = missing_requirements()
+    return ("Server packages", not miss, "all installed" if not miss else "missing: " + ", ".join(miss))
 
-            return ("Japanese by word", True, "installed — cutlet on MeCab + UniDic (best romaji)")
-        except ImportError as e:
-            return ("Japanese by word", True, f"optional, not installed ({e.name}) — pykakasi is used instead")
 
-    def _chk_config():
-        c = load_config()
-        wp = c.get("whisper_port", DEFAULT_WHISPER_PORT)
-        tp = c.get("translation_port", DEFAULT_TRANSLATION_PORT)
-        rows = [
-            ("Config loadable", bool(c), "OK" if c else "corrupted"),
-            ("Ports different", wp != tp, f"whisper:{wp} translation:{tp}"),
-        ]
-        return rows, c, wp, tp
+def _chk_llama_cuda():
+    from yume import llama_server
 
-    def _port_row(label, port, responding, launched_by_yume):
-        """A busy port is only a problem when something OTHER than the expected
-        server holds it (the old check failed whenever Yume was running)."""
-        if is_port_free(port):
-            ok = launched_by_yume  # free is fine if Yume will start it; an external LLM should be up
-            return (f"{label} port {port}", ok, "free — starts on Launch" if ok else "nothing listening")
-        if responding:
-            return (f"{label} port {port}", True, "in use by the running server")
-        pid, name = get_port_process(port)
-        return (f"{label} port {port}", False, f"held by {name or 'unknown'} (PID {pid or '?'}), not by the server")
+    if llama_server.server_path():
+        build = llama_server.installed_build()
+        return ("Translation engine", True, f"llama-server {build.get('tag', '')} ({build.get('variant', '?')})")
+    gpu = detect_gpu()
+    if not (gpu.get("has_nvidia") or gpu.get("has_amd")):
+        return None  # not relevant on CPU-only machines
+    try:
+        import llama_cpp.llama_cpp as _lib  # type: ignore[import]
+    except ImportError:
+        return ("llama-cpp CUDA support", False, "llama-cpp-python not installed")
+    if callable(getattr(_lib, "ggml_backend_cuda_reg", None)):
+        return ("llama-cpp CUDA support", True, "GPU offloading available")
+    return (
+        "llama-cpp CUDA support",
+        False,
+        "CPU-only build — model will use RAM, not VRAM. Re-run setup to reinstall with CUDA",
+    )
 
-    def _chk_whisper_srv(c, wp):
-        ws = check_server("127.0.0.1", wp, "/health")
-        status = ws["data"].get("status")
-        rows = [_port_row("Whisper", wp, bool(status), True)]
-        if status:
-            ok = status in ("ready", "loading")
-            detail = f"status: {status}" + (f" — {ws['data'].get('error')}" if status == "error" else "")
-            rows.append(("Whisper server responding", ok, detail))
-            if status == "ready":
-                rows.append(_chk_end_to_end())
-        return rows
 
-    def _chk_end_to_end():
-        """Translate a sentence THROUGH the Whisper server, exactly like subtitles do."""
-        from yume.network import server_post
+def _chk_roma(pkg, desc):
+    # Optional lib: always PASS, but the detail must not read like a failure
+    try:
+        __import__(pkg)
+        return (pkg, True, f"installed — {desc}")
+    except ImportError:
+        return (pkg, True, f"optional, not installed — {desc} will use the LLM (slower)")
 
-        r = server_post("127.0.0.1", wp, "/translation/test", {"text": "今日はいい天気ですね"}, timeout=150)
-        if r.get("success"):
-            return ("Translation end-to-end", True, f"今日はいい天気ですね → {r.get('translation', '')[:50]}")
-        return ("Translation end-to-end", False, (r.get("error") or "failed")[:90])
 
-    def _chk_translation_srv(c, tp):
-        bk = c.get("translation_backend", "llamacpp")
-        bi = _BI.get(bk, _BI.get("custom", {"hp": "/health"}))
-        ts = check_translation_server(c.get("translation_host", "127.0.0.1"), tp, bi)
+def _chk_cutlet():
+    # Optional like the others: without it, pykakasi romanizes Japanese
+    try:
+        import fugashi  # noqa: F401
+        import unidic_lite  # noqa: F401
+
+        return ("Japanese by word", True, "installed — cutlet on MeCab + UniDic (best romaji)")
+    except ImportError as e:
+        return ("Japanese by word", True, f"optional, not installed ({e.name}) — pykakasi is used instead")
+
+
+def _port_row(label, port, responding, launched_by_yume):
+    """A busy port is only a problem when something OTHER than the expected
+    server holds it (the old check failed whenever Yume was running)."""
+    if is_port_free(port):
+        ok = launched_by_yume  # free is fine if Yume will start it; an external LLM should be up
+        return (f"{label} port {port}", ok, "free — starts on Launch" if ok else "nothing listening")
+    if responding:
+        return (f"{label} port {port}", True, "in use by the running server")
+    pid, name = get_port_process(port)
+    return (f"{label} port {port}", False, f"held by {name or 'unknown'} (PID {pid or '?'}), not by the server")
+
+
+def _chk_end_to_end(wp):
+    """Translate a sentence THROUGH the Whisper server, exactly like subtitles do."""
+    from yume.network import server_post
+
+    r = server_post("127.0.0.1", wp, "/translation/test", {"text": "今日はいい天気ですね"}, timeout=150)
+    if r.get("success"):
+        return ("Translation end-to-end", True, f"今日はいい天気ですね → {r.get('translation', '')[:50]}")
+    return ("Translation end-to-end", False, (r.get("error") or "failed")[:90])
+
+
+def _chk_whisper_srv(wp):
+    ws = check_server("127.0.0.1", wp, "/health")
+    status = ws["data"].get("status")
+    rows = [_port_row("Whisper", wp, bool(status), True)]
+    if status:
+        detail = f"status: {status}" + (f" — {ws['data'].get('error')}" if status == "error" else "")
+        rows.append(("Whisper server responding", status in ("ready", "loading"), detail))
+        if status == "ready":
+            rows.append(_chk_end_to_end(wp))
+    return rows
+
+
+def _chk_translation_srv(c, tp):
+    bk = c.get("translation_backend", "llamacpp")
+    bi = _BI.get(bk, _BI.get("custom", {"hp": "/health"}))
+    ts = check_translation_server(c.get("translation_host", "127.0.0.1"), tp, bi)
+    rows = [_port_row("Translation", tp, ts["up"], bk == "llamacpp")]
+    if ts["up"]:
         busy = ts["data"].get("status") == "busy"
-        rows = [_port_row("Translation", tp, ts["up"], bk == "llamacpp")]
-        if ts["up"]:
-            rows.append(("Translation server responding", True, "busy (generating)" if busy else "OK"))
-        return rows
+        rows.append(("Translation server responding", True, "busy (generating)" if busy else "OK"))
+    return rows
 
-    # ── Run all checks in parallel ─────────────────────────────────────────────
-    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
-        f_system = ex.submit(_chk_system)
-        f_ytdlp = ex.submit(_chk_tool, "yt-dlp")
-        f_ffmpeg = ex.submit(_chk_tool, "ffmpeg")
-        f_ffprobe = ex.submit(_chk_tool, "ffprobe")
-        f_deno = ex.submit(_chk_deno)
-        f_pip = ex.submit(_chk_pip)
-        f_fw = ex.submit(_chk_pkg, "faster_whisper", "faster-whisper")
-        f_flask = ex.submit(_chk_pkg, "flask", "Flask")
-        f_reqs = ex.submit(_chk_requirements)
-        uses_llamacpp = cfg.get("translation_backend", "llamacpp") == "llamacpp"
-        from yume import llama_server
 
-        native = llama_server.server_path() is not None  # llama-server replaces llama-cpp-python
-        f_llama = ex.submit(_chk_pkg, "llama_cpp", "llama-cpp-python") if uses_llamacpp and not native else None
-        f_llama_cuda = ex.submit(_chk_llama_cuda) if uses_llamacpp else None
-        f_cutlet = ex.submit(_chk_cutlet)
-        f_kakasi = ex.submit(_chk_roma, "pykakasi", "Japanese romaji fallback")
-        f_pinyin = ex.submit(_chk_roma, "pypinyin", "Chinese pinyin")
-        f_config = ex.submit(_chk_config)
-        from yume import vocals
-
-        f_vocals = ex.submit(vocals.health_row, cfg)
-
-        # Collect config first (needed for server checks)
-        config_rows, c, wp, tp = f_config.result()
-
-        f_wsrv = ex.submit(_chk_whisper_srv, c, wp)
-        f_tsrv = ex.submit(_chk_translation_srv, c, tp)
-
-        # ── Assemble results in display order ──────────────────────────────────
-        results = []
-        results.extend(f_system.result())
-        results.append(f_ytdlp.result())
-        results.append(f_ffmpeg.result())
-        results.append(f_ffprobe.result())
-        results.extend(f_deno.result())
-        results.append(f_pip.result())
-        results.append(f_fw.result())
-        results.append(f_flask.result())
-        results.append(f_reqs.result())
-        if f_llama is not None:
-            results.append(f_llama.result())
-        if f_llama_cuda is not None:
-            llama_cuda = f_llama_cuda.result()
-            if llama_cuda is not None:
-                results.append(llama_cuda)
-
-        roma_results = [f_cutlet.result(), f_kakasi.result(), f_pinyin.result()]
-        roma_installed = sum(1 for _, ok, detail in roma_results if ok and "not installed" not in detail)
-        results.extend(roma_results)
-        results.append(f_vocals.result())
-        if roma_installed == 0:
-            info(f"\n  {C.DIM}Tip: Install romanization libraries for instant romaji/pinyin:{C.RESET}")
-            info(f"  {C.CYAN}pip install pykakasi pypinyin{C.RESET}")
-            info(f"  {C.DIM}Without them, Yume uses the LLM for romanization (slower).{C.RESET}\n")
-
-        results.extend(config_rows)
-
-        results.extend(f_tsrv.result())
-        results.extend(f_wsrv.result())
-
-    # 7. Server files (fast, no need to parallelize)
+def _chk_server_script():
     ss = SERVER_DIR / "faster_whisper_server.py"
     if not ss.exists():
         ss = BASE_DIR / "faster_whisper_server.py"
-    results.append(("Whisper server script", ss.exists(), str(ss) if ss.exists() else "MISSING"))
+    return ("Whisper server script", ss.exists(), str(ss) if ss.exists() else "MISSING")
 
-    # 8. GGUF model (if llamacpp backend)
+
+def _as_rows(result) -> list:
+    if result is None:
+        return []
+    return result if isinstance(result, list) else [result]
+
+
+def _run_checks(cfg: dict) -> list:
+    """Run every check in parallel; rows come back in display order."""
+    from config import DEFAULT_TRANSLATION_PORT, DEFAULT_WHISPER_PORT, load_config
+
+    from yume import llama_server, vocals
+
+    c = load_config()
+    wp = c.get("whisper_port", DEFAULT_WHISPER_PORT)
+    tp = c.get("translation_port", DEFAULT_TRANSLATION_PORT)
+    uses_llamacpp = cfg.get("translation_backend", "llamacpp") == "llamacpp"
+    native = llama_server.server_path() is not None  # llama-server replaces llama-cpp-python
+
+    checks = [
+        (_chk_system,),
+        (_chk_tool, "yt-dlp"),
+        (_chk_tool, "ffmpeg"),
+        (_chk_tool, "ffprobe"),
+        (_chk_deno, cfg),
+        (_chk_pip,),
+        (_chk_pkg, "faster_whisper", "faster-whisper"),
+        (_chk_pkg, "flask", "Flask"),
+        (_chk_requirements,),
+    ]
+    if uses_llamacpp and not native:
+        checks.append((_chk_pkg, "llama_cpp", "llama-cpp-python"))
+    if uses_llamacpp:
+        checks.append((_chk_llama_cuda,))
+    roma = [
+        (_chk_cutlet,),
+        (_chk_roma, "pykakasi", "Japanese romaji fallback"),
+        (_chk_roma, "pypinyin", "Chinese pinyin"),
+    ]
+    checks += [*roma, (vocals.health_row, cfg), (_chk_translation_srv, c, tp), (_chk_whisper_srv, wp)]
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+        futures = [ex.submit(fn, *args) for fn, *args in checks]
+        results = [row for f in futures for row in _as_rows(f.result())]
+
+    roma_names = {"Japanese by word", "pykakasi", "pypinyin"}
+    if not any(name in roma_names and "not installed" not in detail for name, _ok, detail in results):
+        info(f"\n  {C.DIM}Tip: Install romanization libraries for instant romaji/pinyin:{C.RESET}")
+        info(f"  {C.CYAN}pip install pykakasi pypinyin{C.RESET}")
+        info(f"  {C.DIM}Without them, Yume uses the LLM for romanization (slower).{C.RESET}\n")
+
+    # The config rows go between vocal isolation and the servers
+    at = next(i for i, r in enumerate(results) if r[0].startswith("Translation port"))
+    results[at:at] = [
+        ("Config loadable", bool(c), "OK" if c else "corrupted"),
+        ("Ports different", wp != tp, f"whisper:{wp} translation:{tp}"),
+    ]
+    results.append(_chk_server_script())
     if cfg.get("translation_backend") == "llamacpp":
         gf = find_gguf_models()
         results.append(("GGUF model present", len(gf) > 0, gf[0].name if gf else "none in models/translation/"))
+    return results
 
-    # Display results
+
+def _fix_advice(name: str, detail: str) -> list[str]:
+    """How to fix one failed check (empty when there is nothing to suggest)."""
+    from config import CONFIG_FILE
+
+    head = f"{C.BOLD}{name}{C.RESET} -> "
+    run_setup = f"Run: {C.CYAN}python pocket_yume.py setup{C.RESET}"
+    if "yt-dlp" in name or "ffmpeg" in name or "ffprobe" in name:
+        url = "https://github.com/yt-dlp/yt-dlp/releases" if "yt-dlp" in name else "https://ffmpeg.org/download.html"
+        return [head + run_setup, f"  Or download manually: {C.CYAN}{url}{C.RESET}"]
+    if name == "Server packages":
+        return [
+            head + detail,
+            f"  Install: {C.CYAN}{sys.executable} -m pip install -r server/requirements.txt{C.RESET}",
+            "  Or: Main Menu → Tools & Fonts → Python Dependencies",
+        ]
+    if "faster-whisper" in name or "Flask" in name or "llama-cpp" in name:
+        return [head + run_setup]
+    if " port " in name:
+        port = re.search(r"\d+", name)
+        return [
+            head + detail,
+            f"  Free port {port.group() if port else '?'} or change it in: {C.CYAN}python pocket_yume.py{C.RESET}"
+            " → Settings → Server addresses",
+        ]
+    if "end-to-end" in name:
+        return [
+            head + "The Whisper server could not translate through your LLM:",
+            f"  {detail}",
+            "  Check Settings → Translation settings (backend, address, model name).",
+        ]
+    if "Whisper server responding" in name:
+        return [
+            head + f"Restart: {C.CYAN}python pocket_yume.py launch{C.RESET}",
+            f"  Or check logs: {C.CYAN}logs/whisper_server.log{C.RESET}",
+        ]
+    if "Whisper server script" in name:
+        return [head + f"Re-extract Yume or run: {C.CYAN}python pocket_yume.py setup{C.RESET}"]
+    if "Config" in name:
+        return [head + f"Delete {C.CYAN}{CONFIG_FILE}{C.RESET} and re-run setup."]
+    if "RAM" in name:
+        return [
+            head + "Close other applications to free up memory.",
+            f"  Or use a smaller Whisper model: {C.CYAN}python pocket_yume.py settings{C.RESET}",
+        ]
+    if "Disk" in name:
+        return [head + "Free up disk space. Yume needs ~5-10 GB for models and tools."]
+    return []
+
+
+def health_check(cfg: dict) -> None:
+    """Comprehensive health check — all checks run in parallel for speed."""
+    header("Health Check")
+    info(f"{C.DIM}Running checks in parallel...{C.RESET}")
+    print()
+    results = _run_checks(cfg)
+
     ok = sum(1 for _, p, _ in results if p)
     total = len(results)
     table(
@@ -276,72 +321,20 @@ def health_check(cfg: dict) -> None:
         col_styles=[C.RESET, C.RESET, C.DIM],
         title=f"Health Check — {ok}/{total} passed",
     )
-
+    print()
     if ok == total:
-        print()
         success("All checks passed! Yume is ready to launch.")
     else:
+        fails = [(name, detail) for name, passed, detail in results if not passed]
+        warn(f"{total - ok} issue(s) found: {', '.join(name for name, _ in fails)}")
         print()
-        fails = [name for name, p, _ in results if not p]
-        warn(f"{total - ok} issue(s) found: {', '.join(fails)}")
-        print()
-        fail_details = {name: detail for name, passed, detail in results if not passed}
-        from config import CONFIG_FILE
-
-        for fname in fails:
-            if "yt-dlp" in fname or "ffmpeg" in fname or "ffprobe" in fname:
-                tool = fname.split(" ")[0]
-                info(f"{C.BOLD}{fname}{C.RESET} -> Run: {C.CYAN}python pocket_yume.py setup{C.RESET}")
-                info(
-                    f"  Or download manually: {C.CYAN}https://github.com/yt-dlp/yt-dlp/releases{C.RESET}"
-                    if "yt-dlp" in tool
-                    else f"  Or download manually: {C.CYAN}https://ffmpeg.org/download.html{C.RESET}"
-                )
-            elif fname == "Server packages":
-                info(f"{C.BOLD}{fname}{C.RESET} -> {fail_details.get(fname, '')}")
-                info(f"  Install: {C.CYAN}{sys.executable} -m pip install -r server/requirements.txt{C.RESET}")
-                info("  Or: Main Menu → Tools & Fonts → Python Dependencies")
-            elif "faster-whisper" in fname or "Flask" in fname or "llama-cpp" in fname:
-                info(f"{C.BOLD}{fname}{C.RESET} -> Run: {C.CYAN}python pocket_yume.py setup{C.RESET}")
-            elif " port " in fname:
-                port_num = re.search(r"\d+", fname)
-                pn = port_num.group() if port_num else "?"
-                info(f"{C.BOLD}{fname}{C.RESET} -> {fail_details.get(fname, '')}")
-                info(
-                    f"  Free port {pn} or change it in: {C.CYAN}python pocket_yume.py{C.RESET} → Settings → Server addresses"
-                )
-            elif "end-to-end" in fname:
-                info(f"{C.BOLD}{fname}{C.RESET} -> The Whisper server could not translate through your LLM:")
-                info(f"  {fail_details.get(fname, '')}")
-                info("  Check Settings → Translation settings (backend, address, model name).")
-            elif "Whisper server responding" in fname:
-                info(f"{C.BOLD}{fname}{C.RESET} -> Restart: {C.CYAN}python pocket_yume.py launch{C.RESET}")
-                info(f"  Or check logs: {C.CYAN}logs/whisper_server.log{C.RESET}")
-            elif "Translation server responding" in fname:
-                info(f"{C.BOLD}{fname}{C.RESET} -> Make sure your LLM backend is running:")
-                bk = c.get("translation_backend", "llamacpp")
-                if bk == "llamacpp":
-                    info(f"  Restart everything: {C.CYAN}python pocket_yume.py launch{C.RESET}")
-                elif bk == "ollama":
-                    info(f"  Start Ollama: {C.CYAN}ollama serve{C.RESET}")
-                else:
-                    info(f"  Start your {bk} server, then re-run health check.")
-            elif "Whisper server script" in fname:
-                info(
-                    f"{C.BOLD}{fname}{C.RESET} -> Re-extract Yume or run: {C.CYAN}python pocket_yume.py setup{C.RESET}"
-                )
-            elif "Config" in fname:
-                info(f"{C.BOLD}{fname}{C.RESET} -> Delete {C.CYAN}{CONFIG_FILE}{C.RESET} and re-run setup.")
-            elif "RAM" in fname:
-                info(f"{C.BOLD}{fname}{C.RESET} -> Close other applications to free up memory.")
-                info(f"  Or use a smaller Whisper model: {C.CYAN}python pocket_yume.py settings{C.RESET}")
-            elif "Disk" in fname:
-                info(f"{C.BOLD}{fname}{C.RESET} -> Free up disk space. Yume needs ~5-10 GB for models and tools.")
+        for name, detail in fails:
+            for line in _fix_advice(name, detail):
+                info(line)
         print()
 
     # Quick perf estimate
-    gpu = detect_gpu()
-    rec_model, rec_reason = recommend_whisper_model(gpu)
+    rec_model, rec_reason = recommend_whisper_model(detect_gpu())
     print()
     panel(
         f"Recommended model: {C.BOLD}{rec_model}{C.RESET}\n{C.DIM}{rec_reason}{C.RESET}",
