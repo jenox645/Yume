@@ -178,82 +178,61 @@ def install_ytdlp() -> bool:
     return ok
 
 
-def install_ffmpeg() -> bool:
-    from yume.network import download_file
+def _ffmpeg_names() -> set[str]:
+    return {f"{b}.exe" if IS_WIN else b for b in ("ffmpeg", "ffprobe")}
 
-    TOOLS_DIR.mkdir(parents=True, exist_ok=True)
-    if IS_WIN:
-        zp = TOOLS_DIR / "ffmpeg.zip"
-        if not _download_verified("ffmpeg", zp, "FFmpeg"):
-            return False
-        print(f"  {C.CYAN}...{C.RESET}  Extracting...", end="", flush=True)
-        try:
-            with zipfile.ZipFile(zp) as zf:
-                for n in zf.namelist():
-                    bn = os.path.basename(n)
-                    if bn in ("ffmpeg.exe", "ffprobe.exe"):
-                        with zf.open(n) as s, open(TOOLS_DIR / bn, "wb") as d:
-                            d.write(s.read())
-            zp.unlink(missing_ok=True)
-            print(f"\r  {C.GREEN}+{C.RESET}  Extracted" + " " * 30)
-            ff = TOOLS_DIR / "ffmpeg.exe"
-            if ff.exists():
-                r = _run([str(ff), "-version"], timeout=5)
-                if r.returncode != 0:
-                    warn("ffmpeg extracted but fails to run — try downloading manually")
-                    return False
-            else:
-                error("ffmpeg.exe not found after extraction — zip may have different structure")
-                info("Download manually: https://ffmpeg.org/download.html")
-                return False
-            return True
-        except Exception as e:
-            print(f"\r  {C.RED}x{C.RESET}  Failed: {e}")
-            return False
 
-    elif IS_LIN:
-        tp = TOOLS_DIR / "ffmpeg.tar.xz"
-        if not _download_verified("ffmpeg", tp, "FFmpeg"):
-            return False
-        print(f"  {C.CYAN}...{C.RESET}  Extracting...", end="", flush=True)
-        try:
-            with tarfile.open(tp, "r:xz") as tf:
-                for m in tf.getmembers():
-                    bn = os.path.basename(m.name)
-                    if bn in ("ffmpeg", "ffprobe") and m.isfile():
-                        m.name = bn
-                        tf.extract(m, TOOLS_DIR)
-            tp.unlink(missing_ok=True)
-            for b in ["ffmpeg", "ffprobe"]:
-                bf = TOOLS_DIR / b
-                if bf.exists():
-                    os.chmod(bf, UNIX_EXEC_MODE)
-            print(f"\r  {C.GREEN}+{C.RESET}  Extracted" + " " * 30)
-            return True
-        except Exception as e:
-            print(f"\r  {C.RED}x{C.RESET}  Failed: {e}")
-            return False
-
+def _extract_ffmpeg(archive) -> None:
+    """Copy ffmpeg and ffprobe, wherever they sit in the archive, into TOOLS_DIR."""
+    names = _ffmpeg_names()
+    if archive.suffix == ".zip":
+        with zipfile.ZipFile(archive) as zf:
+            for n in zf.namelist():
+                if os.path.basename(n) in names:
+                    with zf.open(n) as src, open(TOOLS_DIR / os.path.basename(n), "wb") as dst:
+                        shutil.copyfileobj(src, dst)
     else:
-        # macOS
-        if shutil.which("brew"):
-            info("Installing FFmpeg via Homebrew...")
-            r = _run(["brew", "install", "ffmpeg"], timeout=600)
-            return r.returncode == 0
-        zp = TOOLS_DIR / "ffmpeg.zip"
-        if not download_file(DOWNLOAD_URLS.get("ffmpeg", ""), zp, "FFmpeg"):
-            return False
-        try:
-            with zipfile.ZipFile(zp) as zf:
-                _safe_extractall(zf, TOOLS_DIR)  # nosec B202 — zip-slip checked inside
-            zp.unlink(missing_ok=True)
-            for b in (TOOLS_DIR / "ffmpeg", TOOLS_DIR / "ffprobe"):
-                if b.exists():
-                    os.chmod(b, UNIX_EXEC_MODE)
-            return True
-        except Exception as e:
-            error(f"Failed: {e}")
-            return False
+        with tarfile.open(archive, "r:xz") as tf:
+            for m in tf.getmembers():
+                if m.isfile() and os.path.basename(m.name) in names:
+                    m.name = os.path.basename(m.name)  # flat, and never outside TOOLS_DIR
+                    tf.extract(m, TOOLS_DIR)
+    archive.unlink(missing_ok=True)
+    if not IS_WIN:
+        for n in names:
+            if (TOOLS_DIR / n).exists():
+                os.chmod(TOOLS_DIR / n, UNIX_EXEC_MODE)
+
+
+def _ffmpeg_runs() -> bool:
+    ff = TOOLS_DIR / ("ffmpeg.exe" if IS_WIN else "ffmpeg")
+    if not ff.exists():
+        error(f"{ff.name} not found after extraction — the archive may have a different structure")
+        info("Download manually: https://ffmpeg.org/download.html")
+        return False
+    if _run([str(ff), "-version"], timeout=5).returncode != 0:
+        warn("ffmpeg extracted but fails to run — try downloading manually")
+        return False
+    return True
+
+
+def install_ffmpeg() -> bool:
+    """ffmpeg + ffprobe into tools/: Homebrew on a Mac that has it, else the platform's static build."""
+    TOOLS_DIR.mkdir(parents=True, exist_ok=True)
+    if not IS_WIN and not IS_LIN and shutil.which("brew"):
+        info("Installing FFmpeg via Homebrew...")
+        return _run(["brew", "install", "ffmpeg"], timeout=600).returncode == 0
+    archive = TOOLS_DIR / ("ffmpeg.tar.xz" if IS_LIN else "ffmpeg.zip")
+    if not _download_verified("ffmpeg", archive, "FFmpeg"):
+        return False
+    print(f"  {C.CYAN}...{C.RESET}  Extracting...", end="", flush=True)
+    try:
+        _extract_ffmpeg(archive)
+    except Exception as e:
+        print(f"\r  {C.RED}x{C.RESET}  Failed: {e}")
+        return False
+    print(f"\r  {C.GREEN}+{C.RESET}  Extracted" + " " * 30)
+    return _ffmpeg_runs()
 
 
 def install_deno() -> bool:
