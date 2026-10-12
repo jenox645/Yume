@@ -539,6 +539,36 @@ def test_download_failure_reports_error(pipeline):
     assert snap["status"] == "error" and "unavailable" in snap["error"]
 
 
+def test_failed_download_streams_each_region_when_the_stream_is_reachable(pipeline):
+    with (
+        patch.object(_audio, "download_full_audio", return_value=(None, "HTTP Error 403")),
+        patch.object(_audio, "get_stream_url", return_value="https://rr1.googlevideo.com/a"),
+    ):
+        job = pipeline.jobs.create({**PARAMS, "video_id": "streamed", "duration": 61})
+        deadline = time.time() + 10
+        while not job.regions and time.time() < deadline:
+            time.sleep(0.05)
+    assert job.mode == "stream"
+    assert job.regions == _regions.fixed_regions(61)
+    assert any("streaming each region" in e["msg"] for e in job.snapshot(0, events=True)["events"])
+
+
+def test_a_pasted_stream_url_is_downloaded_directly(pipeline, tmp_path):
+    with patch.object(_audio, "download_direct", return_value=(None, "403")) as direct:
+        snap = _run(
+            pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "pasted", "stream_url": "https://cdn/x.m3u8"})
+        )
+    direct.assert_called_once_with("https://cdn/x.m3u8")
+    pipeline.download.assert_not_called()
+    assert snap["status"] == "error" and snap["error"] == "403"
+
+
+def test_an_unreadable_download_is_a_job_error(pipeline):
+    with patch.object(_audio, "load_audio", side_effect=OSError("truncated WAV")):
+        snap = _run(pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "broken"}))
+    assert snap["status"] == "error" and snap["error"] == "OSError: truncated WAV"
+
+
 def test_translation_server_down_does_not_burn_retries(pipeline):
     def down(*a, **k):
         raise _translate.TranslationError("translation server unreachable: refused")

@@ -401,83 +401,94 @@ class JobManager:
     # ── download / planning ─────────────────────────────────────────────────
 
     def _prepare(self, job):
+        """Get the job's regions: from the cache, a full download, or the stream region by region."""
         store = _state.store
         try:
             store.put_video(job.video_key, job.url, job.title, None, None)
             video = store.get_video(job.video_key) or {}
             cached = store.get_transcripts(job.video_key, job.lang_key, job.model)
-            planned = video.get("regions")
-
-            # Everything cached for this language + model: no download at all.
-            if planned and all(tuple(r) in cached for r in planned):
-                with job.lock:
-                    job.duration = video.get("duration") or job.duration
-                    job.event(f"Loaded {len(planned)} regions from cache — no download needed", "ok")
-                    job.set_regions(planned, cached)
-                self._notify()
-                return
-
-            with job.lock:
-                job.status = "downloading"
-                job.event("Downloading audio...")
-            # The preview is for a video watched from the start, not one resumed at 40:00
-            preview = job.playhead < _regions.FIRST_REGION_S
-            if preview and not job.stream_url and not any(r[0] == 0.0 for r in cached):
-                threading.Thread(target=self._preview, args=(job,), name=f"preview-{job.id[:6]}", daemon=True).start()
-
-            if job.stream_url:
-                path, err = _audio.download_direct(job.stream_url)
-            else:
-                path, err = _audio.download_full_audio(job.url, stereo=job.isolate)
-            if not self._alive(job):
-                _audio.remove_temp(path)
-                return
-            if path:
-                try:
-                    audio = _audio.load_audio(path)
-                    if job.isolate:
-                        vocals = self._isolate(job, path)
-                        if vocals is not None:
-                            audio = vocals
-                        else:  # transcripts of the mix are cached as the mix's
-                            job.model = _state.model_name
-                            cached = store.get_transcripts(job.video_key, job.lang_key, job.model)
-                finally:
-                    _audio.remove_temp(path)
-                with _state.stats_lock:
-                    _state.server_stats["downloads_completed"] += 1
-                duration = len(audio) / SR
-                if planned and abs((video.get("duration") or 0) - duration) < 1.0:
-                    regions = planned
-                else:
-                    regions = _regions.plan_regions(audio)
-                store.put_video(job.video_key, job.url, job.title, duration, [list(r) for r in regions])
-                with job.lock:
-                    job.audio = audio
-                    job.duration = duration
-                    job.event(f"Audio ready: {duration:.0f}s, {len(regions)} regions", "ok")
-                    job.set_regions(regions, cached)
-                    self._adopt_preview(job)
-            elif job.duration > 0 and not job.stream_url and _audio.get_stream_url(job.url):
-                # Full download failed but the stream itself is reachable:
-                # transcribe each region straight from the stream (slower).
-                regions = _regions.fixed_regions(job.duration)
-                with job.lock:
-                    job.mode = "stream"
-                    job.event(f"Full download failed ({err}) — streaming each region instead (slower)", "warn")
-                    job.set_regions(regions, cached)
-                    self._adopt_preview(job)
-            else:
-                with job.lock:
-                    job.status = "error"
-                    job.error = err or "Audio download failed"
-                    job.event(job.error, "error")
+            if not self._from_cache(job, video, cached):
+                self._download(job, video, cached)
         except Exception as e:  # never let a job thread die silently
-            with job.lock:
-                job.status = "error"
-                job.error = f"{type(e).__name__}: {e}"
-                job.event(job.error, "error")
+            self._fail(job, f"{type(e).__name__}: {e}")
         self._notify()
+
+    @staticmethod
+    def _fail(job, message):
+        with job.lock:
+            job.status = "error"
+            job.error = message
+            job.event(message, "error")
+
+    def _from_cache(self, job, video, cached):
+        """Everything cached for this language + model: no download at all."""
+        planned = video.get("regions")
+        if not planned or not all(tuple(r) in cached for r in planned):
+            return False
+        with job.lock:
+            job.duration = video.get("duration") or job.duration
+            job.event(f"Loaded {len(planned)} regions from cache — no download needed", "ok")
+            job.set_regions(planned, cached)
+        return True
+
+    def _download(self, job, video, cached):
+        with job.lock:
+            job.status = "downloading"
+            job.event("Downloading audio...")
+        # The preview is for a video watched from the start, not one resumed at 40:00
+        preview = job.playhead < _regions.FIRST_REGION_S
+        if preview and not job.stream_url and not any(r[0] == 0.0 for r in cached):
+            threading.Thread(target=self._preview, args=(job,), name=f"preview-{job.id[:6]}", daemon=True).start()
+
+        if job.stream_url:
+            path, err = _audio.download_direct(job.stream_url)
+        else:
+            path, err = _audio.download_full_audio(job.url, stereo=job.isolate)
+        if not self._alive(job):
+            _audio.remove_temp(path)
+        elif path:
+            self._use_audio(job, path, video, cached)
+        elif job.duration > 0 and not job.stream_url and _audio.get_stream_url(job.url):
+            # Full download failed but the stream itself is reachable:
+            # transcribe each region straight from the stream (slower).
+            regions = _regions.fixed_regions(job.duration)
+            with job.lock:
+                job.mode = "stream"
+                job.event(f"Full download failed ({err}) — streaming each region instead (slower)", "warn")
+                job.set_regions(regions, cached)
+                self._adopt_preview(job)
+        else:
+            self._fail(job, err or "Audio download failed")
+
+    def _use_audio(self, job, path, video, cached):
+        """Load the download (vocals only when isolating), plan its regions, start the job."""
+        try:
+            audio = _audio.load_audio(path)
+            if job.isolate:
+                vocals = self._isolate(job, path)
+                if vocals is not None:
+                    audio = vocals
+                else:  # transcripts of the mix are cached as the mix's
+                    job.model = _state.model_name
+                    cached = _state.store.get_transcripts(job.video_key, job.lang_key, job.model)
+        finally:
+            _audio.remove_temp(path)
+        with _state.stats_lock:
+            _state.server_stats["downloads_completed"] += 1
+        duration = len(audio) / SR
+        planned = video.get("regions")
+        # The same video again: keep its regions, so cached transcripts still line up
+        if planned and abs((video.get("duration") or 0) - duration) < 1.0:
+            regions = planned
+        else:
+            regions = _regions.plan_regions(audio)
+        _state.store.put_video(job.video_key, job.url, job.title, duration, [list(r) for r in regions])
+        with job.lock:
+            job.audio = audio
+            job.duration = duration
+            job.event(f"Audio ready: {duration:.0f}s, {len(regions)} regions", "ok")
+            job.set_regions(regions, cached)
+            self._adopt_preview(job)
 
     def _isolate(self, job, path):
         """The song's vocals (16 kHz mono), or None to transcribe the mix."""
