@@ -27,9 +27,9 @@ import _regions
 import _romanize
 import _separate
 import _state
-from _filter import clean_raw_segments, is_credits_line, is_hallucination, window_hallucinations
-from _transcribe import transcribe_audio
-from _translate import BATCH_SIZE, TranslationError, _unshout
+from _filter import clean_raw_segments, is_credits_line, is_fragment, is_hallucination, window_hallucinations
+from _transcribe import detect_language, transcribe_audio
+from _translate import BATCH_SIZE, TranslationError, _unshout, src_name
 
 SR = _regions.SAMPLE_RATE
 ACTIVE_S = 30  # a job polled within this window is being watched
@@ -40,14 +40,25 @@ PREVIEW_GRACE_S = 60  # region 0 waits this long for an in-flight stream preview
 MAX_TRANSLATE_TRIES = 3
 NEAR_S = 20  # lines starting this soon after the playhead are translated first...
 NEAR_BATCH = 3  # ...in batches this small
+READING_LANGS = {"ja", "zh", "ko"}  # romanization sent with each line to translate
+LANG_SURE = 0.85  # Whisper this sure a region is another language...
+LANG_MISSES = 2  # ...in this many regions: the user picked the wrong language
+LANG_CHECKS = 4  # regions checked at most (a song's English chorus is one region)
 
 
-def _duration(value):
+MAX_SECONDS = 24 * 3600
+
+
+def seconds(value):
+    """A duration or playhead sent by the client: 0.0 unless a number in [0, MAX_SECONDS].
+
+    Live streams report Infinity, and a bogus duration would plan endless
+    regions. NaN fails both comparisons."""
     try:
-        duration = float(value or 0)
+        s = float(value or 0)
     except (TypeError, ValueError):
         return 0.0
-    return duration if 0 <= duration < 7 * 24 * 3600 else 0.0  # NaN/inf fail both tests
+    return s if 0 <= s <= MAX_SECONDS else 0.0
 
 
 def job_model(duration):
@@ -86,7 +97,7 @@ class Job:
         self.url = params.get("url") or ""
         self.stream_url = params.get("stream_url") or ""
         self.title = (params.get("title") or "")[:200]
-        self.duration = _duration(params.get("duration"))
+        self.duration = seconds(params.get("duration"))
         self.model = job_model(self.duration)
         self.isolate = self.model.endswith(_separate.MODEL_SUFFIX)  # separate the vocals first
 
@@ -102,9 +113,12 @@ class Job:
         self.segments = {}  # id -> segment dict
         self.next_sid = 1
         self.rev = 0
-        self.playhead = float(params.get("playhead") or 0.0)  # YouTube resumes where you left off
+        self.playhead = seconds(params.get("playhead"))  # YouTube resumes where you left off
         self.last_poll = time.time()
         self.events = collections.deque(maxlen=60)
+        self.notice = ""  # shown in the overlay: the video sounds like another language
+        self.lang_checks = 0 if self.language else LANG_CHECKS  # nothing to check on auto-detect
+        self.lang_misses = collections.Counter()
         self.context = []  # recent (source, translation) pairs for the LLM
         self.llm_backoff_until = 0.0
         self.lock = threading.RLock()
@@ -164,10 +178,53 @@ class Job:
             self._touch(seg)
         if 0 <= idx < len(self.region_state):
             self.region_state[idx] = "done"
+            dropped += self._hide_boundary_fragments(idx)
         if dropped:
             with _state.stats_lock:
                 _state.server_stats["hallucinations_filtered"] += dropped
         self._update_status()
+
+    def check_language(self, heard, prob):
+        """Whisper forced into the wrong language writes garbage: an English
+        news video set to Arabic came out as English lines, "ترجمة نانسي قنقر"
+        and loops. Tell the user once two regions clearly sound like another
+        language; stop at the first region that clearly matches."""
+        if self.lang_checks >= LANG_CHECKS or heard is None or prob < LANG_SURE:
+            return
+        self.lang_checks += 1
+        if heard == self.language:
+            self.lang_checks = LANG_CHECKS
+            return
+        self.lang_misses[heard] += 1
+        if self.lang_misses[heard] >= LANG_MISSES:
+            self.lang_checks = LANG_CHECKS
+            self.notice = (
+                f"This video sounds like {src_name(heard)}, but Yume is set to {src_name(self.language)}. "
+                f"If the subtitles look wrong, change the source language in the Yume popup."
+            )
+            self.event(self.notice, "warn")
+
+    def _hide_boundary_fragments(self, idx):
+        """Regions are transcribed apart, so a word spoken across a cut can end
+        one region as a fragment of the next region's first line ("どのような法や
+        制度を変えるのか" before "どのような法や制度を変えたくて…"). Checked once
+        both neighbours are done; returns how many lines it hid."""
+        hidden = 0
+        for left, right in ((idx - 1, idx), (idx, idx + 1)):
+            if (
+                left < 0
+                or right >= len(self.regions)
+                or {self.region_state[left], self.region_state[right]} != {"done"}
+            ):
+                continue
+            lines = sorted((s for s in self.segments.values() if not s["hidden"]), key=lambda s: s["start"])
+            last = [s for s in lines if s["region"] == self.regions[left]][-1:]
+            first = [s for s in lines if s["region"] == self.regions[right]][:1]
+            if last and first and is_fragment(last[0], first[0]):
+                last[0]["hidden"] = last[0]["filler"] = True  # filler: refilter() keeps it hidden
+                self._touch(last[0])
+                hidden += 1
+        return hidden
 
     def _update_status(self):
         if self.status in ("error", "downloading", "separating", "starting") or not self.regions:
@@ -247,6 +304,7 @@ class Job:
                 "error": self.error,
                 "duration": self.duration,
                 "rev": self.rev,
+                "notice": self.notice,
                 "language": self.language,
                 "target": self.target,
                 "progress": {
@@ -290,7 +348,7 @@ class JobManager:
         video_key = str(params.get("video_id") or params.get("url") or "")[:200]
         if not video_key:
             raise ValueError("video_id or url is required")
-        model = job_model(_duration(params.get("duration")))
+        model = job_model(seconds(params.get("duration")))
         key = (video_key, params.get("language") or "auto", params.get("target") or "", model)
         with self.lock:
             existing = self.jobs.get(self.by_key.get(key, ""))
@@ -321,7 +379,7 @@ class JobManager:
         with job.lock:
             job.last_poll = time.time()
             if playhead is not None:
-                job.playhead = max(0.0, float(playhead))
+                job.playhead = seconds(playhead)
         self._notify()
 
     def set_romanize(self, job, on):
@@ -394,83 +452,94 @@ class JobManager:
     # ── download / planning ─────────────────────────────────────────────────
 
     def _prepare(self, job):
+        """Get the job's regions: from the cache, a full download, or the stream region by region."""
         store = _state.store
         try:
             store.put_video(job.video_key, job.url, job.title, None, None)
             video = store.get_video(job.video_key) or {}
             cached = store.get_transcripts(job.video_key, job.lang_key, job.model)
-            planned = video.get("regions")
-
-            # Everything cached for this language + model: no download at all.
-            if planned and all(tuple(r) in cached for r in planned):
-                with job.lock:
-                    job.duration = video.get("duration") or job.duration
-                    job.event(f"Loaded {len(planned)} regions from cache — no download needed", "ok")
-                    job.set_regions(planned, cached)
-                self._notify()
-                return
-
-            with job.lock:
-                job.status = "downloading"
-                job.event("Downloading audio...")
-            # The preview is for a video watched from the start, not one resumed at 40:00
-            preview = job.playhead < _regions.FIRST_REGION_S
-            if preview and not job.stream_url and not any(r[0] == 0.0 for r in cached):
-                threading.Thread(target=self._preview, args=(job,), name=f"preview-{job.id[:6]}", daemon=True).start()
-
-            if job.stream_url:
-                path, err = _audio.download_direct(job.stream_url)
-            else:
-                path, err = _audio.download_full_audio(job.url, stereo=job.isolate)
-            if not self._alive(job):
-                _audio.remove_temp(path)
-                return
-            if path:
-                try:
-                    audio = _audio.load_audio(path)
-                    if job.isolate:
-                        vocals = self._isolate(job, path)
-                        if vocals is not None:
-                            audio = vocals
-                        else:  # transcripts of the mix are cached as the mix's
-                            job.model = _state.model_name
-                            cached = store.get_transcripts(job.video_key, job.lang_key, job.model)
-                finally:
-                    _audio.remove_temp(path)
-                with _state.stats_lock:
-                    _state.server_stats["downloads_completed"] += 1
-                duration = len(audio) / SR
-                if planned and abs((video.get("duration") or 0) - duration) < 1.0:
-                    regions = planned
-                else:
-                    regions = _regions.plan_regions(audio)
-                store.put_video(job.video_key, job.url, job.title, duration, [list(r) for r in regions])
-                with job.lock:
-                    job.audio = audio
-                    job.duration = duration
-                    job.event(f"Audio ready: {duration:.0f}s, {len(regions)} regions", "ok")
-                    job.set_regions(regions, cached)
-                    self._adopt_preview(job)
-            elif job.duration > 0 and not job.stream_url and _audio.get_stream_url(job.url):
-                # Full download failed but the stream itself is reachable:
-                # transcribe each region straight from the stream (slower).
-                regions = _regions.fixed_regions(job.duration)
-                with job.lock:
-                    job.mode = "stream"
-                    job.event(f"Full download failed ({err}) — streaming each region instead (slower)", "warn")
-                    job.set_regions(regions, cached)
-                    self._adopt_preview(job)
-            else:
-                with job.lock:
-                    job.status = "error"
-                    job.error = err or "Audio download failed"
-                    job.event(job.error, "error")
+            if not self._from_cache(job, video, cached):
+                self._download(job, video, cached)
         except Exception as e:  # never let a job thread die silently
-            with job.lock:
-                job.status = "error"
-                job.error = f"{type(e).__name__}: {e}"
-                job.event(job.error, "error")
+            self._fail(job, f"{type(e).__name__}: {e}")
         self._notify()
+
+    @staticmethod
+    def _fail(job, message):
+        with job.lock:
+            job.status = "error"
+            job.error = message
+            job.event(message, "error")
+
+    def _from_cache(self, job, video, cached):
+        """Everything cached for this language + model: no download at all."""
+        planned = video.get("regions")
+        if not planned or not all(tuple(r) in cached for r in planned):
+            return False
+        with job.lock:
+            job.duration = video.get("duration") or job.duration
+            job.event(f"Loaded {len(planned)} regions from cache — no download needed", "ok")
+            job.set_regions(planned, cached)
+        return True
+
+    def _download(self, job, video, cached):
+        with job.lock:
+            job.status = "downloading"
+            job.event("Downloading audio...")
+        # The preview is for a video watched from the start, not one resumed at 40:00
+        preview = job.playhead < _regions.FIRST_REGION_S
+        if preview and not job.stream_url and not any(r[0] == 0.0 for r in cached):
+            threading.Thread(target=self._preview, args=(job,), name=f"preview-{job.id[:6]}", daemon=True).start()
+
+        if job.stream_url:
+            path, err = _audio.download_direct(job.stream_url)
+        else:
+            path, err = _audio.download_full_audio(job.url, stereo=job.isolate)
+        if not self._alive(job):
+            _audio.remove_temp(path)
+        elif path:
+            self._use_audio(job, path, video, cached)
+        elif job.duration > 0 and not job.stream_url and _audio.get_stream_url(job.url):
+            # Full download failed but the stream itself is reachable:
+            # transcribe each region straight from the stream (slower).
+            regions = _regions.fixed_regions(job.duration)
+            with job.lock:
+                job.mode = "stream"
+                job.event(f"Full download failed ({err}) — streaming each region instead (slower)", "warn")
+                job.set_regions(regions, cached)
+                self._adopt_preview(job)
+        else:
+            self._fail(job, err or "Audio download failed")
+
+    def _use_audio(self, job, path, video, cached):
+        """Load the download (vocals only when isolating), plan its regions, start the job."""
+        try:
+            audio = _audio.load_audio(path)
+            if job.isolate:
+                vocals = self._isolate(job, path)
+                if vocals is not None:
+                    audio = vocals
+                else:  # transcripts of the mix are cached as the mix's
+                    job.model = _state.model_name
+                    cached = _state.store.get_transcripts(job.video_key, job.lang_key, job.model)
+        finally:
+            _audio.remove_temp(path)
+        with _state.stats_lock:
+            _state.server_stats["downloads_completed"] += 1
+        duration = len(audio) / SR
+        planned = video.get("regions")
+        # The same video again: keep its regions, so cached transcripts still line up
+        if planned and abs((video.get("duration") or 0) - duration) < 1.0:
+            regions = planned
+        else:
+            regions = _regions.plan_regions(audio)
+        _state.store.put_video(job.video_key, job.url, job.title, duration, [list(r) for r in regions])
+        with job.lock:
+            job.audio = audio
+            job.duration = duration
+            job.event(f"Audio ready: {duration:.0f}s, {len(regions)} regions", "ok")
+            job.set_regions(regions, cached)
+            self._adopt_preview(job)
 
     def _isolate(self, job, path):
         """The song's vocals (16 kHz mono), or None to transcribe the mix."""
@@ -588,6 +657,10 @@ class JobManager:
                         raise RuntimeError("stream segment download failed")
                     audio = _audio.load_audio(path)
                 raw = transcribe_audio(audio, job.language, start, is_first_region=(idx == 0))
+                if job.lang_checks < LANG_CHECKS:
+                    heard, prob = detect_language(audio)
+                    with job.lock:
+                        job.check_language(heard, prob)
                 _state.store.put_transcript(job.video_key, job.lang_key, job.model, start, end, raw)
                 with job.lock:
                     job.event(f"Region {idx + 1}/{len(job.regions)} [{start:.0f}-{end:.0f}s]: {len(raw)} lines")
@@ -639,52 +712,58 @@ class JobManager:
             if job is None:
                 self._wait(1.0)
                 continue
-            texts = [s["text"] for s in batch]
             try:
-                if kind == "translate":
-                    with job.lock:
-                        context, title = list(job.context), job.title
-                    results = self.translator.translate_batch(texts, job.language, job.target, title, context)
-                else:
-                    results = self.translator.romanize_batch(texts, job.language)
-            except TranslationError as e:
-                unreachable = "unreachable" in str(e)
-                with job.lock:
-                    # Server down: wait for it, don't burn the lines' retries
-                    job.llm_backoff_until = time.time() + (30 if unreachable else 10)
-                    job.event(f"Translation server error: {e}", "error")
-                    for s in batch:
-                        if unreachable:
-                            continue
-                        s["tries"] += 1
-                        if s["tries"] >= MAX_TRANSLATE_TRIES:
-                            # Give up on this line: show the original only
-                            if kind == "translate":
-                                s["translation"] = ""
-                            else:
-                                s["romaji"] = ""
-                            job._touch(s)
-                    job._update_status()
-                self._notify()
-                continue
-            store = _state.store
-            with job.lock:
-                for s, r in zip(batch, results):
-                    if kind == "translate":
-                        s["translation"] = r
-                        if r:
-                            store.put_translation(job.lang_key, job.target, self.translator.model_id(), s["text"], r)
-                            job.context = (job.context + [(s["text"], r)])[-3:]
-                    else:
-                        s["romaji"] = r
-                        if r:
-                            store.put_romanization(job.lang_key, s["text"], r)
-                    job._touch(s)
-                if kind == "translate":
-                    with _state.stats_lock:
-                        _state.server_stats["lines_translated"] += len(batch)
-                job._update_status()
+                results = self._llm_call(job, kind, batch)
+            except Exception as e:  # anything else would end this thread: every job stuck "translating"
+                self._llm_failed(job, kind, batch, e)
+            else:
+                self._llm_done(job, kind, batch, results)
             self._notify()
+
+    def _llm_call(self, job, kind, batch):
+        texts = [s["text"] for s in batch]
+        if kind != "translate":
+            return self.translator.romanize_batch(texts, job.language)
+        with job.lock:
+            context, title = list(job.context), job.title
+            # Names written in kanji / hanzi / hangul: the reading tells the model how they sound
+            readings = [s["romaji"] or "" for s in batch] if job.language in READING_LANGS else None
+        return self.translator.translate_batch(texts, job.language, job.target, title, context, readings)
+
+    @staticmethod
+    def _llm_failed(job, kind, batch, e):
+        unreachable = isinstance(e, TranslationError) and "unreachable" in str(e)
+        with job.lock:
+            # Server down: wait for it, don't burn the lines' retries
+            job.llm_backoff_until = time.time() + (30 if unreachable else 10)
+            what = "Translation server error" if isinstance(e, TranslationError) else "Translation failed"
+            job.event(f"{what}: {e}", "error")
+            for s in batch if not unreachable else ():
+                s["tries"] += 1
+                if s["tries"] >= MAX_TRANSLATE_TRIES:
+                    # Give up on this line: show the original only
+                    s["translation" if kind == "translate" else "romaji"] = ""
+                    job._touch(s)
+            job._update_status()
+
+    def _llm_done(self, job, kind, batch, results):
+        store = _state.store
+        with job.lock:
+            for s, r in zip(batch, results):
+                if kind == "translate":
+                    s["translation"] = r
+                    if r:
+                        store.put_translation(job.lang_key, job.target, self.translator.model_id(), s["text"], r)
+                        job.context = (job.context + [(s["text"], r)])[-3:]
+                else:
+                    s["romaji"] = r
+                    if r:
+                        store.put_romanization(job.lang_key, s["text"], r)
+                job._touch(s)
+            if kind == "translate":
+                with _state.stats_lock:
+                    _state.server_stats["lines_translated"] += len(batch)
+            job._update_status()
 
 
 # ── Export ────────────────────────────────────────────────────────────────────

@@ -102,115 +102,97 @@ def _get_available_vram_mb() -> int:
     return 0
 
 
+def _whisper_vram_mb(cfg: dict, gpu: dict) -> int:
+    """VRAM the Whisper model needs on an NVIDIA GPU; 0 when it does not run on one."""
+    if not gpu.get("has_nvidia") or cfg.get("whisper_device", "auto") not in ("auto", "cuda"):
+        return 0
+    from yume.hardware import WHISPER_MODEL_VRAM_MB
+
+    needed = WHISPER_MODEL_VRAM_MB.get(cfg.get("whisper_model", "large-v3-turbo"), 4_500)  # custom: assume large
+    if cfg.get("whisper_compute_type", "auto") in ("int8", "int8_float16"):
+        needed = int(needed * 0.65)
+    return needed
+
+
+def _resource_issues(cfg: dict) -> list[str]:
+    """What will not fit: Whisper in free VRAM, and the GGUF in VRAM (with Whisper) or RAM."""
+    gpu = detect_gpu()
+    issues = []
+    whisper_mb = _whisper_vram_mb(cfg, gpu)
+    free_vram = _get_available_vram_mb() if gpu.get("has_nvidia") or gpu.get("has_amd") else 0
+    if whisper_mb and 0 < free_vram < whisper_mb:
+        issues.append(
+            f"Whisper '{cfg.get('whisper_model', 'large-v3-turbo')}' needs ~{whisper_mb / 1024:.1f} GB VRAM, "
+            f"but only {free_vram / 1024:.1f} GB is free."
+        )
+
+    gp = cfg.get("gguf_model_path", "")
+    if cfg.get("translation_backend", "llamacpp") != "llamacpp" or not gp or not Path(gp).exists():
+        return issues
+    # llama.cpp offloads every layer when there is a GPU, so the model lives in
+    # VRAM next to Whisper; only without a GPU does it need system RAM.
+    gguf_mb = int(Path(gp).stat().st_size / (1024 * 1024) * 1.2)
+    if gpu.get("has_nvidia") or gpu.get("has_amd"):
+        if 0 < free_vram < gguf_mb + whisper_mb:
+            both = f" (plus ~{whisper_mb / 1024:.1f} GB for Whisper)" if whisper_mb else ""
+            issues.append(
+                f"Translation model ({Path(gp).name}) needs ~{gguf_mb / 1024:.1f} GB VRAM{both}, "
+                f"but only {free_vram / 1024:.1f} GB is free."
+            )
+    else:
+        free_ram = _get_available_ram_mb()
+        if 0 < free_ram < gguf_mb:
+            issues.append(
+                f"Translation model ({Path(gp).name}) needs ~{gguf_mb / 1024:.1f} GB RAM, "
+                f"but only {free_ram / 1024:.1f} GB is available."
+            )
+    return issues
+
+
 def _check_resources(cfg: dict) -> bool:
     """Pre-launch RAM/VRAM check. Returns True to proceed, False to cancel.
 
     Never hard-blocks — the user can always choose 'Launch anyway'.
     """
-    issues: list[tuple[str, str]] = []  # (kind, human-readable message)
+    while True:
+        issues = _resource_issues(cfg)
+        if not issues:
+            return True
+        print()
+        panel(
+            "\n".join(f"  • {msg}" for msg in issues),
+            title=f"{C.YELLOW}Low Resources Warning{C.RESET}",
+            style=C.YELLOW,
+        )
+        print()
+        info("Launching with low resources may cause crashes or heavy swap usage.")
+        print()
+        ch = ask_arrow(
+            "How would you like to proceed?",
+            [
+                ("Launch anyway", "Override — proceed despite the warning"),
+                ("Retry check", "Close other apps to free resources, then re-check"),
+                ("Switch Whisper model", "Pick a smaller Whisper model that fits available VRAM/RAM"),
+                ("Cancel", "Return to main menu without launching"),
+            ],
+            default=0,
+            allow_back=False,
+        )
+        if ch == 0:
+            warn("Launching with low resources — watch logs if servers crash.")
+            return True
+        if ch == 1:
+            info("Re-checking resources — close unused apps first, then press Enter.")
+            try:
+                input(f"  {C.DIM}Press Enter when ready...{C.RESET}")
+            except (EOFError, KeyboardInterrupt):
+                print()
+        elif ch == 2:
+            from yume.menus import _menu_whisper_model
 
-    bk = cfg.get("translation_backend", "llamacpp")
-    gpu = detect_gpu()
-
-    # ── VRAM check for Whisper (NVIDIA GPU path only) ─────────────────────────
-    whisper_dev = cfg.get("whisper_device", "auto")
-    using_nvidia = gpu.get("has_nvidia", False) if whisper_dev in ("auto", "cuda") else False
-
-    whisper_vram = 0
-    if using_nvidia:
-        from yume.hardware import WHISPER_MODEL_VRAM_MB
-
-        model_name = cfg.get("whisper_model", "large-v3-turbo")
-        required_vram = WHISPER_MODEL_VRAM_MB.get(model_name, 4_500)  # custom paths: assume large
-        if cfg.get("whisper_compute_type", "auto") in ("int8", "int8_float16"):
-            required_vram = int(required_vram * 0.65)
-        whisper_vram = required_vram
-        avail_vram = _get_available_vram_mb()
-        if avail_vram > 0 and avail_vram < required_vram:
-            issues.append(
-                (
-                    "vram",
-                    f"Whisper '{model_name}' needs ~{required_vram / 1024:.1f} GB VRAM, "
-                    f"but only {avail_vram / 1024:.1f} GB is free.",
-                )
-            )
-
-    # ── RAM/VRAM check for GGUF translation model (file size × 1.2) ─────────
-    # llama.cpp uses --n_gpu_layers -1 when a GPU is present, so the model
-    # lives in VRAM rather than system RAM. Only warn about RAM when no GPU
-    # offloading is available.
-    if bk == "llamacpp":
-        gp = cfg.get("gguf_model_path", "")
-        if gp and Path(gp).exists():
-            model_size_mb = Path(gp).stat().st_size / (1024 * 1024)
-            required_mb = int(model_size_mb * 1.2)
-            has_gpu = gpu.get("has_nvidia", False) or gpu.get("has_amd", False)
-            if has_gpu:
-                avail_vram_mb = _get_available_vram_mb()
-                # Both models end up on the same GPU: check them together
-                together = required_mb + whisper_vram
-                if avail_vram_mb > 0 and avail_vram_mb < together:
-                    both = f" (plus ~{whisper_vram / 1024:.1f} GB for Whisper)" if whisper_vram else ""
-                    issues.append(
-                        (
-                            "vram",
-                            f"Translation model ({Path(gp).name}) needs ~{required_mb / 1024:.1f} GB VRAM{both}, "
-                            f"but only {avail_vram_mb / 1024:.1f} GB is free.",
-                        )
-                    )
-            else:
-                avail_ram_mb = _get_available_ram_mb()
-                if avail_ram_mb > 0 and avail_ram_mb < required_mb:
-                    issues.append(
-                        (
-                            "ram",
-                            f"Translation model ({Path(gp).name}) needs ~{required_mb / 1024:.1f} GB RAM, "
-                            f"but only {avail_ram_mb / 1024:.1f} GB is available.",
-                        )
-                    )
-
-    if not issues:
-        return True
-
-    # ── Show warning panel ────────────────────────────────────────────────────
-    print()
-    panel(
-        "\n".join(f"  • {msg}" for _, msg in issues),
-        title=f"{C.YELLOW}Low Resources Warning{C.RESET}",
-        style=C.YELLOW,
-    )
-    print()
-    info("Launching with low resources may cause crashes or heavy swap usage.")
-    print()
-
-    ch = ask_arrow(
-        "How would you like to proceed?",
-        [
-            ("Launch anyway", "Override — proceed despite the warning"),
-            ("Retry check", "Close other apps to free resources, then re-check"),
-            ("Switch Whisper model", "Pick a smaller Whisper model that fits available VRAM/RAM"),
-            ("Cancel", "Return to main menu without launching"),
-        ],
-        default=0,
-        allow_back=False,
-    )
-
-    if ch == 0:
-        warn("Launching with low resources — watch logs if servers crash.")
-        return True
-    if ch == 1:
-        info("Re-checking resources — close unused apps first, then press Enter.")
-        try:
-            input(f"  {C.DIM}Press Enter when ready...{C.RESET}")
-        except (EOFError, KeyboardInterrupt):
-            print()
-        return _check_resources(cfg)
-    if ch == 2:
-        from yume.menus import _menu_whisper_model
-
-        _menu_whisper_model(cfg)
-        return _check_resources(cfg)
-    return False
+            _menu_whisper_model(cfg)
+        else:
+            return False
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -239,73 +221,95 @@ def launch_services(cfg: dict) -> None:
 # ── Internal launch logic ─────────────────────────────────────────────────────
 
 
-def _launch_inner(cfg: dict, procs: servers.Processes) -> None:
-    """Actual server startup. Ctrl+C caught by launch_services()."""
-    from config import DEFAULT_TRANSLATION_PORT, DEFAULT_WHISPER_PORT, save_config
+def _use_running_servers(cfg: dict, existing: dict) -> bool:
+    """Servers already up: reuse them (True = the launch is done)."""
+    from config import save_config
 
-    # --- Check for already-running servers ---
-    existing = discover_servers(cfg, BACKEND_INFO)
     if existing.get("whisper") and existing.get("translation"):
         info("Both servers are already running!")
         if ask_yn("Open runtime menu with existing servers?", True):
             _runtime_menu(cfg, servers.Processes(), cfg.get("translation_backend", "llamacpp"))
-            return
-    if existing.get("ollama_found"):
-        port = existing["ollama_found"]
+            return True
+    port = existing.get("ollama_found")
+    if port:
         info(f"Found Ollama running on port {port}")
-        if cfg["translation_port"] != port:
-            if ask_yn(f"Update translation port to {port}?", True):
-                cfg["translation_port"] = port
-                save_config(cfg)
+        if cfg["translation_port"] != port and ask_yn(f"Update translation port to {port}?", True):
+            cfg["translation_port"] = port
+            save_config(cfg)
+    return False
 
-    # Pre-flight port check
+
+def _free_port_or_stop(port: int, cfg: dict, kind: str, other: int) -> int | None:
+    """A busy port: offer to free it or move to another; None = cannot launch."""
+    info(f"Port {port} is busy. Another Yume instance or other app may be using it.")
+    port = ensure_port_free(port, cfg, kind, exclude={other})
+    if port is None:
+        error(f"Cannot proceed without a free {kind} port.")
+        info(f"Change the port in: {C.CYAN}python pocket_yume.py settings{C.RESET}")
+        pause()
+    return port
+
+
+def _prepare_ports(cfg: dict, existing: dict) -> bool:
+    """Distinct, free ports for Whisper and (llama.cpp) translation. False = cannot launch."""
+    from config import DEFAULT_TRANSLATION_PORT, DEFAULT_WHISPER_PORT, save_config
+
     wport = cfg.get("whisper_port", DEFAULT_WHISPER_PORT)
     tport = cfg.get("translation_port", DEFAULT_TRANSLATION_PORT)
     if wport == tport:
         error("Whisper and translation ports are the same!")
         tport = find_free_port(wport + 1, exclude={wport})
-        if tport:
-            cfg["translation_port"] = tport
-            save_config(cfg)
-            success(f"Auto-assigned translation to port {tport}")
-        else:
+        if not tport:
             error("Could not find a free port. Many ports may be in use on this system.")
             info(f"Change ports manually in: {C.CYAN}python pocket_yume.py settings{C.RESET}")
             pause()
-            return
-    bk = cfg.get("translation_backend", "llamacpp")
+            return False
+        cfg["translation_port"] = tport
+        save_config(cfg)
+        success(f"Auto-assigned translation to port {tport}")
     if not existing.get("whisper") and not is_port_free(wport):
-        info(f"Port {wport} is busy. Another Yume instance or other app may be using it.")
-        wport = ensure_port_free(wport, cfg, "whisper", exclude={tport})
+        wport = _free_port_or_stop(wport, cfg, "whisper", tport)
         if wport is None:
-            error("Cannot proceed without a free whisper port.")
-            info(f"Change the port in: {C.CYAN}python pocket_yume.py settings{C.RESET}")
-            pause()
-            return
+            return False
     # Only llama.cpp is started by Yume on the translation port; for Ollama /
     # LM Studio / custom servers that port is SUPPOSED to be in use.
-    if bk == "llamacpp" and not existing.get("translation") and not is_port_free(tport):
-        info(f"Port {tport} is busy. Another Yume instance or other app may be using it.")
-        tport = ensure_port_free(tport, cfg, "translation", exclude={wport})
-        if tport is None:
-            error("Cannot proceed without a free translation port.")
-            info(f"Change the port in: {C.CYAN}python pocket_yume.py settings{C.RESET}")
-            pause()
-            return
+    llamacpp = cfg.get("translation_backend", "llamacpp") == "llamacpp"
+    if llamacpp and not existing.get("translation") and not is_port_free(tport):
+        return _free_port_or_stop(tport, cfg, "translation", wport) is not None
+    return True
 
-    # Missing server packages: things still run (pypinyin → slower LLM pinyin,
-    # waitress → Flask's dev server), so warn and offer the install, don't block
+
+def _offer_missing_packages() -> None:
+    """Missing server packages: things still run (pypinyin → slower LLM pinyin,
+    waitress → Flask's dev server), so warn and offer the install, don't block."""
     from yume.utils import missing_requirements
 
-    miss = missing_requirements()
-    if miss:
-        warn(f"Missing server packages: {', '.join(miss)}")
+    missing = missing_requirements()
+    if missing:
+        warn(f"Missing server packages: {', '.join(missing)}")
         if ask_yn("Install them now?", True):
             from yume.installers import install_python_deps
 
             install_python_deps()
 
-    # Pre-flight resource check
+
+def _start_translation(cfg: dict, procs: servers.Processes, env: dict) -> bool:
+    bk = cfg.get("translation_backend", "llamacpp")
+    if bk == "llamacpp":
+        return _start_llamacpp(cfg, procs, backend_info(bk), env)
+    if bk == "ollama":
+        return _start_ollama(cfg, procs, env)
+    name = BACKEND_INFO.get(bk, {}).get("name", bk)
+    info(f"{name} -- make sure it's running at {cfg['translation_host']}:{cfg['translation_port']}")
+    return True
+
+
+def _launch_inner(cfg: dict, procs: servers.Processes) -> None:
+    """Actual server startup. Ctrl+C caught by launch_services()."""
+    existing = discover_servers(cfg, BACKEND_INFO)
+    if _use_running_servers(cfg, existing) or not _prepare_ports(cfg, existing):
+        return
+    _offer_missing_packages()
     if not _check_resources(cfg):
         return
 
@@ -313,25 +317,10 @@ def _launch_inner(cfg: dict, procs: servers.Processes) -> None:
     if env.get("HSA_OVERRIDE_GFX_VERSION") and "HSA_OVERRIDE_GFX_VERSION" not in os.environ:
         warn("AMD RDNA1 GPU detected. Setting HSA_OVERRIDE_GFX_VERSION=10.3.0")
         info("Add 'export HSA_OVERRIDE_GFX_VERSION=10.3.0' to ~/.bashrc to make this permanent.")
-
-    bi = backend_info(bk)
-
-    # --- START TRANSLATION BACKEND ---
-    if bk == "llamacpp":
-        if not _start_llamacpp(cfg, procs, bi, env):
-            return
-    elif bk == "ollama":
-        if not _start_ollama(cfg, procs, env):
-            return
-    else:
-        bn = BACKEND_INFO.get(bk, {}).get("name", bk)
-        info(f"{bn} -- make sure it's running at {cfg['translation_host']}:{cfg['translation_port']}")
-
-    # --- START WHISPER SERVER ---
-    if not _start_whisper(cfg, procs, env):
+    if not _start_translation(cfg, procs, env) or not _start_whisper(cfg, procs, env):
         return
 
-    # --- READY ---
+    bk = cfg.get("translation_backend", "llamacpp")
     clear()
     print()
     success(f"Yume is running!  {C.DIM}v{VERSION}{C.RESET}")
@@ -341,7 +330,6 @@ def _launch_inner(cfg: dict, procs: servers.Processes) -> None:
     print()
     info(f"{C.DIM}Chrome -> Japanese video -> Yume extension -> Enable{C.RESET}")
     print()
-
     _runtime_menu(cfg, procs, bk)
 
 

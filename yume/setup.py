@@ -19,8 +19,10 @@ from yume.constants import (
     EXT_DIR,
     IS_WIN,
     EXE,
+    MiB,
     HEALTH_PATH_OLLAMA,
     BACKEND_INFO,
+    use_backend,
 )
 from yume.hardware import detect_gpu, detect_ram_gb, disk_free_gb, recommend_whisper_model
 from yume.network import check_server
@@ -393,28 +395,17 @@ def _install_missing(missing: list[str], ask_each: bool) -> None:
 
 def _use_ollama(cfg: dict) -> None:
     """Switch translation to Ollama; offer to install it and pull a model."""
-    from config import DEFAULT_OLLAMA_PORT
 
     from yume.installers import install_ollama, pull_ollama_model
 
-    bi = BACKEND_INFO["ollama"]
-    cfg["translation_backend"] = "ollama"
-    cfg["translation_host"] = bi["dh"]
-    cfg["translation_port"] = bi["dp"]
+    use_backend(cfg, "ollama")
     cfg["translation_model"] = "qwen2.5:7b"
     if not ask_yn("Install Ollama?"):
         return
     _install_with_retry("Ollama", install_ollama, f"Install manually: {C.CYAN}https://ollama.com{C.RESET}")
     time.sleep(2)
-    if not ask_yn(f"Download model ({cfg['translation_model']})?"):
-        return
-    if not check_server("127.0.0.1", DEFAULT_OLLAMA_PORT, HEALTH_PATH_OLLAMA)["up"]:
-        try:
-            subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(3)
-        except Exception as e:
-            _log.debug("[setup_wizard] failed to start ollama serve: %s", e)
-    pull_ollama_model(cfg["translation_model"])
+    if ask_yn(f"Download model ({cfg['translation_model']})?"):
+        pull_ollama_model(cfg["translation_model"])  # starts Ollama if needed
 
 
 def _choose_translation_model(cfg: dict, needs_model: bool) -> None:
@@ -549,57 +540,89 @@ def setup_wizard(cfg: dict) -> dict:
 # ── Uninstall ─────────────────────────────────────────────────────────────────
 
 
-def uninstall_yume() -> None:
+# Other programs use these too: the uninstaller leaves them installed
+_SHARED_LIBS = {"numpy", "av", "yt-dlp"}
+
+
+def _yume_pip_packages() -> list[str]:
+    """Exactly what Yume installs: the server's requirements, the llama-cpp-python
+    engine and its server, the YouTube PO-token plugin, and demucs for vocal isolation."""
+    from yume import vocals
+    from yume.servers import LLAMA_SERVER_DEPS
+    from yume.utils import requirement_name, server_requirements
+
+    specs = [*server_requirements(), "llama-cpp-python", *LLAMA_SERVER_DEPS, "bgutil-ytdlp-pot-provider", vocals.DEMUCS]
+    names = (requirement_name(s) for s in specs)
+    return list(dict.fromkeys(n for n in names if n not in _SHARED_LIBS))
+
+
+def _uninstall_targets() -> list[tuple[str, Path]]:
     from config import CONFIG_DIR
-
-    MiB = 1024**2
-
-    header("Uninstall Yume")
-    warn("This will remove all Yume data from your system.")
-    print()
-    info("What will be removed:")
     from yume.utils import hf_hub_dir
 
     hf_hub = hf_hub_dir()
     whisper_caches = sorted(hf_hub.glob("models--*faster*whisper*")) if hf_hub.exists() else []
-    dirs = [
+    return [
         ("Tools (yt-dlp, ffmpeg, deno)", TOOLS_DIR),
         ("Translation models (downloaded AI model files)", GGUF_DIR),
         ("Configuration, blacklist, saved subtitles", CONFIG_DIR),
         ("Logs", LOGS_DIR),
     ] + [(f"Whisper model {d.name.split('--')[-1]}", d) for d in whisper_caches]
+
+
+def _folder_mb(d: Path) -> float:
+    size = 0
+    for f in d.rglob("*") if d.exists() else ():
+        try:
+            size += f.stat().st_size
+        except OSError as e:
+            _log.debug("[uninstall_yume] file-stat failed: %s", e)
+    return size / MiB
+
+
+def _remove_data(dirs: list[tuple[str, Path]]) -> None:
+    """Stop Yume, unregister one-click start, delete Yume's folders."""
+    from yume import native_host
+    from yume.service import request_stop
+
+    request_stop()
+    native_host.unregister()
+    for stray in (BASE_DIR / ".yume_token", BASE_DIR / "yume_config_post_setup.json"):
+        stray.unlink(missing_ok=True)
     for label, d in dirs:
-        sz = 0
         if d.exists():
-            for f in d.rglob("*"):
-                try:
-                    sz += f.stat().st_size
-                except Exception as e:
-                    _log.debug("[uninstall_yume] file-stat failed: %s", e)
+            try:
+                shutil.rmtree(d)
+                success(f"Removed: {label}")
+            except Exception as e:
+                error(f"Failed to remove {label}: {e}")
+    shutil.rmtree(MODELS_DIR, ignore_errors=True)
 
-        mb = sz / MiB
-        marker = f"{C.GREEN}✓{C.RESET}" if d.exists() else f"{C.DIM}—{C.RESET}"
-        print(f"    {marker} {label:40s} {mb:>8.1f} MB  {d}")
+
+def _remove_packages(packages: list[str]) -> None:
+    info("Uninstalling pip packages...")
+    for pkg in packages:
+        try:
+            if _run([sys.executable, "-m", "pip", "uninstall", "-y", pkg], timeout=30).returncode == 0:
+                success(f"  Removed: {pkg}")
+        except Exception as e:
+            _log.debug("[uninstall_yume] pip-remove failed: %s", e)
+
+
+def uninstall_yume() -> None:
+    header("Uninstall Yume")
+    warn("This will remove all Yume data from your system.")
     print()
-
-    # Exactly what Yume installs (server/requirements.txt + llama.cpp server +
-    # Deno auth). Shared libraries like numpy are left alone.
-    pip_pkgs = [
-        "faster-whisper",
-        "flask",
-        "waitress",
-        "pykakasi",
-        "pypinyin",
-        "llama-cpp-python",
-        "uvicorn",
-        "fastapi",
-        "sse-starlette",
-        "starlette-context",
-        "pydantic-settings",
-        "bgutil-ytdlp-pot-provider",
-    ]
+    info("What will be removed:")
+    dirs = _uninstall_targets()
+    for label, d in dirs:
+        marker = f"{C.GREEN}✓{C.RESET}" if d.exists() else f"{C.DIM}—{C.RESET}"
+        print(f"    {marker} {label:40s} {_folder_mb(d):>8.1f} MB  {d}")
+    print()
+    packages = _yume_pip_packages()
     info("Pip packages that can be removed:")
-    print(f"    {', '.join(pip_pkgs)}")
+    print(f"    {', '.join(packages)}")
+    info(f"{C.DIM}PyTorch (vocal isolation, ~3 GB) is left installed — other programs may use it.{C.RESET}")
     print()
 
     ch = ask_arrow(
@@ -612,51 +635,14 @@ def uninstall_yume() -> None:
         ],
         default=3,
     )
-
-    if ch in (3, -1):
+    if ch not in (0, 1, 2) or not ask_yn("Are you sure? This cannot be undone.", False):
         info("Cancelled.")
         pause()
         return
-
-    remove_data = ch in (0, 1)
-    remove_pip = ch in (0, 2)
-
-    if not ask_yn("Are you sure? This cannot be undone.", False):
-        info("Cancelled.")
-        pause()
-        return
-
-    if remove_data:
-        from yume import native_host
-        from yume.service import request_stop
-
-        request_stop()
-        native_host.unregister()
-        for stray in (BASE_DIR / ".yume_token", BASE_DIR / "yume_config_post_setup.json"):
-            stray.unlink(missing_ok=True)
-        for label, d in dirs:
-            if d.exists():
-                try:
-                    shutil.rmtree(d)
-                    success(f"Removed: {label}")
-                except Exception as e:
-                    error(f"Failed to remove {label}: {e}")
-
-        if MODELS_DIR.exists():
-            try:
-                shutil.rmtree(MODELS_DIR)
-            except Exception as e:
-                _log.debug("[uninstall_yume] cleanup failed: %s", e)
-
-    if remove_pip:
-        info("Uninstalling pip packages...")
-        for pkg in pip_pkgs:
-            try:
-                r = _run([sys.executable, "-m", "pip", "uninstall", "-y", pkg], timeout=30)
-                if r.returncode == 0:
-                    success(f"  Removed: {pkg}")
-            except Exception as e:
-                _log.debug("[uninstall_yume] pip-remove failed: %s", e)
+    if ch in (0, 1):
+        _remove_data(dirs)
+    if ch in (0, 2):
+        _remove_packages(packages)
 
     print()
     success("Uninstall complete!")

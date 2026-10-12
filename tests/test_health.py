@@ -148,3 +148,17 @@ def test_issue_summary_lists_the_failures():
     c = Check(tools=set()).go()
     summary = next(line for line in c.advice if "issue(s) found" in line)
     assert "yt-dlp installed" in summary and "ffmpeg installed" in summary
+
+
+def test_fonts_are_found_by_their_windows_file_names():
+    files = [
+        Path(f"C:/Windows/Fonts/{n}") for n in ("msyh.ttc", "YuGothR.ttc", "malgun.ttf", "simsun.ttc", "arial.ttf")
+    ]
+    found = {script: health._matching(files, patterns) for script, (patterns, _) in health._SCRIPT_FONTS.items()}
+    assert found == {
+        "Japanese": ["YuGothR.ttc"],
+        "Chinese": ["msyh.ttc", "simsun.ttc"],
+        "Korean": ["malgun.ttf"],
+        "Arabic": [],
+    }
+    assert health._SCRIPT_FONTS["Arabic"][1] == "Noto Naskh Arabic"  # was "Noto Sans AR", which does not exist

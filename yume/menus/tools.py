@@ -7,7 +7,7 @@ import logging
 import sys
 import urllib.request
 
-from yume.constants import TOOLS_DIR, GGUF_DIR, GiB, BACKEND_INFO, backend_info
+from yume.constants import TOOLS_DIR, GGUF_DIR, GiB, BACKEND_INFO, backend_info, use_backend
 from yume.network import check_ollama_models, check_translation_server
 from yume.ports import find_free_port, get_port_process, is_port_free
 from yume.ui import (
@@ -34,76 +34,65 @@ _log = logging.getLogger("pocket_yume")
 # ── Tools menu ─────────────────────────────────────────────────────────────────
 
 
+def _vocals_menu(cfg: dict) -> None:
+    from yume import vocals
+
+    vocals.menu(cfg)
+
+
+def _benchmark(cfg: dict) -> None:
+    from yume.benchmark import benchmark_whisper
+
+    benchmark_whisper(cfg)
+
+
+def _fonts(cfg: dict) -> None:
+    from yume.health import detect_fonts
+
+    detect_fonts()
+
+
+def _extension_help(cfg: dict) -> None:
+    from yume.setup import _extension_guide
+
+    header("Browser Extension")
+    _extension_guide()
+    pause()
+
+
 def tools_menu(cfg: dict) -> None:
     """Tools management menu."""
-    from yume.benchmark import benchmark_whisper
-    from yume.health import detect_fonts
+    from yume import llama_server
 
     while True:
         # Same name as the main-menu entry that leads here
         header("Tools & Fonts")
-        yt = find_tool("yt-dlp")
-        ff = find_tool("ffmpeg")
-        dn = find_tool("deno")
         # ✓/✗ carry the meaning; colour is reinforcement only (colourblind-safe)
         ok = f"{C.GREEN}✓ installed{C.RESET}"
         miss = f"{C.RED}✗ missing{C.RESET}"
         opt_miss = f"{C.DIM}– not installed{C.RESET}"
-        from yume import llama_server
-
         build = llama_server.installed_build() if llama_server.server_path() else {}
         engine = f"{C.GREEN}✓ {build.get('variant', '?')}{C.RESET}" if build else opt_miss
+        entries = [
+            (f"yt-dlp          {ok if find_tool('yt-dlp') else miss}", "Downloads audio from YouTube and 1000+ video sites", _menu_ytdlp),
+            (f"FFmpeg          {ok if find_tool('ffmpeg') else miss}", "Converts audio between formats (required)", lambda cfg: _menu_ffmpeg()),
+            (f"Deno            {ok if find_tool('deno') else opt_miss}", "Helps bypass YouTube bot detection (optional)", _menu_deno),
+            ("Translation Backend", "Choose how Yume translates: llama.cpp / Ollama / LM Studio / Custom", _menu_backend),
+            (f"Translation Engine  {engine}", "Install / update llama.cpp's prebuilt GPU server (llama-server)", lambda cfg: _menu_llama_server()),
+            ("Vocal Isolation", "Separate the singer from the music before transcribing (better lyrics)", _vocals_menu),
+            ("Download Translation Model", "Browse and download GGUF models (the files your translator uses)", browse_hf),
+            ("Python Dependencies", "Install required Python packages + romanization libraries", lambda cfg: _menu_pydeps()),
+            ("Test Translation", "Send a test sentence to check if translation is working", _test_translation),
+            ("Benchmark Whisper", "Measure how fast each speech recognition model runs on your hardware", _benchmark),
+            ("Detect Fonts", "Find subtitle-compatible fonts installed on your system", _fonts),
+            ("Browser Extension", "How to load Yume in Chrome, Edge, Brave or Firefox", _extension_help),
+        ]  # fmt: skip
         ch = ask_arrow(
-            "Select a tool:",
-            [
-                (f"yt-dlp          {ok if yt else miss}", "Downloads audio from YouTube and 1000+ video sites"),
-                (f"FFmpeg          {ok if ff else miss}", "Converts audio between formats (required)"),
-                (f"Deno            {ok if dn else opt_miss}", "Helps bypass YouTube bot detection (optional)"),
-                ("Translation Backend", "Choose how Yume translates: llama.cpp / Ollama / LM Studio / Custom"),
-                (f"Translation Engine  {engine}", "Install / update llama.cpp's prebuilt GPU server (llama-server)"),
-                ("Vocal Isolation", "Separate the singer from the music before transcribing (better lyrics)"),
-                ("Download Translation Model", "Browse and download GGUF models (the files your translator uses)"),
-                ("Python Dependencies", "Install required Python packages + romanization libraries"),
-                ("Test Translation", "Send a test sentence to check if translation is working"),
-                ("Benchmark Whisper", "Measure how fast each speech recognition model runs on your hardware"),
-                ("Detect Fonts", "Find subtitle-compatible fonts installed on your system"),
-                ("Browser Extension", "How to load Yume in Chrome, Edge, Brave or Firefox"),
-                ("Back", None),
-            ],
-            default=12,
+            "Select a tool:", [(label, desc) for label, desc, _ in entries] + [("Back", None)], default=len(entries)
         )
-        if ch == -1 or ch == 12:
+        if not 0 <= ch < len(entries):
             return
-        elif ch == 0:
-            _menu_ytdlp(cfg)
-        elif ch == 1:
-            _menu_ffmpeg()
-        elif ch == 2:
-            _menu_deno(cfg)
-        elif ch == 3:
-            _menu_backend(cfg)
-        elif ch == 4:
-            _menu_llama_server()
-        elif ch == 5:
-            from yume import vocals
-
-            vocals.menu(cfg)
-        elif ch == 6:
-            browse_hf(cfg)
-        elif ch == 7:
-            _menu_pydeps()
-        elif ch == 8:
-            _test_translation(cfg)
-        elif ch == 9:
-            benchmark_whisper(cfg)
-        elif ch == 10:
-            detect_fonts()
-        elif ch == 11:
-            from yume.setup import _extension_guide
-
-            header("Browser Extension")
-            _extension_guide()
-            pause()
+        entries[ch][2](cfg)
 
 
 def _menu_llama_server() -> None:
@@ -473,11 +462,7 @@ def _select_backend(cfg: dict) -> None:
     ch = ask_arrow("Choose:", opts, default=di)
     if ch == -1 or ch == len(keys):
         return
-    k = keys[ch]
-    bi = BACKEND_INFO[k]
-    cfg["translation_backend"] = k
-    cfg["translation_host"] = bi["dh"]
-    cfg["translation_port"] = bi["dp"]
+    bi = use_backend(cfg, keys[ch])
     save_config(cfg)
     success(f"Backend: {bi['name']}  ({bi['dh']}:{bi['dp']})")
     print(f"\n  {C.BOLD}Installation:{C.RESET}")
@@ -534,115 +519,99 @@ def _change_addr(cfg: dict, prefix: str) -> None:
     pause()
 
 
+def _show_model_status(cfg: dict, ggufs: list) -> None:
+    from config import DEFAULT_OLLAMA_PORT
+
+    bk = cfg.get("translation_backend", "llamacpp")
+    mdl = cfg.get("translation_model", "")
+    gp = cfg.get("gguf_model_path", "")
+    info(f"Backend: {C.BOLD}{BACKEND_INFO.get(bk, {}).get('name', bk)}{C.RESET}")
+    if mdl:
+        info(f"Model:   {C.BOLD}{mdl}{C.RESET}")
+    if gp:
+        info(f"GGUF:    {gp}")
+    if ggufs:
+        print()
+        info(f"GGUF files in {GGUF_DIR}:")
+        for f in ggufs:
+            act = f" {C.GREEN}<- active{C.RESET}" if str(f) == gp else ""
+            bullet(f"{f.name}  ({f.stat().st_size / GiB:.2f} GB){act}")
+    if bk != "ollama":
+        return
+    models = check_ollama_models(
+        cfg.get("translation_host", "127.0.0.1"), cfg.get("translation_port", DEFAULT_OLLAMA_PORT)
+    )
+    if models:
+        print()
+        info("Ollama models:")
+        family = mdl.split(":")[0]
+        for m in models:
+            bullet(f"{m}{f' {C.GREEN}<- active{C.RESET}' if m == mdl or m.startswith(family) else ''}")
+
+
+def _rename_model(cfg: dict, ggufs: list) -> None:
+    from config import save_config
+
+    name = ask_input("Model name", cfg.get("translation_model", ""))
+    if name:
+        cfg["translation_model"] = name
+        save_config(cfg)
+        success(f"Model: {name}")
+    pause()
+
+
+def _pull_model(cfg: dict, ggufs: list) -> None:
+    from config import save_config
+    from yume.installers import pull_ollama_model
+
+    name = ask_input("Ollama model to pull", cfg.get("translation_model", "") or "qwen2.5:7b")
+    if name and pull_ollama_model(name):  # starts Ollama if needed
+        cfg["translation_model"] = name
+        save_config(cfg)
+    pause()
+
+
+def _browse_hf(cfg: dict, ggufs: list) -> None:
+    browse_hf(cfg)
+
+
+def _select_gguf(cfg: dict, ggufs: list) -> None:
+    from config import save_config
+
+    if not ggufs:
+        warn(f"No .gguf files in {GGUF_DIR}")
+        pause()
+        return
+    opts = [(f"{f.name} ({f.stat().st_size / GiB:.2f} GB)", None) for f in ggufs] + [("Back", None)]
+    ch = ask_arrow("Select:", opts, default=len(opts) - 1)
+    if 0 <= ch < len(ggufs):
+        cfg["gguf_model_path"] = str(ggufs[ch])
+        cfg["translation_model"] = ggufs[ch].stem
+        save_config(cfg)
+        success(f"Selected: {ggufs[ch].name}")
+        if cfg["translation_backend"] != "llamacpp" and ask_yn("Switch to llama.cpp backend?"):
+            use_backend(cfg, "llamacpp")
+            save_config(cfg)
+    pause()
+
+
 def _manage_model(cfg: dict) -> None:
-    import subprocess
-
-    from config import DEFAULT_OLLAMA_PORT, save_config
-
     while True:
         header("Manage Translation Model")
-        bk = cfg.get("translation_backend", "llamacpp")
-        mdl = cfg.get("translation_model", "")
-        gp = cfg.get("gguf_model_path", "")
-        bi = BACKEND_INFO.get(bk, {})
-        info(f"Backend: {C.BOLD}{bi.get('name', bk)}{C.RESET}")
-        if mdl:
-            info(f"Model:   {C.BOLD}{mdl}{C.RESET}")
-        if gp:
-            info(f"GGUF:    {gp}")
-
-        gf = find_gguf_models()
-        if gf:
-            print()
-            info(f"GGUF files in {GGUF_DIR}:")
-            for f in gf:
-                sg = f.stat().st_size / GiB
-                act = f" {C.GREEN}<- active{C.RESET}" if str(f) == gp else ""
-                bullet(f"{f.name}  ({sg:.2f} GB){act}")
-
-        if bk == "ollama":
-            ms = check_ollama_models(
-                cfg.get("translation_host", "127.0.0.1"),
-                cfg.get("translation_port", DEFAULT_OLLAMA_PORT),
-            )
-            if ms:
-                print()
-                info("Ollama models:")
-                for m in ms:
-                    act = (
-                        f" {C.GREEN}<- active{C.RESET}"
-                        if m == mdl or m.startswith(mdl.split(":")[0] if ":" in mdl else mdl)
-                        else ""
-                    )
-                    bullet(f"{m}{act}")
-
+        ggufs = find_gguf_models()
+        _show_model_status(cfg, ggufs)
+        entries = [
+            ("Change model name", "Enter model name manually", _rename_model),
+            ("Pull Ollama model", "Download via ollama pull", _pull_model),
+            ("Download GGUF from HuggingFace", "Browse repos and pick files", _browse_hf),
+            ("Select local GGUF file", f"{len(ggufs)} file(s) in models/translation/", _select_gguf),
+        ]
         ch = ask_arrow(
-            "Options:",
-            [
-                ("Change model name", "Enter model name manually"),
-                ("Pull Ollama model", "Download via ollama pull"),
-                ("Download GGUF from HuggingFace", "Browse repos and pick files"),
-                ("Select local GGUF file", f"{len(gf)} file(s) in models/translation/"),
-                ("Back", None),
-            ],
-            default=4,
+            "Options:", [(label, desc) for label, desc, _ in entries] + [("Back", None)], default=len(entries)
         )
-        if ch == -1 or ch == 4:
+        if not 0 <= ch < len(entries):
             return
-        elif ch == 0:
-            nm = ask_input("Model name", mdl)
-            if nm:
-                cfg["translation_model"] = nm
-                save_config(cfg)
-                success(f"Model: {nm}")
-            pause()
-        elif ch == 1:
-            from yume.installers import pull_ollama_model
-
-            mn = ask_input("Ollama model to pull", mdl or "qwen2.5:7b")
-            if mn:
-                if not check_ollama_models(
-                    cfg.get("translation_host", "127.0.0.1"),
-                    cfg.get("translation_port", DEFAULT_OLLAMA_PORT),
-                ):
-                    info("Starting Ollama...")
-                    try:
-                        subprocess.Popen(  # nosec B603
-                            ["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                        )
-                        import time
-
-                        time.sleep(3)
-                    except Exception:
-                        error("Could not start Ollama")
-                        pause()
-                        continue
-                pull_ollama_model(mn)
-                cfg["translation_model"] = mn
-                save_config(cfg)
-            pause()
-        elif ch == 2:
-            browse_hf(cfg)
-        elif ch == 3:
-            if not gf:
-                warn(f"No .gguf files in {GGUF_DIR}")
-                pause()
-                continue
-            fo = [(f"{f.name} ({f.stat().st_size / GiB:.2f} GB)", None) for f in gf] + [("Back", None)]
-            fc = ask_arrow("Select:", fo, default=len(fo) - 1)
-            if 0 <= fc < len(gf):
-                cfg["gguf_model_path"] = str(gf[fc])
-                cfg["translation_model"] = gf[fc].stem
-                save_config(cfg)
-                success(f"Selected: {gf[fc].name}")
-                if cfg["translation_backend"] != "llamacpp":
-                    if ask_yn("Switch to llama.cpp backend?"):
-                        bi2 = BACKEND_INFO.get("llamacpp", {})
-                        cfg["translation_backend"] = "llamacpp"
-                        cfg["translation_host"] = bi2.get("dh", "127.0.0.1")
-                        cfg["translation_port"] = bi2.get("dp", 5000)
-                        save_config(cfg)
-            pause()
+        entries[ch][2](cfg, ggufs)
 
 
 def cfg_backend() -> str:

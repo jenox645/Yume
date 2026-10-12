@@ -74,3 +74,17 @@ def transcribe_audio(audio, language, offset=0.0, is_first_region=False):
         f"[Yume] Transcribed {len(audio) / SAMPLE_RATE:.0f}s at {offset:.0f}s: {len(segments)} segments in {elapsed:.1f}s"
     )
     return segments
+
+
+def detect_language(audio):
+    """(language, probability) Whisper hears in the audio; (None, 0.0) if it cannot tell."""
+    model = _state.model
+    if model is None or len(audio) < SAMPLE_RATE * 5:
+        return None, 0.0
+    try:
+        with _state.transcribe_lock:
+            language, prob, _all = model.detect_language(audio[: SAMPLE_RATE * 30])
+        return language, float(prob)
+    except Exception as e:  # an older faster-whisper, or a model without the head
+        print(f"[Yume] Language check skipped: {e}")
+        return None, 0.0

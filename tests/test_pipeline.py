@@ -169,9 +169,9 @@ def test_falls_back_when_backend_rejects_response_format():
         return "[1] Hello\n[2] World"
 
     with patch.object(tr, "_chat", side_effect=fake_chat):
-        assert tr.translate_batch(["a", "b"], "ja", "English") == ["Hello", "World"]
+        assert tr.translate_batch(["あ", "い"], "ja", "English") == ["Hello", "World"]
         calls.clear()
-        tr.translate_batch(["a", "b"], "ja", "English")
+        tr.translate_batch(["あ", "い"], "ja", "English")
     assert calls == ["plain"]  # remembered: no more failing attempts
 
 
@@ -217,7 +217,7 @@ def test_unreachable_server_raises_without_trying_other_formats():
     tr = _translator()
     with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")):
         with pytest.raises(_translate.TranslationError, match="unreachable"):
-            tr.translate_batch(["a"], "ja", "English")
+            tr.translate_batch(["あ"], "ja", "English")
 
 
 # ── romanization ──────────────────────────────────────────────────────────────
@@ -278,7 +278,7 @@ class _FakeTranslator:
     def model_id(self):
         return "fake:1"
 
-    def translate_batch(self, texts, src, tgt, title="", context=None):
+    def translate_batch(self, texts, src, tgt, title="", context=None, readings=None):
         self.calls += 1
         return [f"EN({t})" for t in texts]
 
@@ -539,6 +539,36 @@ def test_download_failure_reports_error(pipeline):
     assert snap["status"] == "error" and "unavailable" in snap["error"]
 
 
+def test_failed_download_streams_each_region_when_the_stream_is_reachable(pipeline):
+    with (
+        patch.object(_audio, "download_full_audio", return_value=(None, "HTTP Error 403")),
+        patch.object(_audio, "get_stream_url", return_value="https://rr1.googlevideo.com/a"),
+    ):
+        job = pipeline.jobs.create({**PARAMS, "video_id": "streamed", "duration": 61})
+        deadline = time.time() + 10
+        while not job.regions and time.time() < deadline:
+            time.sleep(0.05)
+    assert job.mode == "stream"
+    assert job.regions == _regions.fixed_regions(61)
+    assert any("streaming each region" in e["msg"] for e in job.snapshot(0, events=True)["events"])
+
+
+def test_a_pasted_stream_url_is_downloaded_directly(pipeline, tmp_path):
+    with patch.object(_audio, "download_direct", return_value=(None, "403")) as direct:
+        snap = _run(
+            pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "pasted", "stream_url": "https://cdn/x.m3u8"})
+        )
+    direct.assert_called_once_with("https://cdn/x.m3u8")
+    pipeline.download.assert_not_called()
+    assert snap["status"] == "error" and snap["error"] == "403"
+
+
+def test_an_unreadable_download_is_a_job_error(pipeline):
+    with patch.object(_audio, "load_audio", side_effect=OSError("truncated WAV")):
+        snap = _run(pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "broken"}))
+    assert snap["status"] == "error" and snap["error"] == "OSError: truncated WAV"
+
+
 def test_translation_server_down_does_not_burn_retries(pipeline):
     def down(*a, **k):
         raise _translate.TranslationError("translation server unreachable: refused")
@@ -600,8 +630,31 @@ def test_enable_again_retries_failed_regions(pipeline):
 
 
 @pytest.mark.parametrize("bad", [float("inf"), float("nan"), -5, "x", 10**12])
-def test_job_duration_is_sane(bad):
-    assert _jobs.Job(("k", "ja", "", "m"), {"duration": bad}).duration == 0.0
+def test_job_duration_and_playhead_are_sane(bad):
+    job = _jobs.Job(("k", "ja", "", "m"), {"duration": bad, "playhead": bad})
+    assert job.duration == 0.0 and job.playhead == 0.0
+    manager = _jobs.JobManager.__new__(_jobs.JobManager)
+    manager._notify = lambda: None
+    manager.poll(job, 42.5)
+    assert job.playhead == 42.5
+    manager.poll(job, bad)  # a poll's ?t= goes through the same check
+    assert job.playhead == 0.0
+
+
+def test_job_request_validation():
+    sys.argv = ["server"]
+    import _api
+
+    ok, err = _api._job_params(
+        {"url": "https://www.youtube.com/watch?v=abc", "language": "JA", "t": "12.5", "target": "  French "}
+    )
+    assert err is None
+    assert (ok["language"], ok["target"], ok["playhead"]) == ("ja", "French", "12.5")
+    assert _api._job_params({"url": "https://youtu.be/x", "language": "auto"})[0]["language"] is None
+    assert _api._job_params({})[1] == "Missing url"
+    assert _api._job_params({"url": "file:///etc/passwd"})[1].startswith("Invalid URL")
+    assert _api._job_params({"stream_url": "https://cdn/x.m3u8", "url": "javascript:1"})[1].startswith("Invalid URL")
+    assert _api._job_params({"url": "https://youtu.be/x", "language": "japanese"})[1].startswith("Invalid language")
 
 
 def test_corrupt_cache_database_is_set_aside(tmp_path):
@@ -841,7 +894,7 @@ def test_system_prompt_is_the_same_for_every_batch():
 
     def chat(messages, max_tokens, response_format=None, temperature=0.1):
         seen.append(messages[0]["content"])
-        return json.dumps({"translations": ["x"] * 20})
+        return json.dumps({"translations": [f"x{i}" for i in range(20)]})
 
     tr._chat = chat
     tr.translate_batch(["あ", "い"], "ja", "English", "Title", None)
@@ -923,3 +976,218 @@ def test_audio_that_is_not_16k_mono_is_converted_by_ffmpeg(tmp_path):
     assert 0.2 < np.abs(audio).max() < 0.3
     with pytest.raises(RuntimeError, match="ffmpeg could not read"):
         _audio.load_audio(str(tmp_path / "missing.wav"))
+
+
+# ── regressions from the October multilingual live run ──────────────────────
+
+
+@pytest.mark.parametrize(
+    ("ja", "romaji"),
+    [
+        ("去年3月、東京", "Kyonen 3 gatsu, Tokyo"),  # was "3 tsuki"
+        ("2025年12月25日", "2025 nen 12 gatsu 25 nichi"),  # was "25ka"
+        ("7月1日に", "7 gatsu tsuitachi ni"),
+        ("1日", "Ichinichi"),
+        ("3日間", "Mikkakan"),  # was "3 kakan"
+        ("1人で", "Hitori de"),  # was "1nin de"
+        ("2人", "Futari"),
+        ("3人が", "3 nin ga"),
+        ("20日", "Hatsuka"),
+    ],
+)
+def test_japanese_dates_and_people_are_read_correctly(ja, romaji):
+    if _romanize.get_cutlet() is None:
+        pytest.skip("cutlet (fugashi + unidic-lite) not installed")
+    assert _romanize.romanize("ja", ja) == romaji
+
+
+def _seg(start, end, text):
+    return {"start": start, "end": end, "text": text}
+
+
+def test_cut_off_copies_of_the_next_line_are_hidden():
+    import _filter
+
+    segs = [
+        _seg(44.9, 45.4, "Место..."),
+        _seg(45.4, 50.3, "Место встречи Эрмитаж, где так много символов общего прошлого,"),
+        _seg(27.3, 27.8, "どのような法や制度を変えるのか"),
+        _seg(27.8, 32.7, "どのような法や制度を変えたくて事件を起こしたのですかと問うと、"),
+        _seg(60.0, 63.0, "Hey"),  # long enough to be a real line
+        _seg(63.1, 66.0, "Hey Jude, don't make it bad"),
+    ]
+    _out, hide = _filter.clean_raw_segments(segs)
+    assert hide == {0, 2}
+
+
+def test_the_same_line_twice_becomes_one_line():
+    import _filter
+
+    out, hide = _filter.clean_raw_segments(
+        [
+            _seg(95.3, 98.0, "而它涉及其他技術的措施"),
+            _seg(98.0, 101.9, "而它涉及其他技術的措施"),
+            _seg(101.9, 104.9, "但也可使用了"),
+        ]
+    )
+    assert hide == {1} and out[0]["end"] == 101.9
+
+
+def test_a_fragment_at_a_region_cut_is_hidden_whichever_region_finishes_first(pipeline):
+    for order in ((0, 1), (1, 0)):
+        job = _jobs.Job(("frag", "ko", "", "m"), {"language": "ko"})
+        job.regions, job.region_state = [(0.0, 28.8), (28.8, 55.0)], ["pending", "pending"]
+        raw = {
+            0: [_seg(20.0, 24.0, "주요 뉴스입니다."), _seg(28.5, 28.8, "호주 최고한")],
+            1: [_seg(28.8, 36.0, "호주 최고 안보기관인 AGO가 경고하면서"), _seg(36.0, 41.9, "주장했습니다.")],
+        }
+        for idx in order:
+            job.add_region(idx, raw[idx])
+        hidden = [s["text"] for s in job.segments.values() if s["hidden"]]
+        assert hidden == ["호주 최고한"], order
+
+
+def test_copied_translations_are_retried_line_by_line():
+    tr = _translator()
+    batch = {"translations": ["These men were arrested.", "These men were arrested.", "Chorus", "Chorus"]}
+    singles = []
+
+    def chat(messages, max_tokens, response_format=None, temperature=0.1):
+        if response_format:
+            return json.dumps(batch)
+        singles.append(messages[-1]["content"])
+        return "single"
+
+    tr._chat = chat
+    out = tr.translate_batch(["이들은 또한", "5대의 차량과", "사랑해", "사랑해"], "ko", "English")
+    assert out == ["single", "single", "Chorus", "Chorus"]
+    assert len(singles) == 2  # the chorus (the same line twice) may share a translation
+
+
+def test_english_lines_are_not_sent_for_an_english_translation():
+    tr = _translator()
+    sent = []
+
+    def chat(messages, max_tokens, response_format=None, temperature=0.1):
+        sent.append(messages[-1]["content"])
+        return json.dumps({"translations": ["I love you"]})
+
+    tr._chat = chat
+    out = tr.translate_batch(["One more kiss", "愛してる", "deeds you could do, don't they?"], "ja", "English")
+    assert out == ["", "I love you", ""]
+    assert len(sent) == 1 and "One more kiss" not in sent[0]
+    assert tr.translate_batch(["Hello"], "ja", "English") == [""]  # no request at all
+    assert len(sent) == 1
+
+
+def test_each_line_is_sent_with_its_reading_for_names():
+    tr = _translator()
+    sent = []
+
+    def chat(messages, max_tokens, response_format=None, temperature=0.1):
+        sent.append(messages[-1]["content"])
+        return json.dumps({"translations": ["NHK chairman Inoue said", "it is deeply regrettable."]})
+
+    tr._chat = chat
+    out = tr.translate_batch(
+        ["NHKの井上会長は、", "痛恨の極みだ。"], "ja", "English", readings=["NHK no Inoue kaichou wa,", ""]
+    )
+    assert out == ["NHK chairman Inoue said", "it is deeply regrettable."]
+    assert "1. NHKの井上会長は、 (reading: NHK no Inoue kaichou wa,)" in sent[0]
+    assert "2. 痛恨の極みだ。\n" in sent[0] + "\n"  # no reading: the line alone
+
+
+def test_a_copied_reading_is_retried_without_it_and_never_kept():
+    tr = _translator()
+    calls = []
+
+    def chat(messages, max_tokens, response_format=None, temperature=0.1):
+        calls.append(messages[-1]["content"])
+        if response_format:  # the batch: the model copied the readings
+            return json.dumps({"translations": ["Iradachi wo arawa ni shita", "Hoka no hou yoroshii desu ka?"]})
+        return "He showed his irritation." if "苛立ち" in messages[-1]["content"] else "hoka no hou yoroshii desu ka"
+
+    tr._chat = chat
+    readings = ["Iradachi wo arawa ni shita", "Hoka no hou yoroshii desu ka?"]
+    out = tr.translate_batch(["苛立ちをあらわにした", "他の方よろしいですか?"], "ja", "English", readings=readings)
+    assert out == ["He showed his irritation.", ""]  # the second copied it again: original only
+    assert all("reading" not in c for c in calls[1:])  # retries go without the reading
+
+
+def test_jobs_send_readings_only_where_names_are_hard_to_read(pipeline):
+    seen = []
+    real = pipeline.translator.translate_batch
+
+    def record(texts, src, tgt, title="", context=None, readings=None):
+        seen.append(readings)
+        return real(texts, src, tgt, title, context, readings)
+
+    pipeline.translator.translate_batch = record
+    # CI has no Japanese romanizer installed: give every line a reading
+    with patch.object(_romanize, "romanize", lambda lang, text: "konnichiwa"):
+        _run(pipeline.jobs, pipeline.jobs.create(PARAMS))
+    assert seen and all(r and all(r) for r in seen)  # Japanese: every line's romaji
+    seen.clear()
+    _run(pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "ru1", "language": "ru"}))
+    assert seen and all(r is None for r in seen)  # Cyrillic reads fine: no readings
+
+
+def test_an_unexpected_translation_error_does_not_stop_the_worker(pipeline):
+    # Only TranslationError was caught: any other exception ended the LLM thread
+    # and every job stayed "translating" for good
+    real = pipeline.translator.translate_batch
+    calls = []
+
+    def flaky(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ValueError("unexpected reply")
+        return real(*args, **kwargs)
+
+    pipeline.translator.translate_batch = flaky
+    job = pipeline.jobs.create({**PARAMS, "video_id": "flaky"})
+    deadline = time.time() + 20
+    while time.time() < deadline and job.status != "done":
+        pipeline.jobs.poll(job, 0)
+        with job.lock:
+            job.llm_backoff_until = 0  # skip the 10 s back-off
+        time.sleep(0.05)
+    assert job.status == "done" and len(calls) > 1
+    assert any("Translation failed: unexpected reply" in e["msg"] for e in job.snapshot(0, events=True)["events"])
+
+
+@pytest.mark.parametrize(
+    ("heard", "notice"),
+    [
+        ([("en", 0.97), ("en", 0.95)], "sounds like English, but Yume is set to Arabic"),
+        ([("ar", 0.99), ("en", 0.97), ("en", 0.97)], ""),  # a region clearly in Arabic settles it
+        ([("en", 0.6), ("en", 0.7), ("en", 0.5)], ""),  # not sure enough
+        ([("en", 0.97), ("fr", 0.95), ("en", 0.6), ("ja", 0.9)], ""),  # no language twice in 4 checks
+    ],
+)
+def test_the_user_is_told_when_the_video_sounds_like_another_language(heard, notice):
+    job = _jobs.Job(("v", "ar", "", "m"), {"language": "ar"})
+    for lang, prob in heard:
+        job.check_language(lang, prob)
+    assert (notice in job.notice) if notice else job.notice == ""
+
+
+def test_language_is_checked_while_transcribing_and_shown_in_the_snapshot(pipeline):
+    with patch.object(_jobs, "detect_language", return_value=("en", 0.97)) as det:
+        snap = _run(pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "wrong-lang"}))
+    assert "sounds like English, but Yume is set to Japanese" in snap["notice"]
+    assert det.call_count == _jobs.LANG_MISSES  # stops checking once decided
+    with patch.object(_jobs, "detect_language", return_value=("ja", 0.99)) as det:
+        snap = _run(pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "right-lang"}))
+    assert snap["notice"] == "" and det.call_count == 1
+    with patch.object(_jobs, "detect_language") as det:  # auto-detect: nothing to check
+        _run(pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "auto", "language": None}))
+    det.assert_not_called()
+
+
+def test_a_loop_of_a_long_phrase_is_cut():
+    import _filter
+
+    line = "هل تتحدث عن ماذا يمكن أن يتحدث " + "عن ماذا يتحدث " * 30  # 14-char unit: was let through
+    out, hide = _filter.clean_raw_segments([_seg(50.0, 77.5, line)])
+    assert out[0]["text"] == "هل تتحدث عن ماذا يمكن أن يتحدث عن ماذا يتحدث" and not hide
