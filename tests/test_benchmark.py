@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import sys
 from contextlib import ExitStack
 from pathlib import Path
@@ -57,6 +58,8 @@ class Run:
             "ask_yn": MagicMock(side_effect=self.yns),
             "header": MagicMock(),
             "pause": MagicMock(),
+            # A clock that advances 1 s per reading: each pass "takes" 1 s (30x realtime)
+            "time": MagicMock(perf_counter=MagicMock(side_effect=itertools.count())),
             "table": lambda headers, rows, **kw: self.rows.extend(rows),
             "_is_whisper_model_cached": MagicMock(return_value=self.cached),
         }
