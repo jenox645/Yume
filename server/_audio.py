@@ -380,59 +380,65 @@ def _download_audio_segment_fallback(url, start_time, duration, output_path, _re
 # ── Full audio download ───────────────────────────────────────────────────────
 
 
+_COOKIES_FIX = "Fix: In yume_config.json set youtube_auth_method to 'cookies' and cookies_browser to your browser name"
+
+# (conditions, message): the first rule whose every condition matches wins.
+# A condition is a tuple of phrases, any of which may appear in the error.
+_YTDLP_ERRORS = [
+    (
+        (("drm protected",),),
+        f"YouTube blocked the download (DRM error). {_COOKIES_FIX} (e.g. 'firefox'). "
+        "Or paste a stream URL in the extension popup.",
+    ),
+    ((("sign in to confirm", "confirm you"),), f"YouTube requires sign-in to access this video. {_COOKIES_FIX}."),
+    (
+        (("http error 403", "403 forbidden"), ("cloudflare",)),
+        "Access denied (403) — Cloudflare anti-bot protection. This site blocks automated downloads. "
+        "Try: copy the direct video/audio URL (often .m3u8 or .mp4) from the browser's Network tab "
+        "and paste it as a Custom Stream URL in the Yume extension popup.",
+    ),
+    (
+        (("http error 403", "403 forbidden"),),
+        "Access denied (403). The site is blocking yt-dlp. "
+        "For YouTube: try switching to cookie auth in yume_config.json. "
+        "For other sites: use the Custom Stream URL option in the extension — "
+        "open DevTools > Network > filter 'm3u8' or 'mp4' > copy the URL. "
+        "Also try: pip install -U yt-dlp",
+    ),
+    ((("video unavailable", "private video"),), "This video is unavailable or private."),
+    (
+        (("age",), ("restricted",)),
+        "Age-restricted video. Fix: Set youtube_auth_method to 'cookies' with a logged-in browser.",
+    ),
+    ((("geo",), ("block",)), "This video is not available in your region."),
+    (
+        (("unable to download",), ("webpage", "player")),
+        "Cannot reach YouTube. Check your internet connection, or YouTube may be temporarily down.",
+    ),
+    ((("timed out", "timeout"),), "Download timed out — the video may be too long or the connection too slow."),
+    (
+        ((_state.ERR_NO_SUCH_FILE,), ("yt-dlp",)),
+        "yt-dlp is not installed. Run the Yume setup wizard to install it.",
+    ),
+    (
+        (("no video formats", _state.ERR_REQUESTED_FORMAT),),
+        "No compatible audio format found. Try updating yt-dlp: pip install -U yt-dlp",
+    ),
+    (
+        (("deno",), ("not found", _state.ERR_NO_SUCH_FILE)),
+        "Deno is not installed (needed for YouTube auth). "
+        "Fix: Switch youtube_auth_method to 'cookies' in yume_config.json, "
+        "or install Deno: https://deno.land/#installation",
+    ),
+]
+
+
 def friendlify_ytdlp_error(raw_error):
     """Translate raw yt-dlp errors into actionable user-facing messages."""
     lower = raw_error.lower()
-
-    if "drm protected" in lower:
-        return (
-            "YouTube blocked the download (DRM error). "
-            "Fix: In yume_config.json set youtube_auth_method to 'cookies' "
-            "and cookies_browser to your browser name (e.g. 'firefox'). "
-            "Or paste a stream URL in the extension popup."
-        )
-    if "sign in to confirm" in lower or "confirm you" in lower:
-        return (
-            "YouTube requires sign-in to access this video. "
-            "Fix: In yume_config.json set youtube_auth_method to 'cookies' "
-            "and cookies_browser to your browser name."
-        )
-    if "http error 403" in lower or "403 forbidden" in lower:
-        if "cloudflare" in lower:
-            return (
-                "Access denied (403) — Cloudflare anti-bot protection. "
-                "This site blocks automated downloads. "
-                "Try: copy the direct video/audio URL (often .m3u8 or .mp4) "
-                "from the browser's Network tab and paste it as a Custom Stream URL "
-                "in the Yume extension popup."
-            )
-        return (
-            "Access denied (403). The site is blocking yt-dlp. "
-            "For YouTube: try switching to cookie auth in yume_config.json. "
-            "For other sites: use the Custom Stream URL option in the extension — "
-            "open DevTools > Network > filter 'm3u8' or 'mp4' > copy the URL. "
-            "Also try: pip install -U yt-dlp"
-        )
-    if "video unavailable" in lower or "private video" in lower:
-        return "This video is unavailable or private."
-    if "age" in lower and "restricted" in lower:
-        return "Age-restricted video. Fix: Set youtube_auth_method to 'cookies' with a logged-in browser."
-    if "geo" in lower and "block" in lower:
-        return "This video is not available in your region."
-    if "unable to download" in lower and ("webpage" in lower or "player" in lower):
-        return "Cannot reach YouTube. Check your internet connection, or YouTube may be temporarily down."
-    if "timed out" in lower or "timeout" in lower:
-        return "Download timed out — the video may be too long or the connection too slow."
-    if _state.ERR_NO_SUCH_FILE in lower and "yt-dlp" in lower:
-        return "yt-dlp is not installed. Run the Yume setup wizard to install it."
-    if "no video formats" in lower or _state.ERR_REQUESTED_FORMAT in lower:
-        return "No compatible audio format found. Try updating yt-dlp: pip install -U yt-dlp"
-    if "deno" in lower and ("not found" in lower or _state.ERR_NO_SUCH_FILE in lower):
-        return (
-            "Deno is not installed (needed for YouTube auth). "
-            "Fix: Switch youtube_auth_method to 'cookies' in yume_config.json, "
-            "or install Deno: https://deno.land/#installation"
-        )
+    for conditions, message in _YTDLP_ERRORS:
+        if all(any(phrase in lower for phrase in phrases) for phrases in conditions):
+            return message
     return raw_error
 
 
