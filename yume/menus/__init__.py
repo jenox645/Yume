@@ -6,7 +6,6 @@ tools.py       Tools & Fonts: installers, translation backend/engine, YouTube au
 settings.py    Settings menu
 """
 
-from yume.menus._shared import set_backend_info
 from yume.menus.hf_browser import browse_hf
 from yume.menus.server import _menu_blacklist, _menu_whisper_model, cli_blacklist, cli_model, cli_server_stats
 from yume.menus.settings import settings_menu
@@ -22,7 +21,6 @@ __all__ = [
     "cli_one_click",
     "cli_server_stats",
     "menu_one_click",
-    "set_backend_info",
     "settings_menu",
     "tools_menu",
 ]

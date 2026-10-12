@@ -174,18 +174,6 @@ class TestCheckForUpdates:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class TestSetVersion:
-    def test_version_updated(self):
-        import yume.network as net
-
-        original = net._VERSION
-        try:
-            net.set_version("1.2.3")
-            assert net._VERSION == "1.2.3"
-        finally:
-            net._VERSION = original
-
-
 class TestCheckServer:
     def test_returns_dict_with_up_key(self):
         from yume.network import check_server
@@ -416,30 +404,6 @@ class TestIsWhisperModelCached:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class TestSetBackendInfo:
-    def test_injection_stores_value(self):
-        import yume.health as h
-
-        original = h._BI
-        try:
-            h.set_backend_info({"test_key": "test_val"})
-            assert h._BI["test_key"] == "test_val"
-        finally:
-            h._BI = original
-
-    def test_injection_replaces_old_value(self):
-        import yume.health as h
-
-        original = h._BI
-        try:
-            h.set_backend_info({"a": 1})
-            h.set_backend_info({"b": 2})
-            assert "a" not in h._BI
-            assert h._BI["b"] == 2
-        finally:
-            h._BI = original
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # yume.hardware
 # ─────────────────────────────────────────────────────────────────────────────
@@ -515,63 +479,9 @@ class TestRecommendWhisperModel:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class TestSetSetupContext:
-    def test_injection_stores_values(self):
-        import yume.setup as s
-
-        original_bi = s._BACKEND_INFO
-        original_models = s._MODELS_DIR
-        original_gguf = s._GGUF_DIR
-        original_ver = s._VERSION
-        try:
-            s.set_setup_context({"gpu": "rtx"}, Path("/tmp/models"), Path("/tmp/gguf"), "1.2.3")
-            assert s._BACKEND_INFO == {"gpu": "rtx"}
-            assert s._MODELS_DIR == Path("/tmp/models")
-            assert s._GGUF_DIR == Path("/tmp/gguf")
-            assert s._VERSION == "1.2.3"
-        finally:
-            s._BACKEND_INFO = original_bi
-            s._MODELS_DIR = original_models
-            s._GGUF_DIR = original_gguf
-            s._VERSION = original_ver
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # yume.launch
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestSetLaunchContext:
-    def test_injection_stores_values(self):
-        import yume.launch as lnch
-
-        original_bi = lnch._BACKEND_INFO
-        original_ver = lnch._VERSION
-        try:
-            lnch.set_launch_context({"backend": "llamacpp"}, "9.8.7")
-            assert lnch._BACKEND_INFO == {"backend": "llamacpp"}
-            assert lnch._VERSION == "9.8.7"
-        finally:
-            lnch._BACKEND_INFO = original_bi
-            lnch._VERSION = original_ver
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# yume.menus — module-level injection
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestMenusSetBackendInfo:
-    def test_injection_stores_dict(self):
-        import yume.menus as m
-        from yume.menus import _shared
-
-        original = _shared.BI
-        try:
-            m.set_backend_info({"x": 42})
-            assert _shared.BI["x"] == 42  # every menu module reads it from here
-        finally:
-            _shared.BI = original
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -724,7 +634,7 @@ class TestCliOutputEncoding:
         import subprocess
 
         root = Path(__file__).parent.parent
-        code = "import pocket_yume; pocket_yume._utf8_output(); print('\u2713 \u2014 \u2026')"
+        code = "from yume import cli; cli._utf8_output(); print('\u2713 \u2014 \u2026')"
         env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
         r = subprocess.run([sys.executable, "-c", code], cwd=root, env=env, capture_output=True, timeout=60)
         assert r.returncode == 0, r.stderr.decode(errors="replace")

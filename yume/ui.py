@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import os
-import platform
 import re
 import shutil
 import sys
 import unicodedata
 
-PLAT = platform.system()
-IS_WIN = PLAT == "Windows"
+from yume.constants import IS_WIN
 
 
 # ── Colour codes ──────────────────────────────────────────────────────────────
@@ -363,6 +361,66 @@ def _read_byte_nonblock(fd: int) -> bytes:
         fcntl.fcntl(fd, fcntl.F_SETFL, old_fl)
 
 
+def _windows_keys(msvcrt):
+    """Key names from the Windows console: up, down, enter, esc, interrupt, or the character."""
+    while True:
+        ch = msvcrt.getch()
+        if ch == b"\xe0":  # arrow keys come as two bytes
+            yield {b"H": "up", b"P": "down"}.get(msvcrt.getch(), "")
+        else:
+            yield {b"\r": "enter", b"\x1b": "esc", b"\x03": "interrupt"}.get(ch) or ch.decode(errors="ignore")
+
+
+def _posix_keys(termios, tty, fd: int):
+    """Key names from a POSIX terminal. Raw mode only while reading a key, so
+    the menu is drawn in the normal (cooked) mode."""
+    cooked = termios.tcgetattr(fd)
+    while True:
+        tty.setraw(fd)
+        try:
+            b = os.read(fd, 1)
+            if b == b"\x1b":  # arrows are ESC [ A/B; a lone ESC has nothing after it
+                key = {b"A": "up", b"B": "down"}.get(os.read(fd, 1), "") if _read_byte_nonblock(fd) == b"[" else "esc"
+            else:
+                key = {b"\r": "enter", b"\n": "enter", b"\x03": "interrupt", b"\x04": "interrupt"}.get(b)
+                key = key or b.decode(errors="ignore")
+        finally:
+            termios.tcsetattr(fd, termios.TCSANOW, cooked)
+        yield key
+
+
+def _render_arrow_menu(prompt: str, options: list, sel: int, allow_back: bool) -> int:
+    """Draw the menu; return the number of lines written (to rewind the cursor)."""
+    # Every option gets a description line (blank unless selected): constant height
+    has_any_desc = any(desc for _, desc in options)
+    out = [f"\n  {C.GOLD}?{C.RESET}  {prompt}\n\n"]
+    for i, (label, desc) in enumerate(options):
+        num = f"{C.DIM}{i + 1}.{C.RESET} " if i < 9 else "   "
+        if i == sel:
+            out.append(f"  {C.GREEN}▶{C.RESET} {num}{C.BOLD}{label}{C.RESET}\n")
+        else:
+            out.append(f"    {num}{label}\n")
+        if has_any_desc:
+            out.append(f"      {C.DIM}{desc}{C.RESET}\n" if i == sel and desc else "\n")
+    hint = "↑↓ navigate  1-9 jump  Enter select" + ("  Esc back" if allow_back else "")
+    out.append(f"\n  {C.DIM}{hint}{C.RESET}")
+    text = "".join(out)
+    sys.stdout.write(text)
+    sys.stdout.flush()
+    return text.count("\n")
+
+
+def _move(sel: int, key: str, count: int) -> int:
+    """The selection after a key: arrows wrap around, 1-9 jump to an option."""
+    if key == "up":
+        return (sel - 1) % count
+    if key == "down":
+        return (sel + 1) % count
+    if key.isdigit() and 1 <= int(key) <= count:
+        return int(key) - 1
+    return sel
+
+
 def ask_arrow(prompt: str, options: list, default: int = 0, allow_back: bool = True) -> int:
     """Arrow-key + number-key navigated selection menu.
 
@@ -371,160 +429,39 @@ def ask_arrow(prompt: str, options: list, default: int = 0, allow_back: bool = T
     """
     if not options:
         return -1
-
-    # Non-TTY fallback (piped input, CI, etc.)
-    if not sys.stdin.isatty():
+    if not sys.stdin.isatty():  # piped input, CI
         return ask_choice(prompt, options, default, allow_back)
 
     sel = max(0, min(default, len(options) - 1))
-    # Whether any option has a description — used to maintain constant menu height.
-    has_any_desc = any(desc for _, desc in options)
-
-    def _render() -> int:
-        """Render menu to stdout; return number of \\n chars written (for cursor rewind)."""
-        out = []
-        out.append(f"\n  {C.GOLD}?{C.RESET}  {prompt}\n\n")
-        for i, (label, desc) in enumerate(options):
-            num = f"{C.DIM}{i + 1}.{C.RESET} " if i < 9 else "   "
-            if i == sel:
-                out.append(f"  {C.GREEN}\u25b6{C.RESET} {num}{C.BOLD}{label}{C.RESET}\n")
-            else:
-                out.append(f"    {num}{label}\n")
-            # Always allocate a desc line to keep height constant; blank for non-selected.
-            if has_any_desc:
-                if i == sel and desc:
-                    out.append(f"      {C.DIM}{desc}{C.RESET}\n")
-                else:
-                    out.append("\n")
-        hint = "\u2191\u2193 navigate  1-9 jump  Enter select"
-        if allow_back:
-            hint += "  Esc back"
-        out.append(f"\n  {C.DIM}{hint}{C.RESET}")
-        text = "".join(out)
-        sys.stdout.write(text)
-        sys.stdout.flush()
-        return text.count("\n")
-
-    def _clear(n: int) -> None:
-        """Move cursor up n lines and clear to end of screen."""
-        sys.stdout.write(f"\r\033[{n}A\033[J")
-        sys.stdout.flush()
-
-    def _handle_digit(digit_byte: bytes) -> bool:
-        """Handle a numeric digit key press. Moves cursor to 1-indexed option. Returns True if redraw needed."""
-        nonlocal sel
-        try:
-            idx = int(digit_byte.decode()) - 1
-            if 0 <= idx < len(options):
-                sel = idx
-                return True
-        except (ValueError, UnicodeDecodeError):
-            pass
-        return False
-
-    if IS_WIN:
-        try:
+    try:
+        # Imported first: without them, fall back before drawing anything
+        if IS_WIN:
             import msvcrt  # type: ignore[import]
-        except ImportError:
-            return ask_choice(prompt, options, default, allow_back)
-        try:
-            n = _render()
-            while True:
-                ch = msvcrt.getch()
-                if ch == b"\xe0":
-                    ch2 = msvcrt.getch()
-                    if ch2 == b"H":  # Up arrow
-                        sel = (sel - 1) % len(options)
-                        _clear(n)
-                        n = _render()
-                    elif ch2 == b"P":  # Down arrow
-                        sel = (sel + 1) % len(options)
-                        _clear(n)
-                        n = _render()
-                elif ch == b"\r":
-                    sys.stdout.write("\n")
-                    sys.stdout.flush()
-                    return sel
-                elif ch == b"\x1b":
-                    # Esc must never activate the highlighted item — when back
-                    # is disallowed (e.g. main menu) it does nothing.
-                    if allow_back:
-                        sys.stdout.write("\n")
-                        sys.stdout.flush()
-                        return -1
-                elif ch == b"\x03":
-                    raise KeyboardInterrupt
-                elif ch.isdigit():
-                    if _handle_digit(ch):
-                        _clear(n)
-                        n = _render()
-        except KeyboardInterrupt:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-            raise
-        except Exception:
-            return ask_choice(prompt, options, default, allow_back)
-    else:
-        try:
+
+            keys = _windows_keys(msvcrt)
+        else:
             import termios
             import tty
-        except ImportError:
-            return ask_choice(prompt, options, default, allow_back)
-        fd = sys.stdin.fileno()
-        old = termios.tcgetattr(fd)
-        try:
-            n = _render()
-            tty.setraw(fd)
-            while True:
-                b = os.read(fd, 1)
-                if b == b"\x1b":
-                    b2 = _read_byte_nonblock(fd)
-                    if b2 == b"[":
-                        b3 = os.read(fd, 1)
-                        if b3 == b"A":  # Up arrow
-                            sel = (sel - 1) % len(options)
-                            termios.tcsetattr(fd, termios.TCSANOW, old)
-                            _clear(n)
-                            n = _render()
-                            tty.setraw(fd)
-                        elif b3 == b"B":  # Down arrow
-                            sel = (sel + 1) % len(options)
-                            termios.tcsetattr(fd, termios.TCSANOW, old)
-                            _clear(n)
-                            n = _render()
-                            tty.setraw(fd)
-                    elif allow_back:
-                        # Plain Esc key. Esc must never activate the highlighted
-                        # item — when back is disallowed it does nothing.
-                        termios.tcsetattr(fd, termios.TCSANOW, old)
-                        sys.stdout.write("\n")
-                        sys.stdout.flush()
-                        return -1
-                elif b in (b"\r", b"\n"):
-                    termios.tcsetattr(fd, termios.TCSANOW, old)
-                    sys.stdout.write("\n")
-                    sys.stdout.flush()
-                    return sel
-                elif b in (b"\x03", b"\x04"):  # Ctrl+C / Ctrl+D
-                    termios.tcsetattr(fd, termios.TCSANOW, old)
-                    raise KeyboardInterrupt
-                elif b.isdigit():
-                    if _handle_digit(b):
-                        termios.tcsetattr(fd, termios.TCSANOW, old)
-                        _clear(n)
-                        n = _render()
-                        tty.setraw(fd)
-        except KeyboardInterrupt:
-            try:
-                termios.tcsetattr(fd, termios.TCSANOW, old)
-            except Exception:
-                pass
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-            raise
-        except Exception:
-            try:
-                termios.tcsetattr(fd, termios.TCSANOW, old)
-            except Exception:
-                pass
-            return ask_choice(prompt, options, default, allow_back)
+
+            keys = _posix_keys(termios, tty, sys.stdin.fileno())
+        n = _render_arrow_menu(prompt, options, sel, allow_back)
+        for key in keys:
+            if key == "interrupt":
+                raise KeyboardInterrupt
+            # Esc never activates the highlighted item: without back it does nothing
+            if key == "enter" or (key == "esc" and allow_back):
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                return sel if key == "enter" else -1
+            new = _move(sel, key, len(options))
+            if new != sel:
+                sel = new
+                sys.stdout.write(f"\r\033[{n}A\033[J")  # rewind and clear the menu
+                n = _render_arrow_menu(prompt, options, sel, allow_back)
+    except KeyboardInterrupt:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        raise
+    except Exception:  # no msvcrt / termios, or the terminal refused raw mode
+        return ask_choice(prompt, options, default, allow_back)
+    return -1

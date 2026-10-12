@@ -5,11 +5,9 @@ from __future__ import annotations
 import logging
 import re
 
+from yume.constants import GGUF_DIR, KiB, MiB, GiB, BACKEND_INFO
 from yume.hardware import detect_gpu
-from yume.network import (
-    hf_download,
-    hf_list_gguf,
-)
+from yume.network import hf_download, hf_list_gguf
 from yume.ui import (
     C,
     ask_arrow,
@@ -22,9 +20,7 @@ from yume.ui import (
     success,
     warn,
 )
-from yume.utils import GGUF_DIR, GiB, KiB, MiB
 
-from yume.menus import _shared
 
 _log = logging.getLogger("pocket_yume")
 
@@ -166,7 +162,7 @@ def browse_hf(cfg: dict) -> None:
                 success(f"Saved to {GGUF_DIR / first}")
                 if cfg["translation_backend"] != "llamacpp":
                     if ask_yn("Switch backend to llama.cpp to use this model?"):
-                        bi = _shared.BI.get("llamacpp", {})
+                        bi = BACKEND_INFO.get("llamacpp", {})
                         cfg["translation_backend"] = "llamacpp"
                         cfg["translation_host"] = bi.get("dh", "127.0.0.1")
                         cfg["translation_port"] = bi.get("dp", 5000)

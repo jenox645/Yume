@@ -11,8 +11,9 @@ from __future__ import annotations
 import shutil
 import sys
 
+from yume.constants import BASE_DIR
 from yume.ui import C, ask_arrow, ask_yn, error, header, info, pause, success, warn
-from yume.utils import BASE_DIR, _run
+from yume.utils import _run
 
 TORCH = ["torch==2.11.0", "torchaudio==2.11.0"]  # tested with demucs 4.0.1, Python 3.12-3.14
 DEMUCS = "demucs==4.0.1"

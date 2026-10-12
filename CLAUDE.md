@@ -10,7 +10,7 @@ Yume is a browser extension + local server system for AI-powered video subtitles
 - **Browser extension** (`extension/`) — one MV3 manifest for Chrome/Edge/Brave and Firefox 121+, no build step. A thin client: creates a job on the server and polls it.
 - **Yume server** (`server/faster_whisper_server.py` + `server/_*.py`) — Flask on port 5001. Runs the whole pipeline (jobs, Whisper, translation, romanization, SQLite cache, blacklist).
 - **Translation LLM** — llama.cpp (port 5000) / Ollama / LM Studio / any OpenAI-compatible API. Only the server talks to it.
-- **CLI** (`pocket_yume.py`) — thin entry point; all logic lives in the `yume/` package (benchmark, guides, hardware, health, installers, launch, menus, network, ports, setup, ui, utils).
+- **CLI** (`pocket_yume.py`) — thin entry point (Python version check, then `yume.cli.main`); all logic lives in the `yume/` package (cli, constants, benchmark, guides, hardware, health, installers, launch, menus, network, ports, servers, service, setup, ui, utils).
 
 ## Code Review Policy
 
@@ -100,7 +100,9 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 - Never kill a process on a port unless it is Yume's own (`kill_port_process` asks otherwise)
 
 **CLI package layout:**
-- `pocket_yume.py` is the user-facing entry point; all logic lives in `yume/`. Shared state (backend table, version, download URLs) is injected via `set_*()` setters called from `_init_modules()`. Do not import from `pocket_yume.py` inside `yume/` modules.
+- `pocket_yume.py` is the user-facing entry point; all logic lives in `yume/`. Do not import from `pocket_yume.py` inside `yume/` modules.
+- Shared constants (version, paths, platform flags, `BACKEND_INFO` + `backend_info(name)`, download URLs) are defined once in `yume/constants.py`; import them from there, never re-define them.
+- A new CLI command is one entry in `yume/cli.COMMANDS` (handler, help group, help lines); `help` is generated from it.
 - Whisper model metadata lives only in `yume/hardware.WHISPER_MODELS` (multilingual models only — `distil-*` and `*.en` are English-only).
 
 **Config hygiene:**
@@ -108,7 +110,7 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 - Use `==` (exact versions) in `requirements.txt` and `LLAMA_SERVER_DEPS`; intentional exceptions: `yt-dlp`, `llama-cpp-python`
 
 **Version bumping:**
-- Three sources: `VERSION` in `pocket_yume.py`, `SERVER_VERSION` in `server/_state.py`, `"version"` in `extension/manifest.json` (the popup reads it) — plus the README badge. Tests check they match.
+- Three sources: `VERSION` in `yume/constants.py`, `SERVER_VERSION` in `server/_state.py`, `"version"` in `extension/manifest.json` (the popup reads it) — plus the README badge. Tests check they match.
 
 **Temp file cleanup:**
 - Downloads live in `yume_*` temp dirs; delete with `_audio.remove_temp()` in `finally`; server startup removes leftovers older than an hour
@@ -119,7 +121,9 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 
 | File | Purpose |
 |------|---------|
-| `pocket_yume.py` | Thin entry point: arg parsing, module wiring via `_init_modules()`, top-level menu dispatch |
+| `pocket_yume.py` | Entry point: Python version check, then `yume.cli.main()` |
+| `yume/cli.py` | Command table (`COMMANDS`, generates `help`), main menu, logging/colour setup |
+| `yume/constants.py` | Version, paths, platform flags, translation backends (`BACKEND_INFO`, `backend_info()`), download URLs |
 | `config.py` | Config load/save/validate, `DEFAULT_CONFIG` |
 | `yume/servers.py` | Server processes, shared by the launcher and `serve`: commands/env (`whisper_command`, `llamacpp_command`, `build_server_env`, `LLAMA_SERVER_DEPS`), rotating logs, `Processes` (spawn/stop), `start_whisper`/`start_llamacpp`/`start_ollama` → `StartResult`, crash `diagnose()` |
 | `yume/launch.py` | Interactive launcher: port/install prompts, spinner and crash advice around `yume.servers`, then the runtime menu |
@@ -128,7 +132,7 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 | `yume/vocals.py` | Vocal isolation from the CLI: status, install (PyTorch CUDA build matched to the driver + demucs), on/off |
 | `yume/native_host.py` | Native messaging host `com.pocketyume.yume` (status/start/stop) + registration; allowed extension ID must match the manifest `key` |
 | `yume/setup.py` | Setup wizard, extension guide, uninstall |
-| `yume/menus/` | Interactive menus, split by area: `server.py` (CLI commands, blacklist, Whisper model), `hf_browser.py`, `tools.py`, `settings.py`; backend info injected into `_shared.py` |
+| `yume/menus/` | Interactive menus, split by area: `server.py` (CLI commands, blacklist, Whisper model), `hf_browser.py`, `tools.py`, `settings.py` |
 | `yume/guides.py` | Help & Guides menu: in-CLI cookbook of task-oriented recipes |
 | `yume/health.py` | Health check (incl. end-to-end translation), system status, font detection |
 | `yume/benchmark.py` | Whisper speed benchmark across models |

@@ -18,5 +18,5 @@ Steps to verify this works:
 - [ ] `npx eslint extension/` passes
 - [ ] `pytest tests/ -v` and `npm test` pass
 - [ ] For pipeline/server changes: `python tests/live/check_server.py` passes against a running server
-- [ ] Releases only: version bumped in `pocket_yume.py`, `SERVER_VERSION`, `extension/manifest.json`, README badge
+- [ ] Releases only: version bumped in `yume/constants.py`, `SERVER_VERSION`, `extension/manifest.json`, README badge
 - [ ] Tested on my OS: (Windows / Linux / macOS)

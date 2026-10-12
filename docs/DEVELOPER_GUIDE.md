@@ -26,7 +26,9 @@ python server/faster_whisper_server.py --model tiny --device cpu --compute-type 
 
 | Path | Role |
 |------|------|
-| `pocket_yume.py` | CLI entry point: arg parsing, `_init_modules()` wiring, main menu |
+| `pocket_yume.py` | Entry point: Python version check, then `yume.cli.main()` |
+| `yume/cli.py` | Command table (`COMMANDS`, which also generates `help`), main menu |
+| `yume/constants.py` | Version, paths, platform flags, translation backends, download URLs |
 | `config.py` | `DEFAULT_CONFIG`, load/save/validate/export/import, port constants |
 | `yume/llama_server.py` | llama.cpp's prebuilt `llama-server`: picks the build for the GPU/driver from GitHub releases, verified download, command line (preferred over llama-cpp-python) |
 | `yume/native_host.py` | Native messaging host + browser registration (`autostart on/off`) |
@@ -60,8 +62,9 @@ python server/faster_whisper_server.py --model tiny --device cpu --compute-type 
 | `extension/js/bundled-fonts.js` | Fonts shipped in `extension/fonts/` (popup + overlay) |
 | `extension/popup.js` | Settings, server status, blacklist, library, stats |
 
-Modules in `yume/` must not import `pocket_yume.py`; shared values (backend
-table, version, download URLs) are injected with `set_*()` from `_init_modules()`.
+Modules in `yume/` must not import `pocket_yume.py`. Shared values (version,
+paths, backend table, download URLs) live in `yume/constants.py` and are
+imported from there, never re-defined.
 
 ## Server API
 
@@ -110,7 +113,7 @@ A segment in a poll: `{id, start, end, text, translation, romaji, confidence, hi
 ## Versioning
 
 The version lives in three places, checked by the tests and CI:
-`VERSION` in `pocket_yume.py`, `SERVER_VERSION` in
+`VERSION` in `yume/constants.py`, `SERVER_VERSION` in
 `server/_state.py`, `"version"` in `extension/manifest.json`
 (the popup reads it at runtime) — plus the README badge.
 

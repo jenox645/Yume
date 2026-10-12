@@ -7,16 +7,10 @@ import platform
 import shutil
 from pathlib import Path
 
+from yume.constants import IS_WIN, IS_MAC, MiB, GiB
+
 _log = logging.getLogger("pocket_yume")
 
-PLAT = platform.system()
-IS_WIN = PLAT == "Windows"
-IS_MAC = PLAT == "Darwin"
-IS_LIN = PLAT == "Linux"
-
-KiB = 1024
-MiB = 1024**2
-GiB = 1024**3
 
 # Whisper models offered by Yume — the single list every menu, the benchmark,
 # the launcher's resource check and the recommendation use.
@@ -56,92 +50,100 @@ def detect_gpu(refresh: bool = False) -> dict:
     return _gpu_cache
 
 
+_NO_GPU = {"has_nvidia": False, "has_amd": False, "name": None, "vram_mb": 0, "vendor": "none"}
+
+
+def _probe(cmd: list[str]) -> str:
+    """A detection tool's output; empty when it is missing or fails."""
+    from yume.utils import _run
+
+    try:
+        out = _run(cmd, timeout=10)
+    except Exception as e:
+        _log.debug("[detect_gpu] %s failed: %s", cmd[0], e)
+        return ""
+    return out.stdout if out.returncode == 0 else ""
+
+
+def _amd(name: str, vram_mb: int = 0) -> dict:
+    return {**_NO_GPU, "has_amd": True, "vendor": "amd", "name": name, "vram_mb": vram_mb}
+
+
+def _nvidia() -> dict | None:
+    out = _probe(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
+    gpus = []
+    for line in out.strip().splitlines():  # one line per GPU
+        name, _, mem = line.rpartition(",")
+        try:
+            gpus.append((int(mem.strip()), name.strip()))
+        except ValueError:
+            continue
+    if not gpus:
+        return None
+    vram, name = max(gpus)  # the one with the most VRAM
+    return {**_NO_GPU, "has_nvidia": True, "vendor": "nvidia", "name": name, "vram_mb": vram}
+
+
+def _rocm_vram_mb() -> int:
+    # "VRAM Total Memory (B): 17163091968" — not the "VRAM Total Used Memory"
+    # line after it, which the old `"Total" in line` test picked
+    for line in _probe(["rocm-smi", "--showmeminfo", "vram"]).splitlines():
+        if "Total Memory" in line:
+            nums = [int(s) for s in line.split() if s.isdigit()]
+            if nums:
+                return nums[0] // MiB if nums[0] > 1_000_000 else nums[0]
+    return 0
+
+
+def _rocm_smi() -> dict | None:
+    """AMD on Linux; the name is "AMD GPU" when rocm-smi does not give one."""
+    rows = [
+        ln
+        for ln in _probe(["rocm-smi", "--showproductname", "--showmeminfo", "vram", "--csv"]).strip().split("\n")[1:]
+        if ln.strip()
+    ]
+    if not rows:
+        return None
+    fields = [f.strip() for f in rows[0].split(",")]
+    name = fields[-1] if len(fields) > 1 else fields[0]
+    if not name or name.startswith(("card", "GPU")):
+        name = fields[1] if len(fields) > 1 else ""
+    if not name or name.startswith("card"):
+        name = "AMD GPU"
+    return _amd(name, _rocm_vram_mb())
+
+
+def _rocminfo_name() -> str | None:
+    """The ROCm GPU's marketing name; "" without one, None without a ROCm GPU."""
+    out = _probe(["rocminfo"])
+    if "gfx" not in out.lower():
+        return None
+    return next((ln.split(":")[-1].strip() for ln in out.splitlines() if "Marketing Name" in ln), "")
+
+
+def _windows_amd() -> dict | None:
+    # CIM, not wmic: wmic is deprecated and absent on current Windows 11 builds
+    if not IS_WIN:
+        return None
+    for line in _win_cim("Win32_VideoController", "Name,AdapterRAM"):
+        name, _, ram = line.partition("|")
+        if "radeon" in name.lower() or "amd" in name.lower():
+            # AdapterRAM is a uint32: it caps at 4 GB, so treat it as a minimum
+            return _amd(name.strip() or "AMD GPU", int(ram) // MiB if ram.strip().isdigit() else 0)
+    return None
+
+
 def _detect_gpu_uncached() -> dict:
-    r: dict = {"has_nvidia": False, "has_amd": False, "name": None, "vram_mb": 0, "vendor": "none"}
-
-    # ── NVIDIA ────────────────────────────────────────────────────────────────
-    try:
-        from yume.utils import _run
-
-        out = _run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"], timeout=10)
-        if out.returncode == 0 and out.stdout.strip():
-            # One line per GPU — use the one with the most VRAM
-            gpus = []
-            for line in out.stdout.strip().splitlines():
-                name, _, mem = line.rpartition(",")
-                try:
-                    gpus.append((int(mem.strip()), name.strip()))
-                except ValueError:
-                    continue
-            if gpus:
-                vram, name = max(gpus)
-                r.update(has_nvidia=True, name=name, vendor="nvidia", vram_mb=vram)
-                return r
-    except Exception as e:
-        _log.debug("[detect_gpu] nvidia-smi failed: %s", e)
-
-    # ── AMD via rocm-smi ──────────────────────────────────────────────────────
-    try:
-        from yume.utils import _run
-
-        out = _run(["rocm-smi", "--showproductname", "--showmeminfo", "vram", "--csv"], timeout=10)
-        if out.returncode == 0 and out.stdout.strip():
-            lines = out.stdout.strip().split("\n")
-            for line in lines[1:]:
-                if line.strip():
-                    r["has_amd"] = True
-                    r["vendor"] = "amd"
-                    fields = [f.strip() for f in line.split(",")]
-                    name = fields[-1] if len(fields) > 1 else fields[0]
-                    if not name or name.startswith("card") or name.startswith("GPU"):
-                        name = fields[1] if len(fields) > 1 else "AMD GPU"
-                    r["name"] = name if (name and not name.startswith("card")) else "AMD GPU"
-                    break
-            try:
-                out2 = _run(["rocm-smi", "--showmeminfo", "vram"], timeout=10)
-                for line2 in out2.stdout.split("\n"):
-                    if "Total" in line2:
-                        nums = [int(s) for s in line2.split() if s.isdigit()]
-                        if nums:
-                            r["vram_mb"] = nums[0] // MiB if nums[0] > 1_000_000 else nums[0]
-            except Exception as e:
-                _log.debug("[detect_gpu] rocm-vram-parse failed: %s", e)
-
-            if r["name"] != "AMD GPU":
-                return r
-    except Exception as e:
-        _log.debug("[detect_gpu] rocm-smi failed: %s", e)
-
-    # ── AMD via rocminfo ──────────────────────────────────────────────────────
-    try:
-        from yume.utils import _run
-
-        out = _run(["rocminfo"], timeout=10)
-        if out.returncode == 0 and "gfx" in out.stdout.lower():
-            r["has_amd"] = True
-            r["vendor"] = "amd"
-            for line in out.stdout.split("\n"):
-                if "Marketing Name" in line:
-                    r["name"] = line.split(":")[-1].strip()
-                    break
-            if not r["name"]:
-                r["name"] = "AMD GPU (ROCm)"
-            return r
-    except Exception as e:
-        _log.debug("[detect_gpu] rocminfo failed: %s", e)
-
-    # ── Windows AMD via CIM ───────────────────────────────────────────────────
-    # (wmic is deprecated and absent on current Windows 11 builds.)
-    if IS_WIN:
-        for line in _win_cim("Win32_VideoController", "Name,AdapterRAM"):
-            name, _, ram = line.partition("|")
-            if "radeon" in name.lower() or "amd" in name.lower():
-                r.update(has_amd=True, vendor="amd", name=name.strip() or "AMD GPU")
-                # AdapterRAM is a uint32: it caps at 4 GB, so treat it as a minimum
-                r["vram_mb"] = int(ram) // MiB if ram.strip().isdigit() else 0
-                return r
-
-    return r
+    nvidia = _nvidia()
+    if nvidia:
+        return nvidia
+    smi = _rocm_smi()
+    if smi and smi["name"] != "AMD GPU":
+        return smi
+    info_name = _rocminfo_name()
+    if info_name is not None:
+        return _amd(info_name or (smi["name"] if smi else "AMD GPU (ROCm)"), smi["vram_mb"] if smi else 0)
+    return _windows_amd() or smi or dict(_NO_GPU)
 
 
 def _win_cim(cls: str, props: str) -> list[str]:

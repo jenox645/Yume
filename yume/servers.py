@@ -22,8 +22,9 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from yume.hardware import IS_WIN, detect_gpu
-from yume.utils import LOGS_DIR, SERVER_DIR, TOOLS_DIR, _run, find_gguf_models
+from yume.constants import TOOLS_DIR, SERVER_DIR, LOGS_DIR, IS_WIN, HEALTH_PATH_OLLAMA
+from yume.hardware import detect_gpu
+from yume.utils import _run, find_gguf_models
 
 _log = logging.getLogger("pocket_yume")
 
@@ -449,7 +450,7 @@ def start_llamacpp(
 
 def start_ollama(cfg: dict, procs: Processes, env: dict, stop=None, tick=None, timeout=None) -> StartResult:
     """Start `ollama serve` unless Ollama runs already."""
-    from yume.network import HEALTH_PATH_OLLAMA, check_server
+    from yume.network import check_server
 
     def up() -> bool:
         return check_server(cfg["translation_host"], cfg["translation_port"], HEALTH_PATH_OLLAMA)["up"]

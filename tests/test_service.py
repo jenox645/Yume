@@ -282,7 +282,7 @@ class TestSupervisor:
 
     def _sup(self, monkeypatch, cfg, active=False, die=False):
         monkeypatch.setattr(service, "TICK_S", 0.05)
-        sup = service._Supervisor(cfg, {})
+        sup = service._Supervisor(cfg)
 
         def start_child(env):
             p = _sleeper(0 if die else 30)
@@ -418,7 +418,7 @@ class TestSingleSupervisor:
 
         out, err, handlers = sys.stdout, sys.stderr, logging.root.handlers[:]
         try:
-            assert service.serve({"whisper_port": 1, "translation_port": 2}, {}) == 0
+            assert service.serve({"whisper_port": 1, "translation_port": 2}) == 0
         finally:  # serve() redirects output and logging to its log file
             sys.stdout, sys.stderr, logging.root.handlers = out, err, handlers
             holder.kill()

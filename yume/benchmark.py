@@ -7,9 +7,10 @@ import os
 import time
 from pathlib import Path
 
-from yume.hardware import IS_WIN, WHISPER_MODELS, detect_gpu, recommend_whisper_model
+from yume.constants import LOGS_DIR, IS_WIN
+from yume.hardware import WHISPER_MODELS, detect_gpu, recommend_whisper_model
 from yume.ui import C, ask_input, ask_yn, error, header, info, pause, section, success, table, warn
-from yume.utils import LOGS_DIR, find_tool, _run
+from yume.utils import find_tool, _run
 
 _log = logging.getLogger("pocket_yume")
 

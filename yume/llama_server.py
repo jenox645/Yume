@@ -22,7 +22,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from yume.utils import TOOLS_DIR, _run
+from yume.constants import TOOLS_DIR
+from yume.utils import _run
 
 _log = logging.getLogger("pocket_yume")
 
@@ -134,78 +135,106 @@ def _extract(archive: Path, dest: Path) -> None:
             tf.extractall(dest, members=members)  # nosec B202 — members filtered above
 
 
+def _newest_build(releases: list[dict], gpu: dict, cuda: tuple[int, int] | None):
+    """(release, variant, assets) of the newest numbered build for this machine, or None.
+
+    Numbered builds (bNNNN) are published as pre-releases."""
+    for rel in releases:
+        if re.fullmatch(r"b\d+", rel.get("tag_name", "")):
+            variant, assets = pick_assets(rel.get("assets", []), gpu, cuda)
+            if assets:
+                return rel, variant, assets
+    return None
+
+
+def _download_build(assets: list[dict], dest: Path) -> bool:
+    """Download (checksum-verified) and extract each asset into dest."""
+    from yume.network import download_file
+
+    for a in assets:
+        archive = TOOLS_DIR / a["name"]
+        digest = (a.get("digest") or "").removeprefix("sha256:") or None
+        if not download_file(a["browser_download_url"], archive, a["name"], sha256=digest):
+            return False
+        try:
+            _extract(archive, dest)
+        finally:
+            archive.unlink(missing_ok=True)
+    return True
+
+
+def _arrange_build(build: Path, variant: str) -> bool:
+    """Make the extracted build runnable: executable bits, CUDA runtime next to the exe."""
+    from yume.ui import error
+
+    # Linux/macOS archives put everything under a build/bin folder
+    exe = next((p for p in build.rglob(EXE_NAME) if p.is_file()), None)
+    if exe is None:
+        error(f"{EXE_NAME} not found in the downloaded build.")
+        return False
+    if sys.platform != "win32":
+        for p in exe.parent.iterdir():
+            if p.is_file():
+                p.chmod(p.stat().st_mode | 0o111)
+    # The CUDA runtime DLLs must sit next to llama-server.exe
+    if variant.startswith("cuda") and exe.parent != build:
+        for p in build.glob("*.dll"):
+            shutil.move(str(p), exe.parent / p.name)
+    return True
+
+
+def _swap_in(new: Path) -> bool:
+    """Replace LLAMA_DIR with `new`. The old build is moved aside first, so a
+    failure (Windows locks the files of a running llama-server) leaves it in place."""
+    from yume.ui import error
+
+    old = LLAMA_DIR.with_name("llama.cpp.old")
+    shutil.rmtree(old, ignore_errors=True)
+    try:
+        if LLAMA_DIR.exists():
+            LLAMA_DIR.replace(old)
+        new.replace(LLAMA_DIR)
+    except OSError as e:
+        if old.exists() and not LLAMA_DIR.exists():
+            old.replace(LLAMA_DIR)
+        error(f"Could not replace the installed build ({e}) — stop Yume first, then try again.")
+        return False
+    shutil.rmtree(old, ignore_errors=True)
+    return True
+
+
 def install(gpu: dict | None = None) -> bool:
     """Download the right llama-server build into tools/llama.cpp/."""
     from yume.hardware import detect_gpu
-    from yume.network import download_file
     from yume.ui import error, info, success, warn
 
     gpu = gpu or detect_gpu()
     cuda = driver_cuda_version() if gpu.get("has_nvidia") else None
     try:
-        releases = _releases()
+        found = _newest_build(_releases(), gpu, cuda)
     except Exception as e:
         error(f"Could not reach GitHub to find llama.cpp builds: {e}")
         return False
-    # Numbered builds (bNNNN) are published as pre-releases; take the newest
-    # one that has a build for this machine.
-    for rel in releases:
-        if not re.fullmatch(r"b\d+", rel.get("tag_name", "")):
-            continue
-        variant, assets = pick_assets(rel.get("assets", []), gpu, cuda)
-        if assets:
-            break
-    else:
+    if not found:
         error("No llama.cpp build found for this system.")
         return False
+    rel, variant, assets = found
 
-    size_mb = sum(a["size"] for a in assets) / 1e6
-    info(f"llama.cpp {rel['tag_name']} ({variant}) — {size_mb:.0f} MB to download")
+    info(f"llama.cpp {rel['tag_name']} ({variant}) — {sum(a['size'] for a in assets) / 1e6:.0f} MB to download")
     if variant == "cpu" and (gpu.get("has_nvidia") or gpu.get("has_amd")):
         warn("No GPU build matches this system — installing the CPU build.")
     tmp = LLAMA_DIR.with_name("llama.cpp.new")
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True)
     try:
-        for a in assets:
-            archive = TOOLS_DIR / a["name"]
-            digest = (a.get("digest") or "").removeprefix("sha256:") or None
-            if not download_file(a["browser_download_url"], archive, a["name"], sha256=digest):
-                return False
-            try:
-                _extract(archive, tmp)
-            finally:
-                archive.unlink(missing_ok=True)
-        # Linux/macOS archives put everything under a build/bin folder
-        exe = next((p for p in tmp.rglob(EXE_NAME) if p.is_file()), None)
-        if exe is None:
-            error(f"{EXE_NAME} not found in the downloaded build.")
+        if not (_download_build(assets, tmp) and _arrange_build(tmp, variant)):
             return False
-        if sys.platform != "win32":
-            for p in exe.parent.iterdir():
-                if p.is_file():
-                    p.chmod(p.stat().st_mode | 0o111)
-        # The CUDA runtime DLLs must sit next to llama-server.exe
-        if variant.startswith("cuda") and exe.parent != tmp:
-            for p in tmp.glob("*.dll"):
-                shutil.move(str(p), exe.parent / p.name)
         (tmp / "build.json").write_text(json.dumps({"tag": rel["tag_name"], "variant": variant}), encoding="utf-8")
-        # Swap folders: move the old build aside first, so a failure (Windows
-        # locks the files of a running llama-server) leaves it untouched
-        old = LLAMA_DIR.with_name("llama.cpp.old")
-        shutil.rmtree(old, ignore_errors=True)
-        try:
-            if LLAMA_DIR.exists():
-                LLAMA_DIR.replace(old)
-            tmp.replace(LLAMA_DIR)
-        except OSError as e:
-            if old.exists() and not LLAMA_DIR.exists():
-                old.replace(LLAMA_DIR)
-            error(f"Could not replace the installed build ({e}) — stop Yume first, then try again.")
+        if not _swap_in(tmp):
             return False
-        shutil.rmtree(old, ignore_errors=True)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
     r = _run([str(server_path()), "--version"], timeout=30)
     version = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
     if r.returncode != 0:

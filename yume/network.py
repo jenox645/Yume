@@ -10,23 +10,12 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from yume.constants import VERSION, BASE_DIR, GGUF_DIR, KiB, MiB, GiB, HEALTH_PATH_OPENAI, HEALTH_PATH_OLLAMA
 from yume.ui import C, info
 
 _log = logging.getLogger("pocket_yume")
 
-KiB = 1024
-MiB = 1024**2
-GiB = 1024**3
 DOWNLOAD_CHUNK_SIZE = 64 * KiB
-
-# Injected at runtime by pocket_yume._init_modules() to avoid circular imports
-_VERSION: str = "0.0.0"
-
-
-def set_version(version: str) -> None:
-    """Called by pocket_yume at startup to set the version string."""
-    global _VERSION
-    _VERSION = version
 
 
 # Global per-process API token cache
@@ -46,7 +35,7 @@ def fetch_published_sha256(checksums_url: str, filename: str) -> str | None:
     import re
 
     try:
-        req = urllib.request.Request(checksums_url, headers={"User-Agent": f"Yume/{_VERSION}"})
+        req = urllib.request.Request(checksums_url, headers={"User-Agent": f"Yume/{VERSION}"})
         with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310 — official release URL
             text = resp.read(1_000_000).decode("utf-8", errors="replace")
     except Exception as e:
@@ -80,7 +69,7 @@ def download_file(url: str, dest, label: str = "Downloading", sha256: str | None
     # a .gguf the launcher then auto-selected it and llama.cpp crashed on load.
     part = dest.with_name(dest.name + ".part")
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": f"Yume/{_VERSION}"})
+        req = urllib.request.Request(url, headers={"User-Agent": f"Yume/{VERSION}"})
         with urllib.request.urlopen(req, timeout=180) as resp:  # nosec B310
             total = int(resp.headers.get("content-length", 0))
             dl = 0
@@ -169,9 +158,6 @@ def _cleanup_partial(path) -> None:
 
 # ── Server health checks ──────────────────────────────────────────────────────
 
-HEALTH_PATH_OPENAI = "/v1/models"
-HEALTH_PATH_OLLAMA = "/api/tags"
-
 
 def check_server(host: str, port: int, path: str = "/health") -> dict:
     """Check if a server is responding."""
@@ -240,7 +226,7 @@ def hf_list_gguf(repo: str) -> list[dict]:
     try:
         req = urllib.request.Request(
             f"https://huggingface.co/api/models/{repo}/tree/main",
-            headers={"User-Agent": f"Yume/{_VERSION}"},
+            headers={"User-Agent": f"Yume/{VERSION}"},
         )
         with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
             files = json.loads(resp.read())
@@ -272,7 +258,6 @@ def hf_list_gguf(repo: str) -> list[dict]:
 
 
 def hf_download(repo: str, filename: str, sha256: str | None = None) -> bool:
-    from yume.utils import GGUF_DIR
 
     GGUF_DIR.mkdir(parents=True, exist_ok=True)
     return download_file(
@@ -296,8 +281,6 @@ def discover_api_token(host: str, port: int) -> str | None:
     global _api_token
     if _api_token is not None:
         return _api_token
-
-    from yume.utils import BASE_DIR
 
     token_file = BASE_DIR / ".yume_token"
     if token_file.exists():

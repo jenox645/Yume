@@ -208,36 +208,15 @@ class TestHealthCheckConsistency:
 
     def test_llamacpp_health_path(self):
         """llama.cpp health must use /v1/models (not /health which returns 404)."""
-        cli_src = (ROOT / "pocket_yume.py").read_text(encoding="utf-8")
-        assert len(cli_src) < 500_000, "Source file unexpectedly large — refusing regex to prevent ReDoS"
+        from yume.constants import BACKEND_INFO
 
-        # Find BACKEND_INFO llamacpp hp value (may be a literal or constant reference)
-        match = re.search(r'"llamacpp".*?"hp":\s*("([^"]+)"|HEALTH_PATH_OPENAI)', cli_src, re.DOTALL)
-        assert match, "BACKEND_INFO llamacpp not found"
-        if match.group(2):
-            assert match.group(2) == "/v1/models", (
-                f"llamacpp health path is '{match.group(2)}' but must be '/v1/models'"
-            )
-        else:
-            # Using constant — verify the constant value
-            const_match = re.search(r'HEALTH_PATH_OPENAI\s*=\s*"([^"]+)"', cli_src)
-            assert const_match and const_match.group(1) == "/v1/models"
+        assert BACKEND_INFO["llamacpp"]["hp"] == "/v1/models"
 
     def test_ollama_health_path(self):
         """Ollama health must use /api/tags."""
-        cli_src = (ROOT / "pocket_yume.py").read_text(encoding="utf-8")
-        assert len(cli_src) < 500_000, "Source file unexpectedly large — refusing regex to prevent ReDoS"
+        from yume.constants import BACKEND_INFO
 
-        # Find the ollama block — hp may be a literal or constant reference
-        ollama_block = re.search(r'"ollama"\s*:\s*\{[^}]*"hp"\s*:\s*("([^"]+)"|HEALTH_PATH_OLLAMA)', cli_src)
-        assert ollama_block, "BACKEND_INFO ollama not found"
-        if ollama_block.group(2):
-            assert ollama_block.group(2) == "/api/tags", (
-                f"ollama health path is '{ollama_block.group(2)}' but must be '/api/tags'"
-            )
-        else:
-            const_match = re.search(r'HEALTH_PATH_OLLAMA\s*=\s*"([^"]+)"', cli_src)
-            assert const_match and const_match.group(1) == "/api/tags"
+        assert BACKEND_INFO["ollama"]["hp"] == "/api/tags"
 
     def test_server_translator_health_paths(self):
         """The server checks the LLM itself now: /api/tags for Ollama, /v1/models otherwise."""
@@ -260,9 +239,9 @@ class TestVersionConsistencyExtended:
     """Extended version checks beyond what CI already does."""
 
     def _get_version(self):
-        src = (ROOT / "pocket_yume.py").read_text(encoding="utf-8")
-        m = re.search(r'VERSION\s*=\s*"(\d+\.\d+\.\d+)"', src)
-        assert m, "VERSION not found in pocket_yume.py"
+        src = (ROOT / "yume" / "constants.py").read_text(encoding="utf-8")
+        m = re.search(r'^VERSION = "(\d+\.\d+\.\d+)"', src, re.M)
+        assert m, "VERSION not found in yume/constants.py"
         return m.group(1)
 
     def test_server_version(self):
@@ -562,12 +541,12 @@ class TestPythonCompatibility:
                 )
 
     def test_python_version_check_exists(self):
-        """pocket_yume.py must check Python version before importing config."""
+        """pocket_yume.py must check Python version before importing the CLI."""
         content = (ROOT / "pocket_yume.py").read_text(encoding="utf-8")
         assert "sys.version_info" in content, "pocket_yume.py should check Python version early to give a clear error"
-        # The check must appear BEFORE the config import
+        # The check must appear BEFORE the CLI (and so config) is imported
         version_check_pos = content.index("sys.version_info")
-        config_import_pos = content.index("from config import")
+        config_import_pos = content.index("from yume.cli import")
         assert version_check_pos < config_import_pos, (
             "Python version check must appear before 'from config import' "
             "so users see a friendly message instead of a TypeError traceback"
@@ -675,11 +654,9 @@ class TestImportCompleteness:
 
 class TestCrossReferences:
     def _cli_commands(self):
-        src = (ROOT / "pocket_yume.py").read_text(encoding="utf-8")
-        cmds = set(re.findall(r'cmd == "([a-z-]+)"', src))
-        for group in re.findall(r"cmd in \(([^)]*)\)", src):
-            cmds |= set(re.findall(r'"([a-z-]+)"', group))
-        return cmds
+        from yume.cli import ALIASES, COMMANDS, HELP_FLAGS
+
+        return {*COMMANDS, *ALIASES, *HELP_FLAGS}
 
     def test_suggested_cli_commands_exist(self):
         cmds = self._cli_commands()
