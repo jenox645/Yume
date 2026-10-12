@@ -226,3 +226,64 @@ def test_reset_only_when_confirmed():
     assert r.cfg["first_run_complete"] is True
     assert r.cfg["whisper_model"] == DEFAULT_CONFIG["whisper_model"]
     assert r.cfg["translation_backend"] == DEFAULT_CONFIG["translation_backend"]
+
+
+# ── Translation model manager ─────────────────────────────────────────────────
+
+import yume.installers  # noqa: E402
+import yume.menus.tools as tools  # noqa: E402
+
+
+def manage(choices, cfg, *, inputs=(), yns=(), ggufs=()):
+    pulled, browsed, saved = [], MagicMock(), MagicMock()
+    fakes = {
+        "ask_arrow": MagicMock(side_effect=list(choices)),
+        "ask_input": MagicMock(side_effect=list(inputs)),
+        "ask_yn": MagicMock(side_effect=list(yns)),
+        "header": MagicMock(),
+        "pause": MagicMock(),
+        "info": MagicMock(),
+        "bullet": MagicMock(),
+        "success": MagicMock(),
+        "warn": MagicMock(),
+        "find_gguf_models": lambda: list(ggufs),
+        "check_ollama_models": lambda h, p: ["qwen2.5:7b"],
+        "browse_hf": browsed,
+    }
+    with ExitStack() as stack:
+        for name, fake in fakes.items():
+            stack.enter_context(patch.object(tools, name, fake))
+        stack.enter_context(patch.object(yume.installers, "pull_ollama_model", lambda m: pulled.append(m) or True))
+        stack.enter_context(patch("config.save_config", saved))
+        tools._manage_model(cfg)
+    return types.SimpleNamespace(cfg=cfg, pulled=pulled, browsed=browsed, saved=saved)
+
+
+def test_model_manager_rename_and_pull():
+    r = manage(
+        [0, 1, 4],
+        {"translation_backend": "ollama", "translation_model": "qwen2.5:7b"},
+        inputs=["gemma3:12b", "gemma3:12b"],
+    )
+    assert r.cfg["translation_model"] == "gemma3:12b"
+    assert r.pulled == ["gemma3:12b"]
+
+
+def test_model_manager_select_a_gguf_and_switch_to_llamacpp(tmp_path):
+    a, b = tmp_path / "a.gguf", tmp_path / "qwen-7b.gguf"
+    a.write_bytes(b"x")
+    b.write_bytes(b"xx")
+    cfg = {"translation_backend": "ollama", "translation_host": "10.0.0.2", "translation_port": 11434}
+    manage([3, 1, 4], cfg, yns=[True], ggufs=[a, b])
+    assert (cfg["gguf_model_path"], cfg["translation_model"]) == (str(b), "qwen-7b")
+    assert (cfg["translation_backend"], cfg["translation_host"], cfg["translation_port"]) == (
+        "llamacpp",
+        "127.0.0.1",
+        5000,
+    )
+
+
+def test_model_manager_without_ggufs_and_browse():
+    r = manage([3, 2, -1], {"translation_backend": "llamacpp"})
+    r.browsed.assert_called_once()
+    r.saved.assert_not_called()

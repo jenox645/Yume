@@ -12,7 +12,7 @@ import threading
 import time
 import zipfile
 
-from yume.constants import BASE_DIR, TOOLS_DIR, IS_WIN, IS_MAC, IS_LIN, EXE, DOWNLOAD_URLS
+from yume.constants import BASE_DIR, TOOLS_DIR, IS_WIN, IS_MAC, IS_LIN, EXE, HEALTH_PATH_OLLAMA, DOWNLOAD_URLS
 from yume.ui import C, error, info, success, warn
 from yume.utils import _run, find_tool
 
@@ -649,7 +649,26 @@ def install_llamacpp_python() -> bool:
     return installed
 
 
+def _ensure_ollama_serving() -> bool:
+    """`ollama pull` talks to the Ollama server: start one (detached) when none answers."""
+    from config import DEFAULT_OLLAMA_PORT
+    from yume.network import check_server
+
+    if check_server("127.0.0.1", DEFAULT_OLLAMA_PORT, HEALTH_PATH_OLLAMA)["up"]:
+        return True
+    info("Starting Ollama...")
+    try:
+        subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # nosec B603 B607
+    except OSError as e:
+        error(f"Could not start Ollama: {e}")
+        return False
+    time.sleep(3)
+    return True
+
+
 def pull_ollama_model(name: str) -> bool:
+    if not _ensure_ollama_serving():
+        return False
     info(f"Pulling {name} (several GB on first download)...\n")
     try:
         # Not captured: the user needs ollama's progress bar for a multi-GB pull

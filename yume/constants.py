@@ -98,6 +98,15 @@ def backend_info(name: str | None) -> dict:
     return BACKEND_INFO.get(name or "llamacpp", BACKEND_INFO["custom"])
 
 
+def use_backend(cfg: dict, name: str) -> dict:
+    """Switch translation to a backend at its default address; returns its entry (the caller saves)."""
+    bi = BACKEND_INFO[name]
+    cfg["translation_backend"] = name
+    cfg["translation_host"] = bi["dh"]
+    cfg["translation_port"] = bi["dp"]
+    return bi
+
+
 # ── Download URLs (per platform) ──────────────────────────────────────────────
 
 _ARM = "arm" in ARCH or "aarch" in ARCH

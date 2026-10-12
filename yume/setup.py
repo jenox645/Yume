@@ -21,6 +21,7 @@ from yume.constants import (
     EXE,
     HEALTH_PATH_OLLAMA,
     BACKEND_INFO,
+    use_backend,
 )
 from yume.hardware import detect_gpu, detect_ram_gb, disk_free_gb, recommend_whisper_model
 from yume.network import check_server
@@ -393,28 +394,17 @@ def _install_missing(missing: list[str], ask_each: bool) -> None:
 
 def _use_ollama(cfg: dict) -> None:
     """Switch translation to Ollama; offer to install it and pull a model."""
-    from config import DEFAULT_OLLAMA_PORT
 
     from yume.installers import install_ollama, pull_ollama_model
 
-    bi = BACKEND_INFO["ollama"]
-    cfg["translation_backend"] = "ollama"
-    cfg["translation_host"] = bi["dh"]
-    cfg["translation_port"] = bi["dp"]
+    use_backend(cfg, "ollama")
     cfg["translation_model"] = "qwen2.5:7b"
     if not ask_yn("Install Ollama?"):
         return
     _install_with_retry("Ollama", install_ollama, f"Install manually: {C.CYAN}https://ollama.com{C.RESET}")
     time.sleep(2)
-    if not ask_yn(f"Download model ({cfg['translation_model']})?"):
-        return
-    if not check_server("127.0.0.1", DEFAULT_OLLAMA_PORT, HEALTH_PATH_OLLAMA)["up"]:
-        try:
-            subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(3)
-        except Exception as e:
-            _log.debug("[setup_wizard] failed to start ollama serve: %s", e)
-    pull_ollama_model(cfg["translation_model"])
+    if ask_yn(f"Download model ({cfg['translation_model']})?"):
+        pull_ollama_model(cfg["translation_model"])  # starts Ollama if needed
 
 
 def _choose_translation_model(cfg: dict, needs_model: bool) -> None:

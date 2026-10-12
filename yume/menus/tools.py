@@ -7,7 +7,7 @@ import logging
 import sys
 import urllib.request
 
-from yume.constants import TOOLS_DIR, GGUF_DIR, GiB, BACKEND_INFO, backend_info
+from yume.constants import TOOLS_DIR, GGUF_DIR, GiB, BACKEND_INFO, backend_info, use_backend
 from yume.network import check_ollama_models, check_translation_server
 from yume.ports import find_free_port, get_port_process, is_port_free
 from yume.ui import (
@@ -473,11 +473,7 @@ def _select_backend(cfg: dict) -> None:
     ch = ask_arrow("Choose:", opts, default=di)
     if ch == -1 or ch == len(keys):
         return
-    k = keys[ch]
-    bi = BACKEND_INFO[k]
-    cfg["translation_backend"] = k
-    cfg["translation_host"] = bi["dh"]
-    cfg["translation_port"] = bi["dp"]
+    bi = use_backend(cfg, keys[ch])
     save_config(cfg)
     success(f"Backend: {bi['name']}  ({bi['dh']}:{bi['dp']})")
     print(f"\n  {C.BOLD}Installation:{C.RESET}")
@@ -534,115 +530,99 @@ def _change_addr(cfg: dict, prefix: str) -> None:
     pause()
 
 
+def _show_model_status(cfg: dict, ggufs: list) -> None:
+    from config import DEFAULT_OLLAMA_PORT
+
+    bk = cfg.get("translation_backend", "llamacpp")
+    mdl = cfg.get("translation_model", "")
+    gp = cfg.get("gguf_model_path", "")
+    info(f"Backend: {C.BOLD}{BACKEND_INFO.get(bk, {}).get('name', bk)}{C.RESET}")
+    if mdl:
+        info(f"Model:   {C.BOLD}{mdl}{C.RESET}")
+    if gp:
+        info(f"GGUF:    {gp}")
+    if ggufs:
+        print()
+        info(f"GGUF files in {GGUF_DIR}:")
+        for f in ggufs:
+            act = f" {C.GREEN}<- active{C.RESET}" if str(f) == gp else ""
+            bullet(f"{f.name}  ({f.stat().st_size / GiB:.2f} GB){act}")
+    if bk != "ollama":
+        return
+    models = check_ollama_models(
+        cfg.get("translation_host", "127.0.0.1"), cfg.get("translation_port", DEFAULT_OLLAMA_PORT)
+    )
+    if models:
+        print()
+        info("Ollama models:")
+        family = mdl.split(":")[0]
+        for m in models:
+            bullet(f"{m}{f' {C.GREEN}<- active{C.RESET}' if m == mdl or m.startswith(family) else ''}")
+
+
+def _rename_model(cfg: dict, ggufs: list) -> None:
+    from config import save_config
+
+    name = ask_input("Model name", cfg.get("translation_model", ""))
+    if name:
+        cfg["translation_model"] = name
+        save_config(cfg)
+        success(f"Model: {name}")
+    pause()
+
+
+def _pull_model(cfg: dict, ggufs: list) -> None:
+    from config import save_config
+    from yume.installers import pull_ollama_model
+
+    name = ask_input("Ollama model to pull", cfg.get("translation_model", "") or "qwen2.5:7b")
+    if name and pull_ollama_model(name):  # starts Ollama if needed
+        cfg["translation_model"] = name
+        save_config(cfg)
+    pause()
+
+
+def _browse_hf(cfg: dict, ggufs: list) -> None:
+    browse_hf(cfg)
+
+
+def _select_gguf(cfg: dict, ggufs: list) -> None:
+    from config import save_config
+
+    if not ggufs:
+        warn(f"No .gguf files in {GGUF_DIR}")
+        pause()
+        return
+    opts = [(f"{f.name} ({f.stat().st_size / GiB:.2f} GB)", None) for f in ggufs] + [("Back", None)]
+    ch = ask_arrow("Select:", opts, default=len(opts) - 1)
+    if 0 <= ch < len(ggufs):
+        cfg["gguf_model_path"] = str(ggufs[ch])
+        cfg["translation_model"] = ggufs[ch].stem
+        save_config(cfg)
+        success(f"Selected: {ggufs[ch].name}")
+        if cfg["translation_backend"] != "llamacpp" and ask_yn("Switch to llama.cpp backend?"):
+            use_backend(cfg, "llamacpp")
+            save_config(cfg)
+    pause()
+
+
 def _manage_model(cfg: dict) -> None:
-    import subprocess
-
-    from config import DEFAULT_OLLAMA_PORT, save_config
-
     while True:
         header("Manage Translation Model")
-        bk = cfg.get("translation_backend", "llamacpp")
-        mdl = cfg.get("translation_model", "")
-        gp = cfg.get("gguf_model_path", "")
-        bi = BACKEND_INFO.get(bk, {})
-        info(f"Backend: {C.BOLD}{bi.get('name', bk)}{C.RESET}")
-        if mdl:
-            info(f"Model:   {C.BOLD}{mdl}{C.RESET}")
-        if gp:
-            info(f"GGUF:    {gp}")
-
-        gf = find_gguf_models()
-        if gf:
-            print()
-            info(f"GGUF files in {GGUF_DIR}:")
-            for f in gf:
-                sg = f.stat().st_size / GiB
-                act = f" {C.GREEN}<- active{C.RESET}" if str(f) == gp else ""
-                bullet(f"{f.name}  ({sg:.2f} GB){act}")
-
-        if bk == "ollama":
-            ms = check_ollama_models(
-                cfg.get("translation_host", "127.0.0.1"),
-                cfg.get("translation_port", DEFAULT_OLLAMA_PORT),
-            )
-            if ms:
-                print()
-                info("Ollama models:")
-                for m in ms:
-                    act = (
-                        f" {C.GREEN}<- active{C.RESET}"
-                        if m == mdl or m.startswith(mdl.split(":")[0] if ":" in mdl else mdl)
-                        else ""
-                    )
-                    bullet(f"{m}{act}")
-
+        ggufs = find_gguf_models()
+        _show_model_status(cfg, ggufs)
+        entries = [
+            ("Change model name", "Enter model name manually", _rename_model),
+            ("Pull Ollama model", "Download via ollama pull", _pull_model),
+            ("Download GGUF from HuggingFace", "Browse repos and pick files", _browse_hf),
+            ("Select local GGUF file", f"{len(ggufs)} file(s) in models/translation/", _select_gguf),
+        ]
         ch = ask_arrow(
-            "Options:",
-            [
-                ("Change model name", "Enter model name manually"),
-                ("Pull Ollama model", "Download via ollama pull"),
-                ("Download GGUF from HuggingFace", "Browse repos and pick files"),
-                ("Select local GGUF file", f"{len(gf)} file(s) in models/translation/"),
-                ("Back", None),
-            ],
-            default=4,
+            "Options:", [(label, desc) for label, desc, _ in entries] + [("Back", None)], default=len(entries)
         )
-        if ch == -1 or ch == 4:
+        if not 0 <= ch < len(entries):
             return
-        elif ch == 0:
-            nm = ask_input("Model name", mdl)
-            if nm:
-                cfg["translation_model"] = nm
-                save_config(cfg)
-                success(f"Model: {nm}")
-            pause()
-        elif ch == 1:
-            from yume.installers import pull_ollama_model
-
-            mn = ask_input("Ollama model to pull", mdl or "qwen2.5:7b")
-            if mn:
-                if not check_ollama_models(
-                    cfg.get("translation_host", "127.0.0.1"),
-                    cfg.get("translation_port", DEFAULT_OLLAMA_PORT),
-                ):
-                    info("Starting Ollama...")
-                    try:
-                        subprocess.Popen(  # nosec B603
-                            ["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                        )
-                        import time
-
-                        time.sleep(3)
-                    except Exception:
-                        error("Could not start Ollama")
-                        pause()
-                        continue
-                pull_ollama_model(mn)
-                cfg["translation_model"] = mn
-                save_config(cfg)
-            pause()
-        elif ch == 2:
-            browse_hf(cfg)
-        elif ch == 3:
-            if not gf:
-                warn(f"No .gguf files in {GGUF_DIR}")
-                pause()
-                continue
-            fo = [(f"{f.name} ({f.stat().st_size / GiB:.2f} GB)", None) for f in gf] + [("Back", None)]
-            fc = ask_arrow("Select:", fo, default=len(fo) - 1)
-            if 0 <= fc < len(gf):
-                cfg["gguf_model_path"] = str(gf[fc])
-                cfg["translation_model"] = gf[fc].stem
-                save_config(cfg)
-                success(f"Selected: {gf[fc].name}")
-                if cfg["translation_backend"] != "llamacpp":
-                    if ask_yn("Switch to llama.cpp backend?"):
-                        bi2 = BACKEND_INFO.get("llamacpp", {})
-                        cfg["translation_backend"] = "llamacpp"
-                        cfg["translation_host"] = bi2.get("dh", "127.0.0.1")
-                        cfg["translation_port"] = bi2.get("dp", 5000)
-                        save_config(cfg)
-            pause()
+        entries[ch][2](cfg, ggufs)
 
 
 def cfg_backend() -> str:
