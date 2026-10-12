@@ -287,3 +287,87 @@ def test_model_manager_without_ggufs_and_browse():
     r = manage([3, 2, -1], {"translation_backend": "llamacpp"})
     r.browsed.assert_called_once()
     r.saved.assert_not_called()
+
+
+# ── HuggingFace browser ───────────────────────────────────────────────────────
+
+import yume.menus.hf_browser as hf  # noqa: E402
+
+GB = 1024**3
+FILES = [
+    {"name": "qwen-q8_0.gguf", "bytes": int(8.1 * GB), "sha256": "a"},
+    {"name": "qwen-q4_k_m.gguf", "bytes": int(4.4 * GB), "sha256": "b"},
+    {"name": "qwen-q2_k.gguf", "bytes": int(3.0 * GB), "sha256": "c"},
+    {"name": "qwen-f16-00001-of-00002.gguf", "bytes": 8 * GB},
+    {"name": "qwen-f16-00002-of-00002.gguf", "bytes": 7 * GB},
+]
+
+
+def browse(choices, cfg, *, yns=(), inputs=(), files=FILES, vram_mb=8192, download_ok=True):
+    prompts, downloads = [], []
+
+    def arrow(prompt, opts, default=0, **kw):
+        prompts.append((prompt, opts, default))
+        ch = choices.pop(0)
+        return default if ch == "default" else ch
+
+    fakes = {
+        "ask_arrow": arrow,
+        "ask_input": MagicMock(side_effect=list(inputs)),
+        "ask_yn": MagicMock(side_effect=list(yns)),
+        "header": MagicMock(),
+        "pause": MagicMock(),
+        "info": MagicMock(),
+        "warn": MagicMock(),
+        "error": MagicMock(),
+        "success": MagicMock(),
+        "detect_gpu": lambda: {"has_nvidia": vram_mb > 0, "vram_mb": vram_mb, "name": "GPU"},
+        "hf_list_gguf": lambda repo: list(files),
+        "hf_download": lambda repo, part, sha: downloads.append((repo, part, sha)) or download_ok,
+    }
+    with ExitStack() as stack:
+        for name, fake in fakes.items():
+            stack.enter_context(patch.object(hf, name, fake))
+        stack.enter_context(patch("config.save_config"))
+        hf.browse_hf(cfg)
+    return types.SimpleNamespace(cfg=cfg, prompts=prompts, downloads=downloads)
+
+
+def test_hf_recommends_the_largest_q4_that_fits_and_downloads_it():
+    cfg = {"translation_backend": "llamacpp"}
+    r = browse([0, "default"], cfg, yns=[True])  # repo 0, then the preselected file
+    _prompt, opts, default = r.prompts[1]
+    labels = [label for label, _ in opts]
+    assert "★ recommended" in labels[default] and labels[default].startswith("qwen-q4_k_m.gguf")
+    assert "too large" in labels[-2]  # the 15 GB f16, both parts as one entry
+    assert "2 files" in labels[-2]
+    assert r.downloads == [("Qwen/Qwen2.5-7B-Instruct-GGUF", "qwen-q4_k_m.gguf", "b")]
+    assert cfg["gguf_model_path"].endswith("qwen-q4_k_m.gguf") and cfg["translation_model"] == "qwen-q4_k_m.gguf"
+
+
+def test_hf_split_model_downloads_every_part_and_offers_llamacpp():
+    cfg = {"translation_backend": "ollama"}
+    browse([0, 3], cfg, yns=[True, True])  # entry 3: the f16 in two parts
+    assert cfg["gguf_model_path"].endswith("qwen-f16-00001-of-00002.gguf")
+    assert cfg["translation_backend"] == "llamacpp"
+
+
+def test_hf_failed_part_stops_and_keeps_the_config():
+    cfg = {"translation_backend": "llamacpp"}
+    r = browse([0, 3], cfg, yns=[True], download_ok=False)
+    assert len(r.downloads) == 1 and "gguf_model_path" not in cfg
+
+
+def test_hf_other_repo_cpu_mode_and_back():
+    cfg = {"translation_backend": "llamacpp"}
+    n = len(hf._HF_RECOMMENDED_REPOS)
+    r = browse([n, 4, n + 1], cfg, inputs=["me/my-GGUF"], vram_mb=0)  # other repo, Back from files, Back
+    labels = [label for label, _ in r.prompts[1][1]]
+    assert not any("fits" in lbl or "too large" in lbl for lbl in labels)  # no GPU: no fit tags
+    assert "★ recommended" in labels[1]  # largest Q4_K_M; on CPU everything "fits"
+    assert r.downloads == []
+
+
+def test_hf_repo_without_ggufs():
+    r = browse([0, len(hf._HF_RECOMMENDED_REPOS) + 1], {"translation_backend": "llamacpp"}, files=[])
+    assert len(r.prompts) == 2  # back at the repo list

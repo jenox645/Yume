@@ -65,10 +65,89 @@ def _group_gguf_parts(files: list[dict]) -> list[dict]:
     return out
 
 
-def browse_hf(cfg: dict) -> None:
-    """Browse and download GGUF models from HuggingFace."""
+def _fit(size_bytes: int, vram_gb: float) -> str:
+    """How a model fits in VRAM: "ok", "tight" (no room for the context), "no"; "" without a GPU."""
+    if not vram_gb:
+        return ""
+    gb = size_bytes / GiB
+    if gb * 1.15 < vram_gb:
+        return "ok"
+    return "tight" if gb < vram_gb else "no"
+
+
+def _fit_label(fit: str, vram_gb: float) -> str:
+    # Built per call: --no-color empties the colour codes after import
+    return {
+        "ok": f"  {C.GREEN}✓ fits your GPU{C.RESET}",
+        "tight": f"  {C.YELLOW}~ tight fit{C.RESET}",
+        "no": f"  {C.RED}✗ too large ({vram_gb:.0f} GB VRAM){C.RESET}",
+    }.get(fit, "")
+
+
+def _pick_repo() -> str | None:
+    """A repository from the curated list or typed in; "" to ask again, None for Back."""
+    opts = [
+        *_HF_RECOMMENDED_REPOS,
+        ("Other repository...", "Type any HuggingFace repo (owner/model-name)"),
+        ("Back", None),
+    ]
+    ch = ask_arrow("Pick a model:", opts, default=0)
+    if ch == -1 or ch == len(opts) - 1:
+        return None
+    if ch == len(_HF_RECOMMENDED_REPOS):
+        return ask_input("HuggingFace repo (owner/model-name)", "")
+    return _HF_RECOMMENDED_REPOS[ch][0]
+
+
+def _pick_file(repo: str, entries: list[dict], vram_gb: float) -> dict | None:
+    """One (possibly split) model from the repo; ★ on the largest Q4_K_M that fits comfortably."""
+    star = -1
+    for i, e in enumerate(entries):  # size-ascending
+        if "q4_k_m" in e["name"].lower() and _fit(e["bytes"], vram_gb) in ("ok", ""):
+            star = i
+    opts = []
+    for i, e in enumerate(entries):
+        parts_note = f", {len(e['parts'])} files" if len(e["parts"]) > 1 else ""
+        fit = _fit_label(_fit(e["bytes"], vram_gb), vram_gb)
+        rec = f"  {C.GOLD}★ recommended{C.RESET}" if i == star else ""
+        opts.append((f"{e['name']}  ({e['size']}{parts_note}){fit}{rec}", None))
+    opts.append(("Back", None))
+    ch = ask_arrow(f"Files in {repo}:", opts, default=star if star >= 0 else len(opts) - 1)
+    return entries[ch] if 0 <= ch < len(entries) else None
+
+
+def _download_model(cfg: dict, repo: str, sel: dict, vram_gb: float) -> None:
+    """Download every part, then make it the translation model."""
     from config import save_config
 
+    parts = sel["parts"]
+    print()
+    info(f"Model: {sel['name']}")
+    info(f"Size:  {sel['size']}" + (f"  ({len(parts)} files)" if len(parts) > 1 else ""))
+    info(f"Dest:  {GGUF_DIR}")
+    if _fit(sel["bytes"], vram_gb) == "no":
+        warn("Larger than your VRAM — it will run partly on CPU (much slower).")
+    print()
+    if not ask_yn(f"Download {sel['name']}?"):
+        return
+    for i, part in enumerate(parts, 1):
+        if len(parts) > 1:
+            info(f"Part {i}/{len(parts)}")
+        if not hf_download(repo, part, sel.get("sha256", {}).get(part)):
+            error(f"Download failed: {part}")
+            return
+    # llama.cpp loads a split model from its first part
+    cfg["gguf_model_path"] = str(GGUF_DIR / parts[0])
+    cfg["translation_model"] = sel["name"]
+    save_config(cfg)
+    success(f"Saved to {GGUF_DIR / parts[0]}")
+    if cfg["translation_backend"] != "llamacpp" and ask_yn("Switch backend to llama.cpp to use this model?"):
+        use_backend(cfg, "llamacpp")
+        save_config(cfg)
+
+
+def browse_hf(cfg: dict) -> None:
+    """Browse and download GGUF models from HuggingFace."""
     while True:
         header("Download Translation Model")
         gpu = detect_gpu()
@@ -80,89 +159,20 @@ def browse_hf(cfg: dict) -> None:
             info(f"Hardware: {C.YELLOW}CPU mode{C.RESET} — prefer 3B models in Q4_K_M.")
         info(f"{C.DIM}More detail: Help & Guides → Pick the right models for your PC.{C.RESET}")
 
-        opts = list(_HF_RECOMMENDED_REPOS)
-        opts.append(("Other repository...", "Type any HuggingFace repo (owner/model-name)"))
-        opts.append(("Back", None))
-        ch = ask_arrow("Pick a model:", opts, default=0)
-        if ch == -1 or ch == len(opts) - 1:
+        repo = _pick_repo()
+        if repo is None:
             return
-        if ch == len(_HF_RECOMMENDED_REPOS):
-            repo = ask_input("HuggingFace repo (owner/model-name)", "")
-            if not repo:
-                continue
-        else:
-            repo = _HF_RECOMMENDED_REPOS[ch][0]
-
+        if not repo:
+            continue
         info(f"Fetching file list from {repo}...")
         files = hf_list_gguf(repo)
         if not files:
             warn("No .gguf files found. Use a GGUF repo (usually has '-GGUF' suffix).")
             pause()
             continue
-
-        entries = _group_gguf_parts(files)
-
-        # Build labels: honest fit tag (total size vs VRAM) + ★ on the pick
-        # we'd recommend (largest Q4_K_M that fits comfortably).
-        def _fits(e: dict) -> str:
-            if not gpu["has_nvidia"]:
-                return ""
-            sg = e["bytes"] / GiB
-            if sg * 1.15 < vram_gb:
-                return "ok"
-            if sg < vram_gb:
-                return "tight"
-            return "no"
-
-        star_idx = -1
-        for i, e in enumerate(entries):  # entries are size-ascending
-            if "q4_k_m" in e["name"].lower() and _fits(e) in ("ok", ""):
-                star_idx = i
-
-        fopts = []
-        for i, e in enumerate(entries):
-            fit = {
-                "ok": f"  {C.GREEN}✓ fits your GPU{C.RESET}",
-                "tight": f"  {C.YELLOW}~ tight fit{C.RESET}",
-                "no": f"  {C.RED}✗ too large ({vram_gb:.0f} GB VRAM){C.RESET}",
-                "": "",
-            }[_fits(e)]
-            parts_note = f", {len(e['parts'])} files" if len(e["parts"]) > 1 else ""
-            star = f"  {C.GOLD}★ recommended{C.RESET}" if i == star_idx else ""
-            fopts.append((f"{e['name']}  ({e['size']}{parts_note}){fit}{star}", None))
-        fopts.append(("Back", None))
-
-        fc = ask_arrow(f"Files in {repo}:", fopts, default=star_idx if star_idx >= 0 else len(fopts) - 1)
-        if fc == -1 or fc == len(entries):
+        sel = _pick_file(repo, _group_gguf_parts(files), vram_gb)
+        if sel is None:
             continue
-
-        sel = entries[fc]
-        print()
-        info(f"Model: {sel['name']}")
-        info(f"Size:  {sel['size']}" + (f"  ({len(sel['parts'])} files)" if len(sel["parts"]) > 1 else ""))
-        info(f"Dest:  {GGUF_DIR}")
-        if _fits(sel) == "no":
-            warn("Larger than your VRAM — it will run partly on CPU (much slower).")
-        print()
-
-        if ask_yn(f"Download {sel['name']}?"):
-            ok = True
-            for i, part in enumerate(sel["parts"], 1):
-                if len(sel["parts"]) > 1:
-                    info(f"Part {i}/{len(sel['parts'])}")
-                if not hf_download(repo, part, sel.get("sha256", {}).get(part)):
-                    error(f"Download failed: {part}")
-                    ok = False
-                    break
-            if ok:
-                first = sel["parts"][0]
-                cfg["gguf_model_path"] = str(GGUF_DIR / first)
-                cfg["translation_model"] = sel["name"]
-                save_config(cfg)
-                success(f"Saved to {GGUF_DIR / first}")
-                if cfg["translation_backend"] != "llamacpp":
-                    if ask_yn("Switch backend to llama.cpp to use this model?"):
-                        use_backend(cfg, "llamacpp")
-                        save_config(cfg)
+        _download_model(cfg, repo, sel, vram_gb)
         pause()
         return
