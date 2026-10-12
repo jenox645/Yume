@@ -1123,7 +1123,9 @@ def test_jobs_send_readings_only_where_names_are_hard_to_read(pipeline):
         return real(texts, src, tgt, title, context, readings)
 
     pipeline.translator.translate_batch = record
-    _run(pipeline.jobs, pipeline.jobs.create(PARAMS))
+    # CI has no Japanese romanizer installed: give every line a reading
+    with patch.object(_romanize, "romanize", lambda lang, text: "konnichiwa"):
+        _run(pipeline.jobs, pipeline.jobs.create(PARAMS))
     assert seen and all(r and all(r) for r in seen)  # Japanese: every line's romaji
     seen.clear()
     _run(pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "ru1", "language": "ru"}))
