@@ -11,11 +11,14 @@ Every supported backend speaks /v1/chat/completions: llama.cpp (llama-cpp-python
 or llama-server), Ollama (>= 0.5 for json_schema), LM Studio, text-generation-webui.
 """
 
+import difflib
 import json
 import re
 import threading
 import urllib.error
 import urllib.request
+
+from _romanize import _latin_only
 
 LANG_NAMES = {
     "ja": "Japanese",
@@ -102,6 +105,40 @@ def _unshout(translation, source):
         return translation  # a Latin all-caps source line: keep its style
     low = translation.lower()
     return low[:1].upper() + low[1:]
+
+
+# A reading the model copied into its answer (never seen in tests, but cheap)
+_READING_RE = re.compile(r"\s*\(reading:[^)]*\)", re.IGNORECASE)
+
+
+def _is_reading(translation, reading, text=""):
+    """The model gave back the line's romanization instead of translating it
+    ("Iradachi wo arawa ni shita" for 苛立ちをあらわにした). A line that is mostly
+    English already ("所以, jailbreaks talk about topics") rightly looks like its reading."""
+    if not translation or not reading:
+        return False
+    letters = [c for c in text if c.isalpha()]
+    if letters and sum(c.isascii() for c in letters) * 2 >= len(letters):
+        return False
+    a, b = (re.sub(r"[\W_]+", "", x.lower()) for x in (translation, reading))
+    return a == b or difflib.SequenceMatcher(None, a, b).ratio() > 0.7
+
+
+def _is_english(tgt):
+    return (tgt or "").strip().lower() in ("english", "en")
+
+
+def _drop_copied(texts, out):
+    """'' (= retry alone) for a translation the model gave to different lines.
+
+    A sentence spread over several lines came back as the whole sentence on
+    each of them ("These men, who were arrested as part of Strikeforce Pearl…"
+    on three lines). The same line repeated, like a chorus, may share one."""
+    sources = {}
+    for text, tr in zip(texts, out):
+        if tr:
+            sources.setdefault(tr.strip().lower(), set()).add(re.sub(r"[\W_]+", "", text.lower()))
+    return [("" if tr and len(sources[tr.strip().lower()]) > 1 else tr) for tr in out]
 
 
 def parse_numbered(raw, n):
@@ -294,39 +331,69 @@ class Translator:
             self._chat([{"role": "system", "content": system}, {"role": "user", "content": text}], 200)
         )
 
-    def translate_batch(self, texts, src_lang, tgt, title="", context=None):
-        """Translate texts; returns a list of strings ('' where it failed)."""
+    def translate_batch(self, texts, src_lang, tgt, title="", context=None, readings=None):
+        """Translate texts; returns a list of strings ('' where it failed, or
+        where the line is already in the target language).
+
+        `readings`: each line's romanization, sent along so the model gets names
+        right. A 7B model reads kanji names wrong: 井上会長 came back as "Kishida",
+        "Iida", "Yoshio Nishio"; with the reading, 21/21 names were right in a
+        test of Japanese and Korean news lines, at the same speed."""
+        readings = list(readings or [""] * len(texts))
+        # An English line in a Japanese song, or an English interview inside a
+        # Chinese report, is already readable: sent to the model it came back
+        # padded with the neighbouring line's words ("deeds you could do" got
+        # the whole previous sentence)
+        keep = [i for i, t in enumerate(texts) if not (_is_english(tgt) and _latin_only(t))]
+        result = [""] * len(texts)
+        if keep:
+            done = self._translate_lines(
+                [texts[i] for i in keep], [readings[i] for i in keep], src_lang, tgt, title, context
+            )
+            for i, tr in zip(keep, done):
+                result[i] = tr
+        return result
+
+    def _translate_lines(self, texts, readings, src_lang, tgt, title, context):
         n = len(texts)
-        if n == 0:
-            return []
         # The system prompt stays identical for a whole video, so llama.cpp reuses
         # its cached prefix (an uncached prompt costs ~9 s on a CPU-only build);
         # everything that changes per batch (context, line count) goes last
         system = self._system_prompt(src_lang, tgt, title)
         system += '\nReturn JSON {"translations": [...]} with one string per numbered input line, in order.'
-        lines = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
+        lines = "\n".join(
+            f"{i + 1}. {t} (reading: {r})" if r and r != t else f"{i + 1}. {t}"
+            for i, (t, r) in enumerate(zip(texts, readings))
+        )
         user = f"Translate these {n} lines:\n{lines}"
         if context:
             ctx = " / ".join(f"{a} -> {b}" for a, b in context[-3:])[:400]
             user = f"(Previous lines, for context only — do not translate them: {ctx})\n\n{user}"
         max_tokens = min(3000, 120 + sum(len(t) for t in texts) * 4 + 40 * n)
         out = self._structured(system, user, "translations", n, max_tokens)
+        out = [_READING_RE.sub("", tr).strip() if tr else tr for tr in out]
+        # A copied reading is no translation: retried alone, without the reading,
+        # and never fed back as context (it snowballed: batch after batch of romaji)
+        out = _drop_copied(texts, ["" if _is_reading(tr, r, t) else tr for tr, r, t in zip(out, readings, texts)])
+        return [self._checked(text, tr, reading, src_lang, tgt) for text, tr, reading in zip(texts, out, readings)]
 
-        result = []
-        for text, tr in zip(texts, out):
-            # One single-line retry for anything missing or leaking CJK into a
-            # non-CJK target (a 7B model writes "smile in拉斯媒体" for katakana names).
-            if not tr or (tgt not in CJK_LANGS and contains_cjk(tr)):
-                try:
-                    retry = self._single(text, src_lang, tgt)
-                    if retry and not (tgt not in CJK_LANGS and contains_cjk(retry)):
-                        tr = retry
-                    elif tr or retry:
-                        tr = strip_cjk(tr or retry)
-                except TranslationError:
-                    tr = strip_cjk(tr) if tr and tgt not in CJK_LANGS else tr
-            result.append(_unshout(tr, text) if tr else "")
-        return result
+    def _checked(self, text, tr, reading, src_lang, tgt):
+        """One single-line retry for anything missing or leaking CJK into a
+        non-CJK target (a 7B model writes "smile in拉斯媒体" for katakana names)."""
+        leaks = tgt not in CJK_LANGS
+        if tr and not (leaks and contains_cjk(tr)):
+            return _unshout(tr, text)
+        try:
+            retry = self._single(text, src_lang, tgt)
+        except TranslationError:
+            retry = ""
+        if _is_reading(retry, reading, text):
+            retry = ""
+        if retry and not (leaks and contains_cjk(retry)):
+            tr = retry
+        elif tr or retry:
+            tr = strip_cjk(tr or retry) if leaks else (tr or retry)
+        return _unshout(tr, text) if tr else ""
 
     def romanize_batch(self, texts, lang):
         """LLM transliteration (used for Arabic, and for JA/ZH when the

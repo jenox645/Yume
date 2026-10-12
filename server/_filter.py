@@ -4,6 +4,7 @@ All detection is stateless except _is_hallucination which reads the mutable
 user_blacklist from _state.
 """
 
+import os
 import re
 import unicodedata
 
@@ -233,7 +234,38 @@ def clean_raw_segments(segs):
             text = collapse_loops(text)
         out.append({**s, "text": text})
     hide |= loop_indexes([s["text"] for s in out])
+    for i in range(len(out) - 1):
+        if i in hide or i + 1 in hide:
+            continue
+        a, b = out[i], out[i + 1]
+        if _compact(a["text"]) == _compact(b["text"]) and b["start"] - a["end"] < 2.0:
+            # The same line twice in a row (fewer than a loop): one line over both
+            out[i] = {**a, "end": b["end"]}
+            hide.add(i + 1)
+        elif is_fragment(a, b):
+            hide.add(i)
     return out, hide
+
+
+FRAGMENT_MAX_S = 1.5  # a line this short...
+FRAGMENT_GAP_S = 1.0  # ...just before the next one...
+FRAGMENT_SHARED = 0.6  # ...that starts with this much of it is a cut-off copy
+
+
+def _compact(text):
+    return re.sub(r"[\W_]+", "", text.lower())
+
+
+def is_fragment(seg, nxt):
+    """Whisper wrote the start of the next line as a line of its own: "Место..."
+    before "Место встречи Эрмитаж…", "호주 최고한" before "호주 최고 안보기관인…"
+    (a word across a region cut, heard by both regions)."""
+    if seg["end"] - seg["start"] > FRAGMENT_MAX_S or nxt["start"] - seg["end"] > FRAGMENT_GAP_S:
+        return False
+    a, b = _compact(seg["text"]), _compact(nxt["text"])
+    if not a or len(a) >= len(b):
+        return False
+    return len(os.path.commonprefix([a, b])) >= FRAGMENT_SHARED * len(a)
 
 
 def loop_indexes(texts):

@@ -27,7 +27,7 @@ import _regions
 import _romanize
 import _separate
 import _state
-from _filter import clean_raw_segments, is_credits_line, is_hallucination, window_hallucinations
+from _filter import clean_raw_segments, is_credits_line, is_fragment, is_hallucination, window_hallucinations
 from _transcribe import transcribe_audio
 from _translate import BATCH_SIZE, TranslationError, _unshout
 
@@ -40,6 +40,7 @@ PREVIEW_GRACE_S = 60  # region 0 waits this long for an in-flight stream preview
 MAX_TRANSLATE_TRIES = 3
 NEAR_S = 20  # lines starting this soon after the playhead are translated first...
 NEAR_BATCH = 3  # ...in batches this small
+READING_LANGS = {"ja", "zh", "ko"}  # romanization sent with each line to translate
 
 
 MAX_SECONDS = 24 * 3600
@@ -171,10 +172,33 @@ class Job:
             self._touch(seg)
         if 0 <= idx < len(self.region_state):
             self.region_state[idx] = "done"
+            dropped += self._hide_boundary_fragments(idx)
         if dropped:
             with _state.stats_lock:
                 _state.server_stats["hallucinations_filtered"] += dropped
         self._update_status()
+
+    def _hide_boundary_fragments(self, idx):
+        """Regions are transcribed apart, so a word spoken across a cut can end
+        one region as a fragment of the next region's first line ("どのような法や
+        制度を変えるのか" before "どのような法や制度を変えたくて…"). Checked once
+        both neighbours are done; returns how many lines it hid."""
+        hidden = 0
+        for left, right in ((idx - 1, idx), (idx, idx + 1)):
+            if (
+                left < 0
+                or right >= len(self.regions)
+                or {self.region_state[left], self.region_state[right]} != {"done"}
+            ):
+                continue
+            lines = sorted((s for s in self.segments.values() if not s["hidden"]), key=lambda s: s["start"])
+            last = [s for s in lines if s["region"] == self.regions[left]][-1:]
+            first = [s for s in lines if s["region"] == self.regions[right]][:1]
+            if last and first and is_fragment(last[0], first[0]):
+                last[0]["hidden"] = last[0]["filler"] = True  # filler: refilter() keeps it hidden
+                self._touch(last[0])
+                hidden += 1
+        return hidden
 
     def _update_status(self):
         if self.status in ("error", "downloading", "separating", "starting") or not self.regions:
@@ -657,52 +681,58 @@ class JobManager:
             if job is None:
                 self._wait(1.0)
                 continue
-            texts = [s["text"] for s in batch]
             try:
-                if kind == "translate":
-                    with job.lock:
-                        context, title = list(job.context), job.title
-                    results = self.translator.translate_batch(texts, job.language, job.target, title, context)
-                else:
-                    results = self.translator.romanize_batch(texts, job.language)
-            except TranslationError as e:
-                unreachable = "unreachable" in str(e)
-                with job.lock:
-                    # Server down: wait for it, don't burn the lines' retries
-                    job.llm_backoff_until = time.time() + (30 if unreachable else 10)
-                    job.event(f"Translation server error: {e}", "error")
-                    for s in batch:
-                        if unreachable:
-                            continue
-                        s["tries"] += 1
-                        if s["tries"] >= MAX_TRANSLATE_TRIES:
-                            # Give up on this line: show the original only
-                            if kind == "translate":
-                                s["translation"] = ""
-                            else:
-                                s["romaji"] = ""
-                            job._touch(s)
-                    job._update_status()
-                self._notify()
-                continue
-            store = _state.store
-            with job.lock:
-                for s, r in zip(batch, results):
-                    if kind == "translate":
-                        s["translation"] = r
-                        if r:
-                            store.put_translation(job.lang_key, job.target, self.translator.model_id(), s["text"], r)
-                            job.context = (job.context + [(s["text"], r)])[-3:]
-                    else:
-                        s["romaji"] = r
-                        if r:
-                            store.put_romanization(job.lang_key, s["text"], r)
-                    job._touch(s)
-                if kind == "translate":
-                    with _state.stats_lock:
-                        _state.server_stats["lines_translated"] += len(batch)
-                job._update_status()
+                results = self._llm_call(job, kind, batch)
+            except Exception as e:  # anything else would end this thread: every job stuck "translating"
+                self._llm_failed(job, kind, batch, e)
+            else:
+                self._llm_done(job, kind, batch, results)
             self._notify()
+
+    def _llm_call(self, job, kind, batch):
+        texts = [s["text"] for s in batch]
+        if kind != "translate":
+            return self.translator.romanize_batch(texts, job.language)
+        with job.lock:
+            context, title = list(job.context), job.title
+            # Names written in kanji / hanzi / hangul: the reading tells the model how they sound
+            readings = [s["romaji"] or "" for s in batch] if job.language in READING_LANGS else None
+        return self.translator.translate_batch(texts, job.language, job.target, title, context, readings)
+
+    @staticmethod
+    def _llm_failed(job, kind, batch, e):
+        unreachable = isinstance(e, TranslationError) and "unreachable" in str(e)
+        with job.lock:
+            # Server down: wait for it, don't burn the lines' retries
+            job.llm_backoff_until = time.time() + (30 if unreachable else 10)
+            what = "Translation server error" if isinstance(e, TranslationError) else "Translation failed"
+            job.event(f"{what}: {e}", "error")
+            for s in batch if not unreachable else ():
+                s["tries"] += 1
+                if s["tries"] >= MAX_TRANSLATE_TRIES:
+                    # Give up on this line: show the original only
+                    s["translation" if kind == "translate" else "romaji"] = ""
+                    job._touch(s)
+            job._update_status()
+
+    def _llm_done(self, job, kind, batch, results):
+        store = _state.store
+        with job.lock:
+            for s, r in zip(batch, results):
+                if kind == "translate":
+                    s["translation"] = r
+                    if r:
+                        store.put_translation(job.lang_key, job.target, self.translator.model_id(), s["text"], r)
+                        job.context = (job.context + [(s["text"], r)])[-3:]
+                else:
+                    s["romaji"] = r
+                    if r:
+                        store.put_romanization(job.lang_key, s["text"], r)
+                job._touch(s)
+            if kind == "translate":
+                with _state.stats_lock:
+                    _state.server_stats["lines_translated"] += len(batch)
+            job._update_status()
 
 
 # ── Export ────────────────────────────────────────────────────────────────────
