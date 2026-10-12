@@ -339,28 +339,20 @@ def health_check(cfg: dict) -> None:
     pause()
 
 
-def show_status(cfg: dict) -> None:
-    """Display system status overview."""
+def _hardware() -> dict:
+    """GPU / RAM / disk, cached 30 s: nvidia-smi is slow to call on every render."""
     global _hw_cache, _hw_cache_ts
 
-    from config import DEFAULT_TRANSLATION_PORT
-    from yume.benchmark import _is_whisper_model_cached
-
-    header("System Status")
-
-    # Use cached hardware info (30 s TTL) to avoid slow re-detection on every render
     now = time.monotonic()
     if _hw_cache is None or (now - _hw_cache_ts) > _HW_CACHE_TTL:
-        _hw_cache = {
-            "gpu": detect_gpu(),
-            "ram": detect_ram_gb(),
-            "disk": disk_free_gb(),
-        }
+        _hw_cache = {"gpu": detect_gpu(), "ram": detect_ram_gb(), "disk": disk_free_gb()}
         _hw_cache_ts = now
-    gpu = _hw_cache["gpu"]
-    ram = _hw_cache["ram"]
-    disk = _hw_cache["disk"]
+    return _hw_cache
 
+
+def _status_hardware() -> None:
+    hw = _hardware()
+    gpu, ram, disk = hw["gpu"], hw["ram"], hw["disk"]
     if gpu["has_nvidia"]:
         gpu_txt = f"{C.GREEN}{gpu['name']} ({gpu['vram_mb']} MB){C.RESET}"
     elif gpu["has_amd"]:
@@ -380,89 +372,183 @@ def show_status(cfg: dict) -> None:
         title="Hardware",
     )
 
-    tool_rows = []
+
+def _status_tools(cfg: dict) -> None:
+    rows = []
     for t in ["yt-dlp", "ffmpeg", "deno"]:
         p = find_tool(t)
         if p:
-            tool_rows.append([t, f"{C.GREEN}installed{C.RESET}", p])
+            rows.append([t, f"{C.GREEN}installed{C.RESET}", p])
         elif t == "deno" and cfg.get("youtube_auth_method") == "cookies":
-            tool_rows.append([t, f"{C.DIM}skipped{C.RESET}", "using cookies"])
+            rows.append([t, f"{C.DIM}skipped{C.RESET}", "using cookies"])
         else:
-            tool_rows.append([t, f"{C.RED}MISSING{C.RESET}", "run Tools menu to install"])
-    table(["Tool", "Status", "Path"], tool_rows, col_styles=[C.CYAN, C.RESET, C.DIM], title="Tools")
+            rows.append([t, f"{C.RED}MISSING{C.RESET}", "run Tools menu to install"])
+    table(["Tool", "Status", "Path"], rows, col_styles=[C.CYAN, C.RESET, C.DIM], title="Tools")
 
-    pkg_rows = []
-    for pkg, display in [
-        ("faster_whisper", "faster-whisper"),
-        ("flask", "Flask"),
-        ("waitress", "Waitress"),
-        ("llama_cpp", "llama-cpp-python"),
-    ]:
+
+def _status_packages(cfg: dict) -> None:
+    from yume import llama_server
+
+    packages = [("faster_whisper", "faster-whisper"), ("flask", "Flask"), ("waitress", "Waitress")]
+    # llama-cpp-python only matters when llama.cpp translates without llama-server
+    if cfg.get("translation_backend", "llamacpp") == "llamacpp" and not llama_server.server_path():
+        packages.append(("llama_cpp", "llama-cpp-python"))
+    rows = []
+    for pkg, display in packages:
         try:
             __import__(pkg)
-            pkg_rows.append([display, f"{C.GREEN}✓{C.RESET}"])
+            rows.append([display, f"{C.GREEN}✓{C.RESET}"])
         except ImportError:
-            pkg_rows.append([display, f"{C.RED}✗  not installed{C.RESET}"])
-    table(["Package", "Status"], pkg_rows, col_styles=[C.CYAN, C.RESET], title="Python Packages")
+            rows.append([display, f"{C.RED}✗  not installed{C.RESET}"])
+    table(["Package", "Status"], rows, col_styles=[C.CYAN, C.RESET], title="Python Packages")
 
-    bk = cfg.get("translation_backend", "llamacpp")
-    bi = backend_info(bk)
+
+def _status_servers(cfg: dict) -> None:
+    bi = backend_info(cfg.get("translation_backend", "llamacpp"))
     ws = check_server(cfg["whisper_host"], cfg["whisper_port"], "/health")
     ts = check_server(cfg["translation_host"], cfg["translation_port"], bi["hp"])
     if not ts["up"]:
         ts = check_server(cfg["translation_host"], cfg["translation_port"], HEALTH_PATH_OPENAI)
-    ws_s = f"{C.GREEN}● running{C.RESET}" if ws["up"] else f"{C.DIM}○ stopped{C.RESET}"
-    ts_s = f"{C.GREEN}● running{C.RESET}" if ts["up"] else f"{C.DIM}○ stopped{C.RESET}"
+
+    def state(up: bool) -> str:
+        return f"{C.GREEN}● running{C.RESET}" if up else f"{C.DIM}○ stopped{C.RESET}"
+
     table(
         ["Server", "Address", "Status"],
         [
-            ["Whisper", f"{cfg['whisper_host']}:{cfg['whisper_port']}", ws_s],
-            [bi["name"], f"{cfg['translation_host']}:{cfg['translation_port']}", ts_s],
+            ["Whisper", f"{cfg['whisper_host']}:{cfg['whisper_port']}", state(ws["up"])],
+            [bi["name"], f"{cfg['translation_host']}:{cfg['translation_port']}", state(ts["up"])],
         ],
         col_styles=[C.CYAN, C.DIM, C.RESET],
         title="Servers",
     )
 
-    gf = find_gguf_models()
 
-    # Models
+def _status_models(cfg: dict) -> None:
+    from yume.benchmark import _is_whisper_model_cached
+    from yume.utils import hf_hub_dir
+
     section("Models")
     wm = cfg.get("whisper_model", "large-v3")
-    wm_path = Path(wm)
-    if wm_path.is_dir():
-        info(f"Whisper:      {C.BOLD}{wm_path.name}{C.RESET}  {C.DIM}(custom: {wm}){C.RESET}")
+    if Path(wm).is_dir():
+        info(f"Whisper:      {C.BOLD}{Path(wm).name}{C.RESET}  {C.DIM}(custom: {wm}){C.RESET}")
+    elif _is_whisper_model_cached(wm):
+        info(f"Whisper:      {C.BOLD}{wm}{C.RESET}")
+        info(f"              {C.GREEN}downloaded{C.RESET}  {C.DIM}{hf_hub_dir()}{C.RESET}")
     else:
         info(f"Whisper:      {C.BOLD}{wm}{C.RESET}")
-        hf_cache = Path.home() / ".cache" / "huggingface" / "hub"
-        cached = _is_whisper_model_cached(wm)
-        if cached:
-            info(f"              {C.GREEN}downloaded{C.RESET}  {C.DIM}{hf_cache}{C.RESET}")
-        else:
-            info(f"              {C.YELLOW}not downloaded{C.RESET}  (will download on first use)")
-            info(f"              {C.DIM}Cache: {hf_cache}{C.RESET}")
+        info(f"              {C.YELLOW}not downloaded{C.RESET}  (will download on first use)")
+        info(f"              {C.DIM}Cache: {hf_hub_dir()}{C.RESET}")
 
     gp = cfg.get("gguf_model_path", "")
+    ggufs = find_gguf_models()
     if gp and Path(gp).exists():
         info(f"Translation:  {C.BOLD}{Path(gp).name}{C.RESET}  {C.DIM}({gp}){C.RESET}")
-    elif gf:
-        info(f"Translation:  {len(gf)} GGUF file(s) in models/translation/")
-        for f in gf:
+    elif ggufs:
+        info(f"Translation:  {len(ggufs)} GGUF file(s) in models/translation/")
+        for f in ggufs:
             bullet(f"{f.name} ({f.stat().st_size / GiB:.2f} GB)")
     else:
         info(f"Translation:  {C.DIM}no GGUF models found{C.RESET}")
+
+
+def _status_ports(cfg: dict) -> None:
+    from config import DEFAULT_TRANSLATION_PORT
 
     section("Ports")
     for label, key in [("Whisper", "whisper"), ("Translation", "translation")]:
         host = cfg.get(f"{key}_host", "127.0.0.1")
         port = cfg.get(f"{key}_port", DEFAULT_TRANSLATION_PORT)
-        free = is_port_free(port, host)
-        if free:
+        if is_port_free(port, host):
             info(f"{label:12s} {host}:{port}  {C.GREEN}available{C.RESET}")
         else:
             pid, name = get_port_process(port)
             who = f"{name} (PID {pid})" if pid else "unknown process"
             warn(f"{label:12s} {host}:{port}  {C.RED}in use{C.RESET} by {who}")
+
+
+def show_status(cfg: dict) -> None:
+    """Display system status overview."""
+    header("System Status")
+    _status_hardware()
+    _status_tools(cfg)
+    _status_packages(cfg)
+    _status_servers(cfg)
+    _status_models(cfg)
+    _status_ports(cfg)
     pause()
+
+
+_FONT_EXTENSIONS = {".ttf", ".otf", ".ttc", ".woff", ".woff2"}
+
+# script -> (file-name patterns, the free font to suggest). Patterns match the
+# FILE name, which on Windows is not the font's name: Microsoft YaHei is
+# msyh.ttc, Yu Gothic YuGothR.ttc, MS Gothic msgothic.ttc.
+_SCRIPT_FONTS = {
+    "Japanese": (
+        ["NotoSansJP", "NotoSerifJP", "MPLUS", "YuGoth", "YuMin", "Meiryo", "MSGothic", "MSMincho", "Hiragino",
+         "Kosugi", "ZenMaru"],
+        "Noto Sans JP",
+    ),
+    "Chinese": (
+        ["NotoSansSC", "NotoSansTC", "SourceHanSans", "msyh", "MicrosoftYaHei", "msjh", "SimHei", "SimSun", "MingLiU",
+         "DengXian", "PingFang", "STHeiti"],
+        "Noto Sans SC",
+    ),
+    "Korean": (["NotoSansKR", "Malgun", "NanumGothic", "AppleSD", "Batang", "Gulim"], "Noto Sans KR"),
+    "Arabic": (
+        ["NotoNaskhArabic", "NotoSansArabic", "Amiri", "Scheherazade", "trado", "arabtype", "majalla"],
+        "Noto Naskh Arabic",
+    ),
+}  # fmt: skip
+_GENERIC_FONTS = ["Arial", "Georgia", "Verdana", "Consolas", "Times New Roman", "Courier New"]
+
+
+def _font_files() -> tuple[int, list[Path]]:
+    """(number of font folders, font files in them) for this OS."""
+    if IS_WIN:
+        dirs = [Path(os.environ.get("WINDIR", "C:\\Windows")) / "Fonts"]
+    elif IS_MAC:
+        dirs = [Path("/Library/Fonts"), Path.home() / "Library/Fonts", Path("/System/Library/Fonts")]
+    else:
+        dirs = [Path("/usr/share/fonts"), Path.home() / ".local/share/fonts", Path("/usr/local/share/fonts")]
+    files = [f for d in dirs if d.exists() for f in d.rglob("*") if f.suffix.lower() in _FONT_EXTENSIONS]
+    return len(dirs), files
+
+
+def _matching(files: list[Path], patterns: list[str]) -> list[str]:
+    """Names of the font files whose name contains one of the patterns (case and spaces ignored)."""
+    pats = [p.lower().replace(" ", "") for p in patterns]
+    return sorted({f.name for f in files if any(p in f.stem.lower().replace(" ", "") for p in pats)}, key=str.lower)
+
+
+def _show_bundled_fonts() -> None:
+    ext_fonts = EXT_DIR / "fonts"
+    if not ext_fonts.exists():
+        warn(f"Extension fonts folder missing: {ext_fonts}")
+        info("Create it and add .ttf/.otf files for custom subtitle fonts")
+        return
+    bundled = [f.name for f in ext_fonts.iterdir() if f.suffix.lower() in _FONT_EXTENSIONS]
+    if not bundled:
+        info(f"Extension fonts folder: empty (add .ttf/.otf files to {ext_fonts})")
+        return
+    section("Bundled Fonts (extension/fonts/)")
+    for f in bundled:
+        bullet(f)
+
+
+_FONT_HELP = [
+    "How to use fonts in Yume:",
+    "  1. Yume automatically detects your system fonts",
+    "  2. Pick a font in the extension popup (Settings > Appearance)",
+    "",
+    "To add a custom font that isn't installed system-wide:",
+    "  1. Copy the .ttf or .otf file into the extension/fonts/ folder",
+    "  2. Open extension/js/bundled-fonts.js and find the BUNDLED_FONTS list",
+    "  3. Add your font: { file: 'MyFont.ttf', name: 'My Font' }",
+    "  4. Reload the extension in chrome://extensions",
+    "  The font will appear with '(bundled)' next to its name in the dropdown",
+]
 
 
 def detect_fonts() -> None:
@@ -470,107 +556,27 @@ def detect_fonts() -> None:
     header("Font Detection")
     info("Scanning for subtitle-compatible fonts (Chinese, Japanese, Korean, Arabic)...")
     print()
-
-    font_dirs = []
-    if IS_WIN:
-        winfonts = Path(os.environ.get("WINDIR", "C:\\Windows")) / "Fonts"
-        font_dirs = [winfonts]
-    elif IS_MAC:
-        font_dirs = [Path("/Library/Fonts"), Path.home() / "Library/Fonts", Path("/System/Library/Fonts")]
-    else:
-        font_dirs = [Path("/usr/share/fonts"), Path.home() / ".local/share/fonts", Path("/usr/local/share/fonts")]
-
-    extensions = {".ttf", ".otf", ".ttc", ".woff", ".woff2"}
-    found_files = []
-    for d in font_dirs:
-        if d.exists():
-            for f in d.rglob("*"):
-                if f.suffix.lower() in extensions:
-                    found_files.append(f)
-
-    info(f"Scanned {len(font_dirs)} font directories, found {len(found_files)} font files")
+    n_dirs, files = _font_files()
+    info(f"Scanned {n_dirs} font directories, found {len(files)} font files")
     print()
 
-    cjk_targets = {
-        "Japanese": [
-            "NotoSansJP",
-            "NotoSerifJP",
-            "Noto Sans JP",
-            "MPLUS",
-            "M PLUS",
-            "Yu Gothic",
-            "Meiryo",
-            "MS Gothic",
-            "HiraginoSans",
-            "Hiragino",
-            "Kosugi",
-            "ZenMaru",
-        ],
-        "Chinese": [
-            "NotoSansSC",
-            "NotoSansTC",
-            "Noto Sans SC",
-            "Noto Sans TC",
-            "SimHei",
-            "Microsoft YaHei",
-            "PingFang",
-            "STHeiti",
-            "Source Han Sans",
-        ],
-        "Korean": ["NotoSansKR", "Noto Sans KR", "Malgun", "NanumGothic", "AppleSD"],
-        "Arabic": ["NotoNaskhArabic", "Noto Naskh Arabic", "Amiri", "Scheherazade"],
-    }
-
-    for lang, patterns in cjk_targets.items():
-        matches = []
-        for f in found_files:
-            fname = f.stem
-            for pat in patterns:
-                if pat.lower().replace(" ", "") in fname.lower().replace(" ", ""):
-                    matches.append(f.name)
-                    break
-        if matches:
-            success(f"{lang}: {len(matches)} font(s) found")
-            for m in sorted(set(matches))[:5]:
-                bullet(m)
-            if len(set(matches)) > 5:
-                info(f"  ... and {len(set(matches)) - 5} more")
-        else:
-            warn(f"{lang}: No dedicated fonts found")
-            info(f"  Install: Noto Sans {lang[:2].upper()} from Google Fonts")
+    for script, (patterns, suggestion) in _SCRIPT_FONTS.items():
+        matches = _matching(files, patterns)
+        if not matches:
+            warn(f"{script}: No dedicated fonts found")
+            info(f"  Install: {suggestion} from Google Fonts")
+            continue
+        success(f"{script}: {len(matches)} font(s) found")
+        for m in matches[:5]:
+            bullet(m)
+        if len(matches) > 5:
+            info(f"  ... and {len(matches) - 5} more")
     print()
 
-    generic = ["Arial", "Georgia", "Verdana", "Consolas", "Times New Roman", "Courier New"]
-    found_generic = []
-    for f in found_files:
-        for g in generic:
-            if g.lower().replace(" ", "") in f.stem.lower().replace(" ", ""):
-                found_generic.append(g)
-    found_generic = sorted(set(found_generic))
-    info(f"Generic fonts: {', '.join(found_generic) if found_generic else 'none detected'}")
-
-    ext_fonts = EXT_DIR / "fonts"
-    if ext_fonts.exists():
-        bundled = [f.name for f in ext_fonts.iterdir() if f.suffix.lower() in extensions]
-        if bundled:
-            section("Bundled Fonts (extension/fonts/)")
-            for f in bundled:
-                bullet(f)
-        else:
-            info(f"Extension fonts folder: empty (add .ttf/.otf files to {ext_fonts})")
-    else:
-        warn(f"Extension fonts folder missing: {ext_fonts}")
-        info("Create it and add .ttf/.otf files for custom subtitle fonts")
-
+    generic = [g for g in _GENERIC_FONTS if _matching(files, [g])]
+    info(f"Generic fonts: {', '.join(sorted(generic)) if generic else 'none detected'}")
+    _show_bundled_fonts()
     print()
-    info("How to use fonts in Yume:")
-    info("  1. Yume automatically detects your system fonts")
-    info("  2. Pick a font in the extension popup (Settings > Appearance)")
-    info("")
-    info("To add a custom font that isn't installed system-wide:")
-    info("  1. Copy the .ttf or .otf file into the extension/fonts/ folder")
-    info("  2. Open extension/js/bundled-fonts.js and find the BUNDLED_FONTS list")
-    info("  3. Add your font: { file: 'MyFont.ttf', name: 'My Font' }")
-    info("  4. Reload the extension in chrome://extensions")
-    info("  The font will appear with '(bundled)' next to its name in the dropdown")
+    for line in _FONT_HELP:
+        info(line)
     pause()
