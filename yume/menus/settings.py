@@ -38,125 +38,117 @@ def _one_click_label(cfg: dict) -> str:
     return f"on, auto-stop {f'{mins} min' if mins else 'never'}"
 
 
+def _device_labels(cfg: dict) -> tuple[str, str]:
+    """Whisper device and precision for display, with "auto" resolved for this machine."""
+    gpu = detect_gpu()
+    device = cfg["whisper_device"]
+    if device == "auto":
+        if gpu["has_nvidia"]:
+            device = f"{C.GREEN}cuda{C.RESET} (auto)"
+        elif gpu.get("has_amd") and not IS_WIN:
+            device = f"{C.RED}cuda{C.RESET} (auto, ROCm)"
+        else:
+            device = "cpu (auto)"
+    compute = cfg["whisper_compute_type"]
+    if compute == "auto":
+        if "cuda" not in device:
+            compute = "int8 (auto)"
+        else:
+            compute = f"{'float16' if gpu.get('vram_mb', 0) >= 8000 else 'int8_float16'} (auto)"
+    return device, compute
+
+
+def _show_settings(cfg: dict) -> None:
+    device, compute = _device_labels(cfg)
+    yt_auth = cfg["youtube_auth_method"]
+    if yt_auth == "cookies":
+        yt_auth += f" ({cfg.get('cookies_browser', 'chrome')})"
+    table(
+        ["Setting", "Value"],
+        [
+            [f"{C.GOLD}Whisper Model{C.RESET}", cfg["whisper_model"]],
+            [f"{C.GOLD}Device / Precision{C.RESET}", f"{device} / {compute}"],
+            [f"{C.GOLD}Whisper Address{C.RESET}", f"{cfg['whisper_host']}:{cfg['whisper_port']}"],
+            ["", ""],
+            [
+                f"{C.MAGENTA}Translation{C.RESET}",
+                backend_info(cfg.get("translation_backend", "llamacpp")).get("name", "?"),
+            ],
+            [f"{C.MAGENTA}TL Address{C.RESET}", f"{cfg['translation_host']}:{cfg['translation_port']}"],
+            [f"{C.MAGENTA}TL Model{C.RESET}", cfg.get("translation_model", "—")],
+            ["", ""],
+            [f"{C.YELLOW}YouTube Auth{C.RESET}", yt_auth],
+            [f"{C.YELLOW}One-click start{C.RESET}", _one_click_label(cfg)],
+        ],
+        col_styles=[C.RESET, C.CYAN],
+        title="Current Settings",
+    )
+
+
+def _export_config(cfg: dict) -> None:
+    from config import config_export
+
+    config_export(cfg)
+    pause()
+
+
+def _import_config(cfg: dict) -> None:
+    """Import one of the last 5 backups (by number) or any file (by path)."""
+    from config import config_import
+
+    backups = sorted(BASE_DIR.glob("yume_config_backup_*.json"), reverse=True)
+    if backups:
+        info("Found backup files:")
+        for i, b in enumerate(backups[:5]):
+            bullet(f"{i + 1}. {b.name}")
+        choice = ask_input("File number or path", "1")
+        if choice.isdigit():
+            idx = int(choice) - 1
+            source = backups[idx] if 0 <= idx < len(backups) else None
+        else:
+            source = choice
+    else:
+        source = ask_input("Path to config file", "") or None
+    imported = config_import(source) if source else None
+    if imported:
+        cfg.update(imported)
+    pause()
+
+
+def _reset_config(cfg: dict) -> None:
+    from config import DEFAULT_CONFIG, save_config
+
+    if ask_yn("Reset ALL settings?", False):
+        fresh = {**DEFAULT_CONFIG, "first_run_complete": True}
+        save_config(fresh)
+        cfg.update(fresh)
+        success("Reset!")
+    pause()
+
+
 def settings_menu(cfg: dict) -> None:
     """Full settings menu."""
-    from config import DEFAULT_CONFIG, save_config, config_export, config_import
-
+    entries = [
+        ("Whisper settings", "Speech recognition model, device, precision", _set_whisper),
+        ("Translation settings", "Translation backend, address, model", _menu_backend),
+        ("Server addresses", "Host/port for Whisper and Translation servers", _set_addrs),
+        ("Translation prompt", "Customize how the AI translates (tone, style, rules)", _menu_translation_prompt),
+        ("Romanization prompt", "Customize how the AI romanizes non-Latin text", _menu_romanization_prompt),
+        ("YouTube auth", "How Yume accesses YouTube (Deno bot bypass or browser cookies)", _menu_yt_auth),
+        ("One-click start", "Let the extension start/stop Yume by itself, auto-stop delay", menu_one_click),
+        ("Export config", "Save settings to a backup file", _export_config),
+        ("Import config", "Load settings from a backup file", _import_config),
+        ("Reset to defaults", None, _reset_config),
+    ]
     while True:
         header("Settings")
-        bi = backend_info(cfg.get("translation_backend", "llamacpp"))
-        ym = cfg["youtube_auth_method"]
-        if ym == "cookies":
-            ym += f" ({cfg.get('cookies_browser', 'chrome')})"
-
-        dev_raw = cfg["whisper_device"]
-        comp_raw = cfg["whisper_compute_type"]
-        gpu = detect_gpu()
-        if dev_raw == "auto":
-            if gpu["has_nvidia"]:
-                dev_display = f"{C.GREEN}cuda{C.RESET} (auto)"
-            elif gpu.get("has_amd") and not IS_WIN:
-                dev_display = f"{C.RED}cuda{C.RESET} (auto, ROCm)"
-            else:
-                dev_display = "cpu (auto)"
-        else:
-            dev_display = dev_raw
-        if comp_raw == "auto":
-            resolved_comp = (
-                "float16"
-                if "cuda" in dev_display and gpu.get("vram_mb", 0) >= 8000
-                else ("int8_float16" if "cuda" in dev_display else "int8")
-            )
-            comp_display = f"{resolved_comp} (auto)"
-        else:
-            comp_display = comp_raw
-
-        table(
-            ["Setting", "Value"],
-            [
-                [f"{C.GOLD}Whisper Model{C.RESET}", cfg["whisper_model"]],
-                [f"{C.GOLD}Device / Precision{C.RESET}", f"{dev_display} / {comp_display}"],
-                [f"{C.GOLD}Whisper Address{C.RESET}", f"{cfg['whisper_host']}:{cfg['whisper_port']}"],
-                ["", ""],
-                [f"{C.MAGENTA}Translation{C.RESET}", bi.get("name", "?")],
-                [f"{C.MAGENTA}TL Address{C.RESET}", f"{cfg['translation_host']}:{cfg['translation_port']}"],
-                [f"{C.MAGENTA}TL Model{C.RESET}", cfg.get("translation_model", "—")],
-                ["", ""],
-                [f"{C.YELLOW}YouTube Auth{C.RESET}", ym],
-                [f"{C.YELLOW}One-click start{C.RESET}", _one_click_label(cfg)],
-            ],
-            col_styles=[C.RESET, C.CYAN],
-            title="Current Settings",
-        )
-
+        _show_settings(cfg)
         ch = ask_arrow(
-            "Change:",
-            [
-                ("Whisper settings", "Speech recognition model, device, precision"),
-                ("Translation settings", "Translation backend, address, model"),
-                ("Server addresses", "Host/port for Whisper and Translation servers"),
-                ("Translation prompt", "Customize how the AI translates (tone, style, rules)"),
-                ("Romanization prompt", "Customize how the AI romanizes non-Latin text"),
-                ("YouTube auth", "How Yume accesses YouTube (Deno bot bypass or browser cookies)"),
-                ("One-click start", "Let the extension start/stop Yume by itself, auto-stop delay"),
-                ("Export config", "Save settings to a backup file"),
-                ("Import config", "Load settings from a backup file"),
-                ("Reset to defaults", None),
-                ("Back", None),
-            ],
-            default=10,
+            "Change:", [(label, desc) for label, desc, _ in entries] + [("Back", None)], default=len(entries)
         )
-        if ch == -1 or ch == 10:
+        if not 0 <= ch < len(entries):
             return
-        elif ch == 0:
-            _set_whisper(cfg)
-        elif ch == 1:
-            _menu_backend(cfg)
-        elif ch == 2:
-            _set_addrs(cfg)
-        elif ch == 3:
-            _menu_translation_prompt(cfg)
-        elif ch == 4:
-            _menu_romanization_prompt(cfg)
-        elif ch == 5:
-            _menu_yt_auth(cfg)
-        elif ch == 6:
-            menu_one_click(cfg)
-        elif ch == 7:
-            config_export(cfg)
-            pause()
-        elif ch == 8:
-            backups = sorted(BASE_DIR.glob("yume_config_backup_*.json"), reverse=True)
-            if backups:
-                info("Found backup files:")
-                for i, b in enumerate(backups[:5]):
-                    bullet(f"{i + 1}. {b.name}")
-                choice = ask_input("File number or path", "1")
-                try:
-                    idx = int(choice) - 1
-                    if 0 <= idx < len(backups):
-                        imported = config_import(backups[idx])
-                        if imported:
-                            cfg.update(imported)
-                except ValueError:
-                    imported = config_import(choice)
-                    if imported:
-                        cfg.update(imported)
-            else:
-                path = ask_input("Path to config file", "")
-                if path:
-                    imported = config_import(path)
-                    if imported:
-                        cfg.update(imported)
-            pause()
-        elif ch == 9:
-            if ask_yn("Reset ALL settings?", False):
-                n = dict(DEFAULT_CONFIG)
-                n["first_run_complete"] = True
-                save_config(n)
-                cfg.update(n)
-                success("Reset!")
-            pause()
+        entries[ch][2](cfg)
 
 
 def _set_whisper(cfg: dict) -> None:

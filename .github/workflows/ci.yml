@@ -114,7 +114,7 @@ jobs:
 
       # Fails when a function gets more complex than the worst one today
       - name: Complexity gate
-        run: xenon --max-absolute E --exclude "server/_vendor/*" pocket_yume.py config.py server yume
+        run: xenon --max-absolute D --exclude "server/_vendor/*" pocket_yume.py config.py server yume
 
       - name: Maintainability index
         run: radon mi pocket_yume.py config.py server/ yume/ -nc -e "server/_vendor/*"

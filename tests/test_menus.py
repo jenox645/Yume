@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import types
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -135,3 +136,93 @@ def test_an_active_custom_model_shows_its_name():
     assert m.default == len(MODELS)  # the custom entry
     assert m.options[len(MODELS)][1] == "active"
     assert any("Fine-tuned" in s for s in m.said)
+
+
+# ── Settings menu ─────────────────────────────────────────────────────────────
+
+import yume.menus.settings as st  # noqa: E402
+
+SUBMENUS = ["_set_whisper", "_menu_backend", "_set_addrs", "_menu_translation_prompt",
+            "_menu_romanization_prompt", "_menu_yt_auth", "menu_one_click"]  # fmt: skip
+BACK = 10
+
+
+def settings(choices, cfg=None, *, inputs=(), yns=(), backups=(), gpu=None, imported=None):
+    cfg = cfg or {
+        "whisper_model": "small", "whisper_device": "auto", "whisper_compute_type": "auto",
+        "whisper_host": "127.0.0.1", "whisper_port": 5001, "translation_host": "127.0.0.1",
+        "translation_port": 5000, "youtube_auth_method": "cookies", "translation_backend": "ollama",
+    }  # fmt: skip
+    rows: list = []
+    calls = {name: MagicMock() for name in SUBMENUS}
+    fakes = {
+        "ask_arrow": MagicMock(side_effect=list(choices)),
+        "ask_input": MagicMock(side_effect=list(inputs)),
+        "ask_yn": MagicMock(side_effect=list(yns)),
+        "header": MagicMock(),
+        "pause": MagicMock(),
+        "info": MagicMock(),
+        "bullet": MagicMock(),
+        "success": MagicMock(),
+        "table": lambda headers, r, **kw: rows.append(r),
+        "detect_gpu": lambda: gpu or {"has_nvidia": True, "vram_mb": 12288},
+        "_one_click_label": lambda cfg: "on",
+        **calls,
+    }
+    exported, imports, saved = MagicMock(), MagicMock(return_value=imported), MagicMock()
+    with ExitStack() as stack:
+        for name, fake in fakes.items():
+            stack.enter_context(patch.object(st, name, fake))
+        stack.enter_context(patch.object(st, "BASE_DIR", MagicMock(glob=lambda pat: list(backups))))
+        stack.enter_context(patch("config.config_export", exported))
+        stack.enter_context(patch("config.config_import", imports))
+        stack.enter_context(patch("config.save_config", saved))
+        st.settings_menu(cfg)
+    return types.SimpleNamespace(cfg=cfg, rows=rows, calls=calls, exported=exported, imports=imports, saved=saved)
+
+
+def test_each_entry_opens_its_submenu():
+    r = settings([*range(len(SUBMENUS)), BACK])
+    for name in SUBMENUS:
+        r.calls[name].assert_called_once()
+
+
+def test_esc_leaves():
+    r = settings([-1])
+    assert not any(m.called for m in r.calls.values())
+
+
+def test_auto_device_and_precision_are_resolved_for_display():
+    rows = settings([BACK]).rows[0]
+    assert "cuda" in rows[1][1] and "float16 (auto)" in rows[1][1]
+    rows = settings([BACK], gpu={"has_nvidia": False}).rows[0]
+    assert rows[1][1] == "cpu (auto) / int8 (auto)"
+    assert rows[8][1] == "cookies (chrome)"
+
+
+def test_export_and_import_from_a_listed_backup():
+    backups = [Path("yume_config_backup_2.json"), Path("yume_config_backup_1.json")]
+    r = settings([7, 8, BACK], inputs=["2"], backups=backups, imported={"whisper_model": "medium"})
+    r.exported.assert_called_once()
+    r.imports.assert_called_once_with(backups[1])
+    assert r.cfg["whisper_model"] == "medium"
+
+
+def test_import_from_a_typed_path():
+    r = settings([8, BACK], inputs=["D:/my.json"], backups=[Path("yume_config_backup_1.json")], imported={"x": 1})
+    r.imports.assert_called_once_with("D:/my.json")
+    assert r.cfg["x"] == 1
+    r = settings([8, BACK], inputs=["D:/my.json"])  # no backups: asks for a path
+    r.imports.assert_called_once_with("D:/my.json")
+
+
+def test_reset_only_when_confirmed():
+    r = settings([9, BACK], yns=[False])
+    r.saved.assert_not_called()
+    r = settings([9, BACK], yns=[True])
+    r.saved.assert_called_once()
+    from config import DEFAULT_CONFIG
+
+    assert r.cfg["first_run_complete"] is True
+    assert r.cfg["whisper_model"] == DEFAULT_CONFIG["whisper_model"]
+    assert r.cfg["translation_backend"] == DEFAULT_CONFIG["translation_backend"]
