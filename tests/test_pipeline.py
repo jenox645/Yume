@@ -539,6 +539,36 @@ def test_download_failure_reports_error(pipeline):
     assert snap["status"] == "error" and "unavailable" in snap["error"]
 
 
+def test_failed_download_streams_each_region_when_the_stream_is_reachable(pipeline):
+    with (
+        patch.object(_audio, "download_full_audio", return_value=(None, "HTTP Error 403")),
+        patch.object(_audio, "get_stream_url", return_value="https://rr1.googlevideo.com/a"),
+    ):
+        job = pipeline.jobs.create({**PARAMS, "video_id": "streamed", "duration": 61})
+        deadline = time.time() + 10
+        while not job.regions and time.time() < deadline:
+            time.sleep(0.05)
+    assert job.mode == "stream"
+    assert job.regions == _regions.fixed_regions(61)
+    assert any("streaming each region" in e["msg"] for e in job.snapshot(0, events=True)["events"])
+
+
+def test_a_pasted_stream_url_is_downloaded_directly(pipeline, tmp_path):
+    with patch.object(_audio, "download_direct", return_value=(None, "403")) as direct:
+        snap = _run(
+            pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "pasted", "stream_url": "https://cdn/x.m3u8"})
+        )
+    direct.assert_called_once_with("https://cdn/x.m3u8")
+    pipeline.download.assert_not_called()
+    assert snap["status"] == "error" and snap["error"] == "403"
+
+
+def test_an_unreadable_download_is_a_job_error(pipeline):
+    with patch.object(_audio, "load_audio", side_effect=OSError("truncated WAV")):
+        snap = _run(pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "broken"}))
+    assert snap["status"] == "error" and snap["error"] == "OSError: truncated WAV"
+
+
 def test_translation_server_down_does_not_burn_retries(pipeline):
     def down(*a, **k):
         raise _translate.TranslationError("translation server unreachable: refused")
@@ -600,8 +630,31 @@ def test_enable_again_retries_failed_regions(pipeline):
 
 
 @pytest.mark.parametrize("bad", [float("inf"), float("nan"), -5, "x", 10**12])
-def test_job_duration_is_sane(bad):
-    assert _jobs.Job(("k", "ja", "", "m"), {"duration": bad}).duration == 0.0
+def test_job_duration_and_playhead_are_sane(bad):
+    job = _jobs.Job(("k", "ja", "", "m"), {"duration": bad, "playhead": bad})
+    assert job.duration == 0.0 and job.playhead == 0.0
+    manager = _jobs.JobManager.__new__(_jobs.JobManager)
+    manager._notify = lambda: None
+    manager.poll(job, 42.5)
+    assert job.playhead == 42.5
+    manager.poll(job, bad)  # a poll's ?t= goes through the same check
+    assert job.playhead == 0.0
+
+
+def test_job_request_validation():
+    sys.argv = ["server"]
+    import _api
+
+    ok, err = _api._job_params(
+        {"url": "https://www.youtube.com/watch?v=abc", "language": "JA", "t": "12.5", "target": "  French "}
+    )
+    assert err is None
+    assert (ok["language"], ok["target"], ok["playhead"]) == ("ja", "French", "12.5")
+    assert _api._job_params({"url": "https://youtu.be/x", "language": "auto"})[0]["language"] is None
+    assert _api._job_params({})[1] == "Missing url"
+    assert _api._job_params({"url": "file:///etc/passwd"})[1].startswith("Invalid URL")
+    assert _api._job_params({"stream_url": "https://cdn/x.m3u8", "url": "javascript:1"})[1].startswith("Invalid URL")
+    assert _api._job_params({"url": "https://youtu.be/x", "language": "japanese"})[1].startswith("Invalid language")
 
 
 def test_corrupt_cache_database_is_set_aside(tmp_path):
