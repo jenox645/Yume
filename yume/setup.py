@@ -154,33 +154,39 @@ def _offer_vocal_isolation() -> None:
         vocals.install()
 
 
-def setup_wizard(cfg: dict) -> dict:
-    from config import DEFAULT_OLLAMA_PORT, save_config
+_MISSING_LABELS = {
+    "yt-dlp": "yt-dlp",
+    "ffmpeg": "FFmpeg",
+    "python_deps": "faster-whisper",
+    "llama_server": "translation engine (llama.cpp)",
+    "gguf_model": "GGUF translation model",
+}
 
-    from yume.installers import (
-        install_deno,
-        install_ffmpeg,
-        install_ollama,
-        install_python_deps,
-        install_ytdlp,
-        pull_ollama_model,
-    )
-    from yume.menus import browse_hf
+
+def _compute_type(vram_mb: int) -> str:
+    """Whisper precision that fits in the GPU's memory."""
+    if vram_mb >= 8000:
+        return "float16"
+    if vram_mb >= 4000:
+        return "int8_float16"
+    return "int8"
+
+
+def _welcome() -> None:
+    import platform
 
     # Also reached via "Re-run Setup", so not "First-Time"
     header("Setup Wizard")
     print(center(f"{C.BOLD}Welcome to Pocket Yume!{C.RESET}"))
     print(center(f"{C.DIM}Let's get Yume AI subtitles ready on your machine.{C.RESET}"))
-    import platform
-
-    plat = platform.system()
-    arch = platform.machine().lower()
-    print(center(f"{C.DIM}Platform: {plat} ({arch}){C.RESET}"))
+    print(center(f"{C.DIM}Platform: {platform.system()} ({platform.machine().lower()}){C.RESET}"))
     print()
     info(f"{C.DIM}Note: First startup downloads the Whisper model (~1-3 GB) — subsequent launches are fast.{C.RESET}")
     print()
 
-    # ── Step 1: System Scan ────────────────────────────────────────────────────
+
+def _scan_hardware(cfg: dict) -> dict:
+    """Step 1: show GPU, RAM and disk; pick the Whisper model, device and precision."""
     _step(1, "Detecting Hardware")
     info(f"{C.DIM}Scanning GPU, RAM, and disk to recommend the best settings...{C.RESET}")
     print()
@@ -194,57 +200,73 @@ def setup_wizard(cfg: dict) -> dict:
         info("This requires C++ build tools. If installs fail, use Python 3.11 or 3.12.")
         print()
 
-    has_gpu = gpu["has_nvidia"] or (gpu.get("has_amd") and not IS_WIN)
-    (success if has_gpu else warn)(
-        f"GPU:  {gpu['name'] or 'None'}"
-        + (
-            f" ({gpu['vram_mb']} MB)"
-            if gpu["has_nvidia"]
-            else f" ({gpu.get('vram_mb', '?')} MB, ROCm)"
-            if gpu.get("has_amd") and not IS_WIN
-            else " -- CPU mode"
-        )
-    )
-    if not has_gpu:
+    rocm = bool(gpu.get("has_amd")) and not IS_WIN
+    if gpu["has_nvidia"]:
+        success(f"GPU:  {gpu['name']} ({gpu['vram_mb']} MB)")
+    elif rocm:
+        success(f"GPU:  {gpu['name']} ({gpu.get('vram_mb', '?')} MB, ROCm)")
+    else:
+        warn(f"GPU:  {gpu['name'] or 'None'} -- CPU mode")
         info(f"{C.DIM}No compatible GPU found. Yume will use your CPU for transcription.{C.RESET}")
         info(f"{C.DIM}This works fine but is slower. NVIDIA GPUs with 4+ GB VRAM give best performance.{C.RESET}")
     success(f"RAM:  {ram:.1f} GB")
     (success if disk >= 10 else warn)(f"Disk: {disk:.1f} GB free" + ("" if disk >= 10 else " -- need ~8 GB"))
 
     existing_model = cfg.get("whisper_model", "")
-    is_custom_path = existing_model and (os.path.sep in existing_model or "/" in existing_model)
-    rec_model, rec_reason = recommend_whisper_model(gpu)
-    if is_custom_path:
+    if existing_model and (os.path.sep in existing_model or "/" in existing_model):
         info(f"Custom Whisper model preserved: {C.BOLD}{Path(existing_model).name}{C.RESET}")
         info(f"{C.DIM}{existing_model}{C.RESET}")
     else:
+        rec_model, rec_reason = recommend_whisper_model(gpu)
         info(f"Recommendation: {rec_reason}")
         cfg["whisper_model"] = rec_model
+
     if gpu["has_nvidia"]:
         cfg["whisper_device"] = "cuda"
-        if gpu["vram_mb"] >= 8000:
-            cfg["whisper_compute_type"] = "float16"
-        elif gpu["vram_mb"] >= 4000:
-            cfg["whisper_compute_type"] = "int8_float16"
-        else:
-            cfg["whisper_compute_type"] = "int8"
-    elif gpu["has_amd"] and not IS_WIN:
+        cfg["whisper_compute_type"] = _compute_type(gpu["vram_mb"])
+    elif rocm:
         cfg["whisper_device"] = "auto"
-        vram = gpu.get("vram_mb", 0)
-        if vram >= 8000:
-            cfg["whisper_compute_type"] = "float16"
-        elif vram >= 4000:
-            cfg["whisper_compute_type"] = "int8_float16"
-        else:
-            cfg["whisper_compute_type"] = "int8"
+        cfg["whisper_compute_type"] = _compute_type(gpu.get("vram_mb", 0))
         info(f"AMD GPU detected — ROCm (Linux), compute: {cfg['whisper_compute_type']}")
     else:
         cfg["whisper_device"] = "cpu"
         cfg["whisper_compute_type"] = "int8"
+    return gpu
 
-    pause()
 
-    # ── Step 2: Component Check ────────────────────────────────────────────────
+def _translation_engine_ok(gpu: dict) -> bool:
+    """Report the llama.cpp translation engine; False when it must be installed."""
+    from yume import llama_server
+
+    if llama_server.server_path():
+        build = llama_server.installed_build()
+        success(f"Translation engine: llama-server {build.get('tag', '')} ({build.get('variant', '?')})")
+        return True
+    # llama.cpp's prebuilt server is the engine Yume installs. An existing
+    # llama-cpp-python is kept only when it already runs on the GPU (or
+    # there is no GPU to use): CUDA wheels lag behind new Pythons, and the
+    # source build needs the CUDA Toolkit and a C++ compiler.
+    try:
+        import llama_cpp.llama_cpp as _lib  # noqa: F401
+        import uvicorn  # noqa: F401
+        import fastapi  # noqa: F401
+    except ImportError:
+        warn("Translation engine: missing")
+        return False
+    has_gpu_hw = gpu.get("has_nvidia") or gpu.get("has_amd")
+    if not has_gpu_hw or callable(getattr(_lib, "ggml_backend_cuda_reg", None)):
+        success("Translation engine: llama-cpp-python")
+        return True
+    warn("Translation engine: llama-cpp-python runs on the CPU only — slow")
+    return False
+
+
+def _check_components(cfg: dict, gpu: dict) -> tuple[list[str], bool]:
+    """Step 2: report what is installed.
+
+    Returns the missing components (keys of _MISSING_LABELS) and whether a
+    translation model or a running backend is already there.
+    """
     _step(2, "Component Check")
     info(f"{C.DIM}Checking which tools and packages are already installed...{C.RESET}")
     print()
@@ -255,7 +277,6 @@ def setup_wizard(cfg: dict) -> dict:
     (success if yt else warn)(f"yt-dlp: {'installed — ' + yt if yt else 'missing'}")
     (success if ff else warn)(f"FFmpeg: {'installed — ' + ff if ff else 'missing'}")
     info(f"Deno:   {'installed — ' + dn if dn else 'not installed (optional)'}")
-
     if not yt:
         missing.append("yt-dlp")
     if not ff:
@@ -269,232 +290,169 @@ def setup_wizard(cfg: dict) -> dict:
         warn("faster-whisper: missing")
         missing.append("python_deps")
 
-    uses_llamacpp = cfg.get("translation_backend", "llamacpp") == "llamacpp"
-    from yume import llama_server
-
-    if not uses_llamacpp:
-        info(f"Translation engine: not needed ({cfg.get('translation_backend')} backend)")
-    elif llama_server.server_path():
-        build = llama_server.installed_build()
-        success(f"Translation engine: llama-server {build.get('tag', '')} ({build.get('variant', '?')})")
-    else:
-        # llama.cpp's prebuilt server is the engine Yume installs. An existing
-        # llama-cpp-python is kept only when it already runs on the GPU (or
-        # there is no GPU to use): CUDA wheels lag behind new Pythons, and the
-        # source build needs the CUDA Toolkit and a C++ compiler.
-        try:
-            import llama_cpp.llama_cpp as _lib  # noqa: F401
-            import uvicorn  # noqa: F401
-            import fastapi  # noqa: F401
-
-            has_gpu_hw = gpu.get("has_nvidia") or gpu.get("has_amd")
-            if not has_gpu_hw or callable(getattr(_lib, "ggml_backend_cuda_reg", None)):
-                success("Translation engine: llama-cpp-python")
-            else:
-                warn("Translation engine: llama-cpp-python runs on the CPU only — slow")
-                missing.append("llama_server")
-        except ImportError:
-            warn("Translation engine: missing")
-            missing.append("llama_server")
-
     gf = find_gguf_models()
-    if not uses_llamacpp:
-        pass  # Ollama / LM Studio / custom manage their own models
-    elif gf:
-        success(f"GGUF models: {len(gf)} found")
-        # Keep the user's choice on a re-run; only fill in a missing/stale path
-        if not cfg.get("gguf_model_path") or not Path(cfg["gguf_model_path"]).exists():
-            cfg["gguf_model_path"] = str(gf[0])
-            cfg["translation_model"] = gf[0].name
+    if cfg.get("translation_backend", "llamacpp") != "llamacpp":
+        # Ollama / LM Studio / custom manage their own models
+        info(f"Translation engine: not needed ({cfg.get('translation_backend')} backend)")
     else:
-        warn("No GGUF translation model found")
-        missing.append("gguf_model")
+        if not _translation_engine_ok(gpu):
+            missing.append("llama_server")
+        if gf:
+            success(f"GGUF models: {len(gf)} found")
+            # Keep the user's choice on a re-run; only fill in a missing/stale path
+            if not cfg.get("gguf_model_path") or not Path(cfg["gguf_model_path"]).exists():
+                cfg["gguf_model_path"] = str(gf[0])
+                cfg["translation_model"] = gf[0].name
+        else:
+            warn("No GGUF translation model found")
+            missing.append("gguf_model")
 
     print()
-    detected = []
+    detected = False
     for k, bi in _BACKEND_INFO.items():
-        if k == "custom":
-            continue
-        if check_server(bi["dh"], bi["dp"], bi["hp"])["up"]:
-            detected.append(k)
+        if k != "custom" and check_server(bi["dh"], bi["dp"], bi["hp"])["up"]:
+            detected = True
             success(f"Detected: {bi['name']} on port {bi['dp']}")
+    return missing, detected or bool(gf)
 
-    if not missing and (detected or gf):
-        success(f"\n  {C.BOLD}Everything ready!{C.RESET}")
-        cfg["first_run_complete"] = True
-        save_config(cfg)
-        _offer_one_click()
-        _offer_vocal_isolation()
-        _extension_guide()
-        pause()
-        return cfg
 
-    if missing:
-        _MISSING_LABELS = {
-            "yt-dlp": "yt-dlp",
-            "ffmpeg": "FFmpeg",
-            "python_deps": "faster-whisper",
-            "llama_server": "translation engine (llama.cpp)",
-            "gguf_model": "GGUF translation model",
-        }
-        labels = [_MISSING_LABELS.get(m, m) for m in missing]
-        print(f"\n  Needs installation: {C.BOLD}{', '.join(labels)}{C.RESET}")
-        pause()
+def _choose_youtube_auth(cfg: dict) -> None:
+    """Step 3: browser cookies or Deno, so YouTube lets yt-dlp download."""
+    from yume.installers import install_deno
 
-        # ── Step 3: YouTube Authentication ────────────────────────────────────
-        _step(3, "YouTube Authentication")
-        info("YouTube blocks automated downloads to prevent bots.")
-        info("Yume needs a way to prove you're a real person.")
-        info(f"\n{C.DIM}Browser Cookies is the easiest — just be logged into YouTube in your browser.{C.RESET}")
+    _step(3, "YouTube Authentication")
+    info("YouTube blocks automated downloads to prevent bots.")
+    info("Yume needs a way to prove you're a real person.")
+    info(f"\n{C.DIM}Browser Cookies is the easiest — just be logged into YouTube in your browser.{C.RESET}")
+    print()
+    ch = ask_arrow(
+        "How do you want to authenticate with YouTube?",
+        [
+            (
+                "Browser Cookies (recommended)",
+                "Uses your browser's YouTube login. Be logged into YouTube in your browser.",
+            ),
+            (
+                "Deno (no account needed)",
+                "Downloads Deno (~35 MB) + sets up a local server that solves YouTube's bot challenge.",
+            ),
+            ("Skip for now", "You can set this up later in Settings."),
+        ],
+        default=0,
+        allow_back=False,
+    )
+    if ch == 0:
+        cfg["youtube_auth_method"] = "cookies"
+        browsers = ["chrome", "firefox", "edge", "brave", "safari"]
         print()
-        ch = ask_arrow(
-            "How do you want to authenticate with YouTube?",
-            [
-                (
-                    "Browser Cookies (recommended)",
-                    "Uses your browser's YouTube login. Be logged into YouTube in your browser.",
-                ),
-                (
-                    "Deno (no account needed)",
-                    "Downloads Deno (~35 MB) + sets up a local server that solves YouTube's bot challenge.",
-                ),
-                ("Skip for now", "You can set this up later in Settings."),
-            ],
+        info("This only affects audio downloading — the extension itself works in any browser.")
+        bc = ask_arrow(
+            "Which browser are you logged into YouTube with?",
+            [(b.capitalize(), None) for b in browsers],
             default=0,
             allow_back=False,
         )
-        if ch == 0:
-            cfg["youtube_auth_method"] = "cookies"
-            browsers = ["chrome", "firefox", "edge", "brave", "safari"]
-            print()
-            info("This only affects audio downloading — the extension itself works in any browser.")
-            bc = ask_arrow(
-                "Which browser are you logged into YouTube with?",
-                [(b.capitalize(), None) for b in browsers],
-                default=0,
-                allow_back=False,
-            )
-            cfg["cookies_browser"] = browsers[bc]
-            success(f"Using cookies from: {browsers[bc]}")
-        elif ch == 1:
-            _install_with_retry(
-                "Deno",
-                install_deno,
-                f"Download Deno manually: {C.CYAN}https://deno.land{C.RESET}",
-            )
-            cfg["youtube_auth_method"] = "deno"
-        save_config(cfg)
+        cfg["cookies_browser"] = browsers[bc]
+        success(f"Using cookies from: {browsers[bc]}")
+    elif ch == 1:
+        _install_with_retry("Deno", install_deno, f"Download Deno manually: {C.CYAN}https://deno.land{C.RESET}")
+        cfg["youtube_auth_method"] = "deno"
 
-        # ── Install decision (auth is now configured) ──────────────────────────
-        print(f"\n  Ready to install: {C.BOLD}{', '.join(labels)}{C.RESET}\n")
-        mode = ask_arrow(
-            "How to proceed?",
-            [
-                ("Install all", "Download everything needed automatically"),
-                ("Choose each", "Ask before installing each component"),
-                ("Skip", "Set up later from the Tools menu"),
-            ],
-            default=0,
-            allow_back=False,
-        )
 
-        if mode == 2:
-            cfg["first_run_complete"] = True
-            save_config(cfg)
-            pause()
-            return cfg
+def _install_missing(missing: list[str], ask_each: bool) -> None:
+    """Step 4: install the missing tools and packages (all, or one by one)."""
+    from yume import llama_server
+    from yume.installers import install_ffmpeg, install_python_deps, install_ytdlp
 
-        ae = mode == 1  # ask-each
+    # key → (question, label, installer, manual hint)
+    installs = {
+        "yt-dlp": (
+            "Install yt-dlp?",
+            "yt-dlp",
+            install_ytdlp,
+            f"Download manually: {C.CYAN}https://github.com/yt-dlp/yt-dlp/releases/latest{C.RESET}\n"
+            f"Place the binary in: {C.BOLD}{TOOLS_DIR}{C.RESET}",
+        ),
+        "ffmpeg": (
+            "Install FFmpeg?",
+            "FFmpeg",
+            install_ffmpeg,
+            f"Download manually: {C.CYAN}https://ffmpeg.org/download.html{C.RESET}\n"
+            f"Place ffmpeg{EXE} in: {C.BOLD}{TOOLS_DIR}{C.RESET}",
+        ),
+        "python_deps": ("Install Python packages?", "Python packages", install_python_deps, ""),
+        "llama_server": (
+            "Install the translation engine (llama.cpp, prebuilt for your GPU)?",
+            "llama.cpp server",
+            llama_server.install,
+            f"Download it manually from {C.CYAN}https://github.com/ggml-org/llama.cpp/releases{C.RESET}"
+            f" and unzip it into {llama_server.LLAMA_DIR}",
+        ),
+    }
+    _step(4, "Installing Components")
+    for key, (question, label, install_fn, hint) in installs.items():
+        if key in missing and (not ask_each or ask_yn(question)):
+            _install_with_retry(label, install_fn, hint)
 
-        # ── Step 4: Install components ─────────────────────────────────────────
-        _step(4, "Installing Components")
 
-        if "yt-dlp" in missing:
-            if not ae or ask_yn("Install yt-dlp?"):
-                _install_with_retry(
-                    "yt-dlp",
-                    install_ytdlp,
-                    f"Download manually: {C.CYAN}https://github.com/yt-dlp/yt-dlp/releases/latest{C.RESET}\n"
-                    f"Place the binary in: {C.BOLD}{TOOLS_DIR}{C.RESET}",
-                )
+def _use_ollama(cfg: dict) -> None:
+    """Switch translation to Ollama; offer to install it and pull a model."""
+    from config import DEFAULT_OLLAMA_PORT
 
-        if "ffmpeg" in missing:
-            if not ae or ask_yn("Install FFmpeg?"):
-                _install_with_retry(
-                    "FFmpeg",
-                    install_ffmpeg,
-                    f"Download manually: {C.CYAN}https://ffmpeg.org/download.html{C.RESET}\n"
-                    f"Place ffmpeg{EXE} in: {C.BOLD}{TOOLS_DIR}{C.RESET}",
-                )
+    from yume.installers import install_ollama, pull_ollama_model
 
-        if "python_deps" in missing:
-            if not ae or ask_yn("Install Python packages?"):
-                _install_with_retry("Python packages", install_python_deps)
+    bi = _BACKEND_INFO["ollama"]
+    cfg["translation_backend"] = "ollama"
+    cfg["translation_host"] = bi["dh"]
+    cfg["translation_port"] = bi["dp"]
+    cfg["translation_model"] = "qwen2.5:7b"
+    if not ask_yn("Install Ollama?"):
+        return
+    _install_with_retry("Ollama", install_ollama, f"Install manually: {C.CYAN}https://ollama.com{C.RESET}")
+    time.sleep(2)
+    if not ask_yn(f"Download model ({cfg['translation_model']})?"):
+        return
+    if not check_server("127.0.0.1", DEFAULT_OLLAMA_PORT, HEALTH_PATH_OLLAMA)["up"]:
+        try:
+            subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(3)
+        except Exception as e:
+            _log.debug("[setup_wizard] failed to start ollama serve: %s", e)
+    pull_ollama_model(cfg["translation_model"])
 
-        if "llama_server" in missing:
-            if not ae or ask_yn("Install the translation engine (llama.cpp, prebuilt for your GPU)?"):
-                _install_with_retry(
-                    "llama.cpp server",
-                    llama_server.install,
-                    f"Download it manually from {C.CYAN}https://github.com/ggml-org/llama.cpp/releases{C.RESET}"
-                    f" and unzip it into {llama_server.LLAMA_DIR}",
-                )
 
-        # ── Step 5: Translation Model ──────────────────────────────────────────
-        _step(5, "Translation Model")
-        if "gguf_model" not in missing:
-            gf = find_gguf_models()
-            gf_name = gf[0].name if gf else cfg.get("translation_model", "configured")
-            success(f"Translation model already configured: {C.BOLD}{gf_name}{C.RESET}")
-        if "gguf_model" in missing:
-            info("Yume needs a GGUF model file to translate subtitles into English.")
-            info(f"{C.DIM}llama.cpp loads it directly — no external servers required.{C.RESET}")
-            print()
-            ch = ask_arrow(
-                "How to get a model?",
-                [
-                    ("Download from HuggingFace", "Browse model repos and pick a quantization"),
-                    ("Use Ollama instead", "One-click install with built-in model management"),
-                    ("Skip", "I'll add a .gguf file to models/translation/ later"),
-                ],
-                default=0,
-                allow_back=False,
-            )
-            if ch == 0:
-                browse_hf(cfg)
-            elif ch == 1:
-                bi = _BACKEND_INFO["ollama"]
-                cfg["translation_backend"] = "ollama"
-                cfg["translation_host"] = bi["dh"]
-                cfg["translation_port"] = bi["dp"]
-                cfg["translation_model"] = "qwen2.5:7b"
-                if ask_yn("Install Ollama?"):
-                    _install_with_retry(
-                        "Ollama",
-                        install_ollama,
-                        f"Install manually: {C.CYAN}https://ollama.com{C.RESET}",
-                    )
-                    time.sleep(2)
-                    if ask_yn(f"Download model ({cfg['translation_model']})?"):
-                        if not check_server("127.0.0.1", DEFAULT_OLLAMA_PORT, HEALTH_PATH_OLLAMA)["up"]:
-                            try:
-                                subprocess.Popen(
-                                    ["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                                )
-                                time.sleep(3)
-                            except Exception as e:
-                                _log.debug("[setup_wizard] failed to start ollama serve: %s", e)
-                        pull_ollama_model(cfg["translation_model"])
-            save_config(cfg)
+def _choose_translation_model(cfg: dict, needs_model: bool) -> None:
+    """Step 5: get a GGUF model from HuggingFace, or switch to Ollama."""
+    from yume.menus import browse_hf
 
-    cfg["first_run_complete"] = True
-    save_config(cfg)
-    try:
-        from config import config_export
+    _step(5, "Translation Model")
+    if not needs_model:
+        gf = find_gguf_models()
+        gf_name = gf[0].name if gf else cfg.get("translation_model", "configured")
+        success(f"Translation model already configured: {C.BOLD}{gf_name}{C.RESET}")
+        return
+    info("Yume needs a GGUF model file to translate subtitles into English.")
+    info(f"{C.DIM}llama.cpp loads it directly — no external servers required.{C.RESET}")
+    print()
+    ch = ask_arrow(
+        "How to get a model?",
+        [
+            ("Download from HuggingFace", "Browse model repos and pick a quantization"),
+            ("Use Ollama instead", "One-click install with built-in model management"),
+            ("Skip", "I'll add a .gguf file to models/translation/ later"),
+        ],
+        default=0,
+        allow_back=False,
+    )
+    if ch == 0:
+        browse_hf(cfg)
+    elif ch == 1:
+        _use_ollama(cfg)
 
-        config_export(cfg, BASE_DIR / "yume_config_post_setup.json")
-    except Exception as e:
-        _log.debug("[setup_wizard] config-backup failed: %s", e)
+
+def _print_summary(cfg: dict) -> None:
+    """What is installed now, per component the chosen backend needs."""
+    from yume import llama_server
 
     print()
     section("Installation Summary")
@@ -505,35 +463,90 @@ def setup_wizard(cfg: dict) -> dict:
         ("faster-whisper", _try_import("faster_whisper")),
     ]
     if bk == "llamacpp":
-        from yume import llama_server as _ls
-
-        checks.append(("Translation engine", _ls.server_path() is not None or _try_import("llama_cpp")))
+        checks.append(("Translation engine", llama_server.server_path() is not None or _try_import("llama_cpp")))
         checks.append(("GGUF model", len(find_gguf_models()) > 0))
     elif bk == "ollama":
         checks.append(
             ("Ollama", check_server("127.0.0.1", cfg.get("translation_port", 11434), HEALTH_PATH_OLLAMA)["up"])
         )
-
-    all_ok = True
     for name, ok in checks:
         if ok:
             success(f"{name}")
         else:
             error(f"{name} — not installed")
-            all_ok = False
 
     print()
-    if all_ok:
+    if all(ok for _, ok in checks):
         success(f"{C.BOLD}Setup complete! All components installed.{C.RESET}")
     else:
         warn("Setup finished with missing components.")
         info("Run 'python pocket_yume.py health' to see details.")
         info("Missing components can be installed from the Tools menu.")
 
+
+def _mark_complete(cfg: dict) -> None:
+    from config import save_config
+
+    cfg["first_run_complete"] = True
+    save_config(cfg)
+
+
+def _closing_offers() -> None:
+    """One-click start, vocal isolation and the extension guide, then wait."""
     _offer_one_click()
     _offer_vocal_isolation()
     _extension_guide()
     pause()
+
+
+def setup_wizard(cfg: dict) -> dict:
+    """Scan, check, then (only if something is missing) authenticate, install and pick a model."""
+    from config import config_export, save_config
+
+    _welcome()
+    gpu = _scan_hardware(cfg)
+    pause()
+    missing, ready = _check_components(cfg, gpu)
+
+    if not missing and ready:
+        success(f"\n  {C.BOLD}Everything ready!{C.RESET}")
+        _mark_complete(cfg)
+        _closing_offers()
+        return cfg
+
+    if missing:
+        labels = ", ".join(_MISSING_LABELS.get(m, m) for m in missing)
+        print(f"\n  Needs installation: {C.BOLD}{labels}{C.RESET}")
+        pause()
+        _choose_youtube_auth(cfg)
+        save_config(cfg)
+
+        print(f"\n  Ready to install: {C.BOLD}{labels}{C.RESET}\n")
+        mode = ask_arrow(
+            "How to proceed?",
+            [
+                ("Install all", "Download everything needed automatically"),
+                ("Choose each", "Ask before installing each component"),
+                ("Skip", "Set up later from the Tools menu"),
+            ],
+            default=0,
+            allow_back=False,
+        )
+        if mode == 2:
+            _mark_complete(cfg)
+            pause()
+            return cfg
+        _install_missing(missing, ask_each=mode == 1)
+        _choose_translation_model(cfg, "gguf_model" in missing)
+        save_config(cfg)
+
+    _mark_complete(cfg)
+    try:
+        config_export(cfg, BASE_DIR / "yume_config_post_setup.json")
+    except Exception as e:
+        _log.debug("[setup_wizard] config-backup failed: %s", e)
+    _print_summary(cfg)
+    _closing_offers()
     return cfg
 
 

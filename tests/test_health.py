@@ -1,0 +1,151 @@
+"""The health check, with every probe faked: which rows it shows and what fixes it suggests."""
+
+from __future__ import annotations
+
+import sys
+import types
+from contextlib import ExitStack
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import yume.health as health  # noqa: E402
+
+GPU = {"has_nvidia": True, "has_amd": False, "vram_mb": 12288, "name": "RTX 3060", "vendor": "nvidia"}
+
+
+class Check:
+    """Fakes for one health check run; `rows` and `advice` hold what it printed."""
+
+    def __init__(self, **over):
+        self.cfg = {"translation_backend": "llamacpp", "whisper_port": 5001, "translation_port": 5000}
+        self.cfg.update(over.pop("cfg", {}))
+        self.tools = over.pop("tools", {"yt-dlp", "ffmpeg", "ffprobe", "deno"})
+        self.whisper = over.pop("whisper", {"status": "ready"})  # /health JSON, {} when down
+        self.translation_up = over.pop("translation_up", True)
+        self.free_ports = over.pop("free_ports", set())
+        self.port_owner = over.pop("port_owner", (1234, "other.exe"))
+        self.e2e = over.pop("e2e", {"success": True, "translation": "Nice weather today"})
+        self.native_llama = over.pop("native_llama", True)
+        assert not over, over
+        self.rows: list[tuple] = []
+        self.advice: list[str] = []
+
+    def _table(self, headers, rows, **kw):
+        for name, result, detail in rows:
+            self.rows.append((name, "PASS" in result, detail))
+
+    def row(self, name):
+        return next(r for r in self.rows if r[0] == name)
+
+    def go(self):
+        import yume.llama_server
+        import yume.network
+        import yume.utils
+        import yume.vocals
+
+        def run(cmd, **kw):
+            return types.SimpleNamespace(returncode=0, stdout="pip 25.3 from x", stderr="")
+
+        ls = MagicMock()
+        ls.server_path.return_value = "llama-server.exe" if self.native_llama else None
+        ls.installed_build.return_value = {"tag": "b9000", "variant": "cuda"}
+        fakes = {
+            "detect_gpu": MagicMock(return_value=GPU),
+            "detect_ram_gb": MagicMock(return_value=32.0),
+            "disk_free_gb": MagicMock(return_value=100.0),
+            "find_tool": lambda t: f"/tools/{t}" if t in self.tools else None,
+            "check_server": lambda host, port, path: {"up": bool(self.whisper), "data": dict(self.whisper)},
+            "check_translation_server": lambda h, p, bi: {"up": self.translation_up, "data": {}},
+            "is_port_free": lambda port: port in self.free_ports,
+            "get_port_process": MagicMock(return_value=self.port_owner),
+            "find_gguf_models": MagicMock(return_value=[Path("qwen.gguf")]),
+            "header": MagicMock(),
+            "pause": MagicMock(),
+            "panel": MagicMock(),
+            "table": self._table,
+            "info": lambda msg="", *a: self.advice.append(str(msg)),
+            "warn": lambda msg="", *a: self.advice.append(str(msg)),
+            "success": MagicMock(),
+            "_BI": {"llamacpp": {"hp": "/health"}, "ollama": {"hp": "/api/tags"}, "custom": {"hp": "/health"}},
+        }
+        with ExitStack() as stack:
+            for name, fake in fakes.items():
+                stack.enter_context(patch.object(health, name, fake))
+            stack.enter_context(patch.object(yume.utils, "_run", run))
+            stack.enter_context(patch.object(yume.utils, "missing_requirements", lambda: []))
+            stack.enter_context(patch.object(yume.network, "server_post", lambda *a, **k: self.e2e))
+            stack.enter_context(patch.object(yume.vocals, "health_row", lambda cfg: ("Vocal isolation", True, "off")))
+            stack.enter_context(patch("yume.llama_server", ls, create=True))
+            stack.enter_context(patch("config.load_config", lambda: dict(self.cfg)))
+            health.health_check(self.cfg)
+        return self
+
+
+def test_a_running_yume_passes_with_the_end_to_end_translation():
+    c = Check().go()
+    assert c.row("Whisper port 5001")[1:] == (True, "in use by the running server")
+    assert c.row("Translation port 5000")[1:] == (True, "in use by the running server")
+    assert c.row("Whisper server responding")[1:] == (True, "status: ready")
+    name, ok, detail = c.row("Translation end-to-end")
+    assert ok and detail.endswith("Nice weather today")
+    assert c.row("Translation engine")[1:] == (True, "llama-server b9000 (cuda)")
+    assert c.row("GGUF model present")[1:] == (True, "qwen.gguf")
+
+
+def test_rows_come_in_display_order():
+    names = [r[0] for r in Check().go().rows]
+    order = ["GPU detection", "yt-dlp installed", "pip available", "Server packages", "Translation engine",
+             "Japanese by word", "Vocal isolation", "Config loadable", "Translation port 5000",
+             "Whisper port 5001", "Whisper server script", "GGUF model present"]  # fmt: skip
+    assert [n for n in names if n in order] == order
+
+
+def test_a_stopped_yume_is_fine_when_its_ports_are_free():
+    c = Check(whisper={}, translation_up=False, free_ports={5000, 5001}).go()
+    assert c.row("Whisper port 5001")[1:] == (True, "free — starts on Launch")
+    assert c.row("Translation port 5000")[1:] == (True, "free — starts on Launch")
+    assert not any(r[0] == "Whisper server responding" for r in c.rows)
+
+
+def test_a_port_held_by_another_program_fails_with_a_fix():
+    c = Check(whisper={}, translation_up=False, free_ports={5000}).go()
+    assert c.row("Whisper port 5001")[1:] == (False, "held by other.exe (PID 1234), not by the server")
+    assert any("Free port 5001" in line for line in c.advice)
+
+
+def test_an_external_llm_that_is_down_fails():
+    c = Check(cfg={"translation_backend": "ollama"}, translation_up=False, free_ports={5000}).go()
+    assert c.row("Translation port 5000")[1:] == (False, "nothing listening")
+    assert not any(r[0] == "GGUF model present" for r in c.rows)
+
+
+def test_a_missing_tool_fails_with_a_download_link():
+    c = Check(tools={"ffmpeg", "ffprobe", "deno"}).go()
+    assert c.row("yt-dlp installed")[1:] == (False, "not found")
+    assert any("yt-dlp/releases" in line for line in c.advice)
+
+
+def test_deno_is_only_checked_without_cookie_auth():
+    assert any(r[0] == "deno installed" for r in Check().go().rows)
+    assert not any(r[0] == "deno installed" for r in Check(cfg={"youtube_auth_method": "cookies"}).go().rows)
+
+
+def test_a_failed_translation_points_at_the_llm_settings():
+    c = Check(e2e={"success": False, "error": "model not found"}).go()
+    assert c.row("Translation end-to-end")[1:] == (False, "model not found")
+    assert any("Translation settings" in line for line in c.advice)
+
+
+def test_a_whisper_error_status_fails_with_restart_advice():
+    c = Check(whisper={"status": "error", "error": "CUDA out of memory"}).go()
+    assert c.row("Whisper server responding")[1:] == (False, "status: error — CUDA out of memory")
+    assert not any(r[0] == "Translation end-to-end" for r in c.rows)
+    assert any("pocket_yume.py launch" in line for line in c.advice)
+
+
+def test_issue_summary_lists_the_failures():
+    c = Check(tools=set()).go()
+    summary = next(line for line in c.advice if "issue(s) found" in line)
+    assert "yt-dlp installed" in summary and "ffmpeg installed" in summary

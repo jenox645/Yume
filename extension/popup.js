@@ -407,37 +407,38 @@ _statusInterval = setInterval(checkServers, 12000);
 
 const $ = (id) => document.getElementById(id);
 
+// Every setting in DEFAULTS has a form control with the same id, except the
+// server address (savePorts). The kind of control follows the default's type.
+const FORM_SETTINGS = Object.keys(DEFAULTS).filter(k => !k.startsWith('whisper'));
+
+function readField(key) {
+  const el = $(key);
+  const d = DEFAULTS[key];
+  if (typeof d === 'boolean') return el.checked;
+  if (typeof d !== 'number') return el.value || d;
+  const n = parseInt(el.value, 10);
+  if (!Number.isFinite(n)) return d;
+  // Clamp to the control's own range. Not `|| default`: 0 is valid
+  // (no blur, square corners) and was saved as the default.
+  const lo = el.min === '' ? -Infinity : Number(el.min);
+  const hi = el.max === '' ? Infinity : Number(el.max);
+  return Math.min(hi, Math.max(lo, n));
+}
+
+function writeField(key, value) {
+  const el = $(key);
+  if (typeof DEFAULTS[key] !== 'boolean') el.value = value;
+  else el.checked = DEFAULTS[key] ? value !== false : value === true;
+}
+
 async function loadSettings() {
   const { settings: raw = {} } = await chrome.storage.local.get(['settings']);
   const s = { ...DEFAULTS, ...raw };
-  $('showOriginal').checked = s.showOriginal !== false;
-  $('showEnglish').checked = s.showEnglish !== false;
-  $('showRomaji').checked = s.showRomaji === true;
-  $('showChunkCounter').checked = s.showChunkCounter !== false;
-  $('showConfidence').checked = s.showConfidence === true;
-  $('sourceLanguage').value = s.sourceLanguage;
-  $('targetLanguage').value = s.targetLanguage;
-  $('windowTitle').value = s.windowTitle;
-  $('windowBgColor').value = s.windowBgColor;
-  $('windowOpacity').value = s.windowOpacity;
-  $('opacityVal').textContent = s.windowOpacity + '%';
-  $('windowShadow').checked = s.windowShadow !== false;
-  $('originalFont').value = s.originalFont;
-  $('romajiFont').value = s.romajiFont;
-  $('translationFont').value = s.translationFont;
-  $('originalFontSize').value = s.originalFontSize;
-  $('originalColor').value = s.originalColor;
-  $('romajiFontSize').value = s.romajiFontSize;
-  $('romajiColor').value = s.romajiColor;
-  $('translationFontSize').value = s.translationFontSize;
-  $('translationColor').value = s.translationColor;
+  for (const key of FORM_SETTINGS) writeField(key, s[key]);
   $('whisperPort').value = s.whisperPort;
-  $('timingOffset').value = s.timingOffset;
+  $('opacityVal').textContent = s.windowOpacity + '%';
   $('timingOffsetVal').value = (s.timingOffset / 10).toFixed(1);
-  $('glassEnabled').checked = s.glassEnabled === true;
-  $('glassBlur').value = s.glassBlur;
   $('glassBlurVal').textContent = s.glassBlur + 'px';
-  $('glassRadius').value = s.glassRadius;
   $('glassRadiusVal').textContent = s.glassRadius + 'px';
   $('glassControls').style.display = s.glassEnabled ? 'block' : 'none';
   updateRomajiLabel();
@@ -446,36 +447,8 @@ async function loadSettings() {
 
 async function saveSettings(notify = true) {
   const { settings: existing = {} } = await chrome.storage.local.get(['settings']);
-  const int = (id, d) => parseInt($(id).value, 10) || d;
-  const radius = parseInt($('glassRadius').value, 10);
-  const settings = {
-    ...existing,
-    showOriginal: $('showOriginal').checked,
-    showEnglish: $('showEnglish').checked,
-    showRomaji: $('showRomaji').checked,
-    showChunkCounter: $('showChunkCounter').checked,
-    showConfidence: $('showConfidence').checked,
-    sourceLanguage: $('sourceLanguage').value,
-    targetLanguage: $('targetLanguage').value,
-    windowTitle: $('windowTitle').value || 'Yume',
-    windowBgColor: $('windowBgColor').value,
-    windowOpacity: int('windowOpacity', 88),
-    windowShadow: $('windowShadow').checked,
-    originalFont: $('originalFont').value,
-    romajiFont: $('romajiFont').value,
-    translationFont: $('translationFont').value,
-    originalFontSize: int('originalFontSize', 19),
-    originalColor: $('originalColor').value,
-    romajiFontSize: int('romajiFontSize', 13),
-    romajiColor: $('romajiColor').value,
-    translationFontSize: int('translationFontSize', 14),
-    translationColor: $('translationColor').value,
-    timingOffset: parseInt($('timingOffset').value, 10) || 0,
-    glassEnabled: $('glassEnabled').checked,
-    glassBlur: int('glassBlur', 18),
-    // 0 is a valid radius (square corners) — `|| default` would swallow it
-    glassRadius: Number.isFinite(radius) ? radius : 20,
-  };
+  const settings = { ...existing };
+  for (const key of FORM_SETTINGS) settings[key] = readField(key);
   await chrome.storage.local.set({ settings });
   if (notify) showToast('Settings saved', 'success');
 }
