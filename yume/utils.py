@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import urllib.error
@@ -63,25 +64,30 @@ def _try_import(module_name: str) -> bool:
         return False
 
 
+def server_requirements() -> list[str]:
+    """The pinned specs in server/requirements.txt, comments dropped."""
+    try:
+        lines = (BASE_DIR / "server" / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    return [spec for spec in (line.split("#", 1)[0].strip() for line in lines) if spec]
+
+
+def requirement_name(spec: str) -> str:
+    """'numpy==2.4.6; python_version == "3.11"' -> 'numpy'."""
+    return re.split(r"[=<>!~;\[ ]", spec, maxsplit=1)[0].strip()
+
+
 def missing_requirements() -> list[str]:
     """Pinned server packages (server/requirements.txt) that are not installed,
     as "name==version" strings. A wrong installed version is not reported: the
     pins are what setup installs, not a hard runtime requirement."""
     from importlib import metadata
 
-    req = BASE_DIR / "server" / "requirements.txt"
     missing = []
-    try:
-        lines = req.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return missing
-    for line in lines:
-        spec = line.split("#", 1)[0].strip()
-        if not spec:
-            continue
-        name = spec.split("==")[0].split(">=")[0].split("[")[0].strip()
+    for spec in server_requirements():
         try:
-            metadata.version(name)
+            metadata.version(requirement_name(spec))
         except metadata.PackageNotFoundError:
             missing.append(spec)
     return missing

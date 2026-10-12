@@ -247,3 +247,29 @@ def test_other_backends_need_no_engine_or_gguf():
     cfg = w.run({"translation_backend": "ollama"})
     assert w.arrow_prompts == []
     assert cfg["first_run_complete"] is True
+
+
+def test_uninstall_lists_every_package_yume_installs_and_not_shared_ones():
+    pkgs = setup._yume_pip_packages()
+    for name in ("faster-whisper", "fugashi", "unidic-lite", "pypinyin", "llama-cpp-python", "uvicorn",
+                 "bgutil-ytdlp-pot-provider", "demucs"):  # fmt: skip
+        assert name in pkgs
+    assert not {"numpy", "av", "torch"} & set(pkgs)
+    assert len(pkgs) == len(set(pkgs))
+
+
+@pytest.mark.parametrize(
+    ("choice", "data", "pip"), [(0, True, True), (1, True, False), (2, False, True), (3, False, False)]
+)
+def test_uninstall_choices(choice, data, pip):
+    with (
+        patch.object(setup, "ask_arrow", return_value=choice),
+        patch.object(setup, "ask_yn", return_value=True),
+        patch.object(setup, "_uninstall_targets", return_value=[]),
+        patch.object(setup, "_remove_data") as remove_data,
+        patch.object(setup, "_remove_packages") as remove_packages,
+        patch.object(setup, "header"),
+        patch.object(setup, "pause"),
+    ):
+        setup.uninstall_yume()
+    assert remove_data.called is data and remove_packages.called is pip
