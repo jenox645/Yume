@@ -110,9 +110,6 @@ class Store:
             (video_key, url, title or "", duration, json.dumps(regions) if regions else None, time.time()),
         )
 
-    def touch_video(self, video_key):
-        self._w("UPDATE videos SET last_used=? WHERE video_key=?", (time.time(), video_key))
-
     def delete_video(self, video_key):
         with self._lock:
             self._db.execute("DELETE FROM videos WHERE video_key=?", (video_key,))

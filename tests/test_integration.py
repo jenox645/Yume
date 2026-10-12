@@ -268,7 +268,7 @@ class TestVersionConsistencyExtended:
     def test_server_version(self):
         """The server's single SERVER_VERSION (used by /health and the banner)."""
         v = self._get_version()
-        srv = (ROOT / "server" / "faster_whisper_server.py").read_text(encoding="utf-8")
+        srv = (ROOT / "server" / "_state.py").read_text(encoding="utf-8")
         assert f'SERVER_VERSION = "{v}"' in srv, f"SERVER_VERSION mismatch (expected {v})"
 
     def test_manifest_version(self):
@@ -639,15 +639,14 @@ class TestImportCompleteness:
         return refs
 
     def test_server_imports_complete(self):
-        """Server must import every stdlib module it uses."""
-        src = (ROOT / "server" / "faster_whisper_server.py").read_text(encoding="utf-8")
-        imports = self._get_imports(src)
-        refs = self._get_module_references(src)
-        missing = refs - imports
-        assert not missing, (
-            f"Server uses these modules but doesn't import them: {missing}\n"
-            f"This causes NameError at runtime (v5.7.0 bug: logging was missing)"
-        )
+        """Every server module imports every stdlib module it uses."""
+        for path in sorted((ROOT / "server").glob("*.py")):
+            src = path.read_text(encoding="utf-8")
+            missing = self._get_module_references(src) - self._get_imports(src)
+            assert not missing, (
+                f"{path.name} uses these modules but doesn't import them: {missing}\n"
+                f"This causes NameError at runtime (v5.7.0 bug: logging was missing)"
+            )
 
     def test_pocket_yume_imports_complete(self):
         """CLI must import every stdlib module it uses."""
@@ -699,7 +698,7 @@ class TestCrossReferences:
     def test_extension_calls_only_allowed_existing_server_paths(self):
         bg = (ROOT / "extension/js/background.js").read_text(encoding="utf-8")
         allowed = re.compile(re.search(r"const _ALLOWED_PATH = /(.*)/;", bg).group(1).replace("\\/", "/"))
-        server = (ROOT / "server/faster_whisper_server.py").read_text(encoding="utf-8")
+        server = (ROOT / "server/_api.py").read_text(encoding="utf-8")
         routes = [re.sub(r"<[^>]+>", "[a-f0-9]{32}", r) for r in re.findall(r'@app\.route\("([^"]+)"', server)]
         js = "".join((ROOT / p).read_text(encoding="utf-8") for p in ("extension/popup.js", "extension/js/session.js"))
         used = {re.sub(r"\$\{[^}]+\}", "0" * 32, p) for p in re.findall(r"path: ['`]([^'`]+)['`]", js)}

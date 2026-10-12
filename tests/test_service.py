@@ -286,13 +286,13 @@ class TestSupervisor:
 
         def start_child(env):
             p = _sleeper(0 if die else 30)
-            sup.procs.append(("Whisper", p))
+            sup.procs.procs.append(("Whisper", p))
             return None
 
         monkeypatch.setattr(sup, "_start_translation", lambda env: None)
         monkeypatch.setattr(sup, "_start_whisper", start_child)
         monkeypatch.setattr(sup, "_active", lambda: active)
-        monkeypatch.setattr("yume.launch.build_server_env", lambda: {})
+        monkeypatch.setattr("yume.servers.build_server_env", lambda: {})
         return sup
 
     def test_idle_auto_stop(self, state_dir, monkeypatch):
@@ -328,7 +328,7 @@ class TestSupervisor:
     def test_nothing_to_supervise(self, state_dir, monkeypatch):
         sup = self._sup(monkeypatch, self.CFG)
         monkeypatch.setattr(sup, "_start_whisper", lambda env: None)  # already running elsewhere
-        assert sup.run() == 0 and sup.procs == []
+        assert sup.run() == 0 and not sup.procs
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows job objects")
@@ -411,7 +411,7 @@ class TestSingleSupervisor:
     def test_second_serve_exits_while_one_runs(self, state_dir, monkeypatch):
         holder = _sleeper(30)
         service.LOCK_FILE.write_text(str(holder.pid))
-        monkeypatch.setattr("yume.launch._open_rotating_log", lambda name: io.StringIO())
+        monkeypatch.setattr("yume.servers.open_rotating_log", lambda name: io.StringIO())
         ran = []
         monkeypatch.setattr(service._Supervisor, "run", lambda self: ran.append(1) or 0)
         import logging

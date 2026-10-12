@@ -641,7 +641,7 @@ def install_llamacpp_python() -> bool:
             )
 
     if installed:
-        from yume.launch import LLAMA_SERVER_DEPS
+        from yume.servers import LLAMA_SERVER_DEPS
 
         info("Installing server dependencies (uvicorn, fastapi)...")
         try:

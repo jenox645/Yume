@@ -28,9 +28,7 @@ python server/faster_whisper_server.py --model tiny --device cpu --compute-type 
 |------|------|
 | `pocket_yume.py` | CLI entry point: arg parsing, `_init_modules()` wiring, main menu |
 | `config.py` | `DEFAULT_CONFIG`, load/save/validate/export/import, port constants |
-| `yume/launch.py` | Start llama.cpp / Ollama / Whisper, runtime menu, shutdown; shared command builders (`whisper_command`, `llamacpp_command`, `build_server_env`) |
 | `yume/llama_server.py` | llama.cpp's prebuilt `llama-server`: picks the build for the GPU/driver from GitHub releases, verified download, command line (preferred over llama-cpp-python) |
-| `yume/service.py` | Headless `serve` supervisor (auto-stop), `stop`, detached spawning |
 | `yume/native_host.py` | Native messaging host + browser registration (`autostart on/off`) |
 | `yume/setup.py` | Setup wizard, extension install guide, uninstall |
 | `yume/menus/` | `server.py` CLI commands (stats, blacklist, model) + blacklist / Whisper model menus; `hf_browser.py` GGUF browser; `tools.py` Tools & Fonts (installers, backend, engine, YouTube auth, one-click start); `settings.py` Settings menu. `__init__` re-exports the entry points |
@@ -39,7 +37,14 @@ python server/faster_whisper_server.py --model tiny --device cpu --compute-type 
 | `yume/hardware.py` | GPU/CPU/RAM detection, **`WHISPER_MODELS` (the one model table)**, recommendation |
 | `yume/network.py` | Downloads (`.part` + rename), server health checks, authenticated server calls |
 | `yume/ports.py` | Port checks; kills only Yume's own processes without asking |
-| `server/faster_whisper_server.py` | Flask routes, auth/CORS, config, model loading |
+| `yume/servers.py` | Server processes for both the launcher and `serve`: commands, logs, start/wait/stop, crash diagnosis |
+| `yume/launch.py` | Interactive launcher (prompts, spinner, crash advice) + runtime menu |
+| `yume/service.py` | Headless `serve` supervisor (one-click start), detached spawn, idle auto-stop |
+| `server/faster_whisper_server.py` | Entry point: `main()` runs the startup sequence |
+| `server/_api.py` | Flask app: Host/token/CORS checks and every route |
+| `server/_settings.py` | Config file load + live reload, switched model written back, blacklist |
+| `server/_model.py` | Whisper model load (CUDA warm-up, CPU fallback), hot swap, load-error advice |
+| `server/_startup.py` | Args, logging, banner, yt-dlp self-update, Deno auth, token file, web server |
 | `server/_jobs.py` | Job manager, transcription + LLM workers, SRT/VTT export |
 | `server/_regions.py` | Quiet-point region planning (pure numpy) |
 | `server/_transcribe.py` | Whisper call with the music-tuned parameters |
@@ -87,7 +92,7 @@ A segment in a poll: `{id, start, end, text, translation, romaji, confidence, hi
 - **Server URL:** the extension resolves it only in `background.js`
   (`_whisperUrl()`); content scripts call `{type: 'API'}` and never hardcode it.
 - **Dependencies:** exact pins (`==`) in `server/requirements.txt` and
-  `LLAMA_SERVER_DEPS` (`yume/launch.py`). Exceptions, on purpose: `yt-dlp`
+  `LLAMA_SERVER_DEPS` (`yume/servers.py`). Exceptions, on purpose: `yt-dlp`
   (YouTube breaks old versions within weeks) and `llama-cpp-python` (prebuilt
   CUDA wheels exist only for some versions).
 - **Config keys:** every `DEFAULT_CONFIG` key must be *read* by app code
@@ -106,7 +111,7 @@ A segment in a poll: `{id, start, end, text, translation, romaji, confidence, hi
 
 The version lives in three places, checked by the tests and CI:
 `VERSION` in `pocket_yume.py`, `SERVER_VERSION` in
-`server/faster_whisper_server.py`, `"version"` in `extension/manifest.json`
+`server/_state.py`, `"version"` in `extension/manifest.json`
 (the popup reads it at runtime) — plus the README badge.
 
 ## Testing

@@ -20,9 +20,10 @@ import os
 import subprocess
 import sys
 import time
-from pathlib import Path
 
+from yume import servers
 from yume.hardware import IS_WIN
+from yume.servers import console_python, windowless_python  # noqa: F401 (spawn_detached, native host)
 from yume.utils import BASE_DIR
 
 _log = logging.getLogger("pocket_yume.service")
@@ -82,26 +83,6 @@ def pid_alive(pid: int | None) -> bool:
     except PermissionError:
         return True
     return True
-
-
-def console_python() -> str:
-    """python.exe next to the running interpreter (pythonw has no stdout)."""
-    exe = Path(sys.executable)
-    if exe.stem.lower() == "pythonw":
-        cand = exe.with_name("python" + exe.suffix)
-        if cand.exists():
-            return str(cand)
-    return str(exe)
-
-
-def windowless_python() -> str:
-    """pythonw.exe on Windows (no console flashes up), the interpreter elsewhere."""
-    exe = Path(sys.executable)
-    if IS_WIN and exe.stem.lower() == "python":
-        cand = exe.with_name("pythonw" + exe.suffix)
-        if cand.exists():
-            return str(cand)
-    return str(exe)
 
 
 def spawn_detached(args: list[str]) -> int:
@@ -275,107 +256,31 @@ class _Supervisor:
     def __init__(self, cfg: dict, backend_info: dict):
         self.cfg = cfg
         self.backend_info = backend_info
-        self.procs: list[tuple[str, subprocess.Popen]] = []
-        self.logs: list = []
+        self.procs = servers.Processes(hidden=True)
         self.started = time.time()
 
     # -- children --------------------------------------------------------------
 
-    def _spawn(self, name: str, cmd: list[str], log_name: str, env: dict) -> subprocess.Popen:
-        from yume.launch import _open_rotating_log
-
-        if cmd and cmd[0] == sys.executable:
-            cmd = [console_python(), *cmd[1:]]
-        lh = _open_rotating_log(log_name)
-        self.logs.append(lh)
-        flags = _CREATE_NO_WINDOW if IS_WIN else 0
-        p = subprocess.Popen(  # nosec B603 — argv built by yume.launch builders
-            cmd, stdout=lh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env, creationflags=flags
-        )
-        self.procs.append((name, p))
-        _log.info("started %s (pid %s): %s", name, p.pid, " ".join(cmd))
-        return p
-
-    def _wait(self, p: subprocess.Popen | None, ready, timeout: float) -> str | None:
-        """None once ready(); otherwise an error message."""
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if self._stop_requested():
-                return "stop requested"
-            if p is not None and p.poll() is not None:
-                return f"exited with code {p.returncode}"
-            err = ready()
-            if err is None:
-                return None
-            if err:  # a definitive failure reported by the server
-                return err
-            time.sleep(1)
-        return "did not become ready in time"
-
     def _start_translation(self, env: dict) -> str | None:
-        from yume.launch import llamacpp_command, resolve_gguf
-        from yume.network import HEALTH_PATH_OLLAMA, check_server, check_translation_server
-        from yume.ports import kill_port_process
-
         cfg = self.cfg
         bk = cfg.get("translation_backend", "llamacpp")
-        host, port = cfg["translation_host"], cfg["translation_port"]
         bi = self.backend_info.get(bk, self.backend_info.get("custom", {}))
-        if check_translation_server(host, port, bi)["up"]:
-            return None
         if bk == "llamacpp":
-            gguf = resolve_gguf(cfg)
-            if gguf is None:
-                return "no .gguf translation model in models/translation/"
-            if not kill_port_process(port, interactive=False):
-                return f"translation port {port} is used by another program"
-            p = self._spawn("Translation", llamacpp_command(cfg, gguf, port), "translation_server.log",
-                            {**env, "PYTHONUTF8": "1"})  # fmt: skip
-
-            def ready():
-                return None if check_translation_server(host, port, bi)["up"] else ""
-
-            err = self._wait(p, ready, TRANSLATION_START_TIMEOUT_S)
-            return f"translation server: {err}" if err else None
-        if bk == "ollama":
-            try:
-                p = self._spawn("Ollama", ["ollama", "serve"], "ollama.log", env)
-            except FileNotFoundError:
-                return "Ollama is not installed"
-
-            def ready():
-                return None if check_server(host, port, HEALTH_PATH_OLLAMA)["up"] else ""
-
-            err = self._wait(p, ready, 60)
-            return f"Ollama: {err}" if err else None
-        # LM Studio / text-generation-webui / custom: run by the user. Whisper
-        # works without it (lines stay untranslated until it is reachable).
-        _log.info("translation backend %s is not running at %s:%s", bk, host, port)
-        return None
+            r = servers.start_llamacpp(
+                cfg, bi, self.procs, env, stop=self._stop_requested, timeout=TRANSLATION_START_TIMEOUT_S
+            )
+        elif bk == "ollama":
+            r = servers.start_ollama(cfg, self.procs, env, stop=self._stop_requested)
+        else:
+            # LM Studio / text-generation-webui / custom: run by the user. Whisper
+            # works without it (lines stay untranslated until it is reachable).
+            _log.info("translation backend %s: not started by Yume", bk)
+            return None
+        return r.message() or None
 
     def _start_whisper(self, env: dict) -> str | None:
-        from yume.launch import whisper_command
-        from yume.network import check_server
-        from yume.ports import kill_port_process
-
-        host, port = self.cfg["whisper_host"], self.cfg["whisper_port"]
-        if check_server(host, port, "/health")["up"]:
-            return None
-        cmd = whisper_command(self.cfg)
-        if cmd is None:
-            return "server/faster_whisper_server.py is missing"
-        if not kill_port_process(port, interactive=False):
-            return f"Whisper port {port} is used by another program"
-        p = self._spawn("Whisper", cmd, "whisper_server.log", env)
-
-        def ready():
-            data = check_server(host, port, "/health")["data"]
-            if data.get("status") == "error":
-                return f"model failed to load: {data.get('error') or 'unknown error'}"
-            return None if data.get("status") == "ready" else ""
-
-        err = self._wait(p, ready, WHISPER_START_TIMEOUT_S)
-        return f"Whisper: {err}" if err else None
+        r = servers.start_whisper(self.cfg, self.procs, env, stop=self._stop_requested, timeout=WHISPER_START_TIMEOUT_S)
+        return r.message() or None
 
     # -- loop --------------------------------------------------------------------
 
@@ -399,11 +304,9 @@ class _Supervisor:
         return bool(stats and stats.get("active"))
 
     def run(self) -> int:
-        from yume.launch import build_server_env
-
         from yume.utils import missing_requirements
 
-        env = build_server_env()
+        env = servers.build_server_env()
         miss = missing_requirements()
         if miss:  # no one to ask here; the launcher and the health check offer the install
             _log.warning("missing server packages: %s", ", ".join(miss))
@@ -413,7 +316,7 @@ class _Supervisor:
             self._state("starting", "Loading the speech model…")
             err = self._start_whisper(env)
         if err:
-            if err != "stop requested":
+            if not self._stop_requested():
                 self._state("error", err)
             return 1
         if not self.procs:
@@ -425,7 +328,7 @@ class _Supervisor:
         last_active = time.time()
         while not self._stop_requested():
             time.sleep(TICK_S)
-            dead = [f"{n} (exit code {p.returncode})" for n, p in self.procs if p.poll() is not None]
+            dead = self.procs.dead()
             if dead:
                 self._state("error", f"{', '.join(dead)} stopped unexpectedly — see logs/")
                 return 1
@@ -437,33 +340,15 @@ class _Supervisor:
         return 0
 
     def shutdown(self) -> None:
-        for name, p in reversed(self.procs):
-            try:
-                p.terminate()
-                p.wait(timeout=10)
-            except Exception:
-                try:
-                    p.kill()
-                except OSError:
-                    pass
-            _log.info("stopped %s", name)
-        if any(name == "Whisper" for name, _ in self.procs):
-            from yume.ports import stop_bgutil_server
-
+        whisper_was_ours = "Whisper" in self.procs.names()
+        self.procs.stop(self.cfg)
+        if whisper_was_ours:
             TOKEN_FILE.unlink(missing_ok=True)  # that server's token is dead now
-            stop_bgutil_server()
-        for lh in self.logs:
-            try:
-                lh.close()
-            except OSError:
-                pass
 
 
 def serve(cfg: dict, backend_info: dict) -> int:
     """Run Yume headless until idle/stopped. Returns a process exit code."""
-    from yume.launch import _open_rotating_log
-
-    log_fh = _open_rotating_log(SERVICE_LOG)
+    log_fh = servers.open_rotating_log(SERVICE_LOG)
     # pythonw has no stdout/stderr; anything printed by shared helpers goes to the log
     sys.stdout = sys.stderr = log_fh
     handler = logging.StreamHandler(log_fh)

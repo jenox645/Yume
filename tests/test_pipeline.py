@@ -691,7 +691,7 @@ def test_unreadable_browser_cookies_are_skipped(monkeypatch):
 
 def test_old_ytdlp_self_updates_once_a_day(tmp_path, monkeypatch):
     sys.argv = ["server"]
-    import faster_whisper_server as fws
+    import _startup
 
     exe = tmp_path / "yt-dlp.exe"
     exe.write_bytes(b"")
@@ -703,11 +703,11 @@ def test_old_ytdlp_self_updates_once_a_day(tmp_path, monkeypatch):
         return types.SimpleNamespace(returncode=0, stdout=out, stderr="")
 
     monkeypatch.setattr(_state, "youtube_auth_method", "cookies")
-    monkeypatch.setattr(fws.shutil, "which", lambda name: str(exe))
-    monkeypatch.setattr(fws.subprocess, "run", run)
-    assert fws._maybe_update_ytdlp("2026.08.19") == "2026.08.19 (latest)"  # up to date is not a failure
-    assert fws._maybe_update_ytdlp("2026.08.19") == "2026.08.19" and calls.count("-U") == 1  # once a day
-    assert fws._maybe_update_ytdlp(time.strftime("%Y.%m.%d")) == time.strftime("%Y.%m.%d")  # recent: untouched
+    monkeypatch.setattr(_startup.shutil, "which", lambda name: str(exe))
+    monkeypatch.setattr(_startup.subprocess, "run", run)
+    assert _startup.maybe_update_ytdlp("2026.08.19") == "2026.08.19 (latest)"  # up to date is not a failure
+    assert _startup.maybe_update_ytdlp("2026.08.19") == "2026.08.19" and calls.count("-U") == 1  # once a day
+    assert _startup.maybe_update_ytdlp(time.strftime("%Y.%m.%d")) == time.strftime("%Y.%m.%d")  # recent: untouched
 
 
 def test_japanese_small_tsu_doubles_the_next_consonant():
@@ -880,12 +880,12 @@ def test_japanese_particles_are_written_as_pronounced():
 
 def test_non_ascii_token_header_is_rejected_not_a_crash():
     sys.argv = ["server"]
-    import faster_whisper_server as fws
+    import _api
 
     _state.API_TOKEN = "abc"
-    assert fws._token_ok("abc")
-    assert not fws._token_ok("\u00e9")  # compare_digest on str raised TypeError -> HTTP 500
-    assert not fws._token_ok("")
+    assert _api.token_ok("abc")
+    assert not _api.token_ok("\u00e9")  # compare_digest on str raised TypeError -> HTTP 500
+    assert not _api.token_ok("")
 
 
 def test_cookie_hint_only_where_cookies_could_help(monkeypatch):

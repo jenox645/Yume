@@ -108,7 +108,7 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 - Use `==` (exact versions) in `requirements.txt` and `LLAMA_SERVER_DEPS`; intentional exceptions: `yt-dlp`, `llama-cpp-python`
 
 **Version bumping:**
-- Three sources: `VERSION` in `pocket_yume.py`, `SERVER_VERSION` in `server/faster_whisper_server.py`, `"version"` in `extension/manifest.json` (the popup reads it) — plus the README badge. Tests check they match.
+- Three sources: `VERSION` in `pocket_yume.py`, `SERVER_VERSION` in `server/_state.py`, `"version"` in `extension/manifest.json` (the popup reads it) — plus the README badge. Tests check they match.
 
 **Temp file cleanup:**
 - Downloads live in `yume_*` temp dirs; delete with `_audio.remove_temp()` in `finally`; server startup removes leftovers older than an hour
@@ -121,9 +121,10 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 |------|---------|
 | `pocket_yume.py` | Thin entry point: arg parsing, module wiring via `_init_modules()`, top-level menu dispatch |
 | `config.py` | Config load/save/validate, `DEFAULT_CONFIG` |
-| `yume/launch.py` | Server lifecycle: start llama.cpp / Ollama / Whisper, runtime menu, `LLAMA_SERVER_DEPS`; shared builders `whisper_command` / `llamacpp_command` / `build_server_env` (also used by `serve`) |
+| `yume/servers.py` | Server processes, shared by the launcher and `serve`: commands/env (`whisper_command`, `llamacpp_command`, `build_server_env`, `LLAMA_SERVER_DEPS`), rotating logs, `Processes` (spawn/stop), `start_whisper`/`start_llamacpp`/`start_ollama` → `StartResult`, crash `diagnose()` |
+| `yume/launch.py` | Interactive launcher: port/install prompts, spinner and crash advice around `yume.servers`, then the runtime menu |
 | `yume/llama_server.py` | Installs/locates llama.cpp's prebuilt `llama-server` (tools/llama.cpp/); `launch.llamacpp_command` prefers it over llama-cpp-python |
-| `yume/service.py` | Headless `serve` supervisor: hidden children, `config/service.json` state, idle auto-stop (`auto_stop_minutes`), detached spawn that survives the browser's job object |
+| `yume/service.py` | Headless `serve` supervisor on `yume.servers`: `config/service.json` state (errors carry the crash diagnosis), idle auto-stop (`auto_stop_minutes`), detached spawn that survives the browser's job object |
 | `yume/vocals.py` | Vocal isolation from the CLI: status, install (PyTorch CUDA build matched to the driver + demucs), on/off |
 | `yume/native_host.py` | Native messaging host `com.pocketyume.yume` (status/start/stop) + registration; allowed extension ID must match the manifest `key` |
 | `yume/setup.py` | Setup wizard, extension guide, uninstall |
@@ -137,7 +138,11 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 | `yume/installers.py` | Tool download/install: yt-dlp, ffmpeg, Deno + PO-token plugin, llama.cpp, Ollama |
 | `yume/ui.py` | ANSI colour helpers, `header()`, `panel()`, `pause()`, `error()` |
 | `yume/utils.py` | `_run()`, `find_tool()`, update checker, shared path constants |
-| `server/faster_whisper_server.py` | Flask routes (`/jobs`, `/library`, `/blacklist`, `/translation/*`, `/model/switch`, `/stats`), auth, startup |
+| `server/faster_whisper_server.py` | Entry point: `main()` runs the startup sequence |
+| `server/_api.py` | Flask app: security checks (Host, token, CORS) and the routes (`/jobs`, `/library`, `/blacklist`, `/translation/*`, `/model/switch`, `/stats`) |
+| `server/_settings.py` | Config file load + live reload, the switched model written back, the user blacklist |
+| `server/_model.py` | Whisper model: load at startup (CUDA warm-up, CPU fallback), hot swap, load-error advice |
+| `server/_startup.py` | Startup chores: args, logging, banner, yt-dlp self-update, Deno auth, token file, web server thread, pipeline |
 | `server/_jobs.py` | Job manager, transcription + LLM workers, export |
 | `server/_regions.py` | Quiet-point region planning |
 | `server/_separate.py` | Optional vocal isolation (Demucs htdemucs, CUDA only); falls back to the mix |

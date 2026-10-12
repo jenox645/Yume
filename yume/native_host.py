@@ -195,7 +195,7 @@ def _launcher_path() -> Path:
 
 def _write_launcher() -> Path:
     """A launcher the browser can execute (manifests need a single path)."""
-    from yume.service import console_python
+    from yume.servers import console_python
 
     HOST_DIR.mkdir(parents=True, exist_ok=True)
     path = _launcher_path()

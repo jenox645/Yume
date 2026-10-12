@@ -81,7 +81,7 @@ Check [Issues](https://github.com/jenox645/Yume/issues) for open tasks. Look for
 2. Keep PRs focused — one feature or fix per PR
 3. Run the full test suite: `pytest tests/ -v` and `npm test`
 4. Run the linters: `ruff check .` and `npx eslint extension/`
-5. When releasing, bump the version in `pocket_yume.py`, `server/faster_whisper_server.py` (`SERVER_VERSION`), `extension/manifest.json` and the README badge
+5. When releasing, bump the version in `pocket_yume.py`, `server/_state.py` (`SERVER_VERSION`), `extension/manifest.json` and the README badge
 6. Describe what you changed and why in the PR description
 
 ## Architecture Quick Reference
@@ -90,7 +90,7 @@ Check [Issues](https://github.com/jenox645/Yume/issues) for open tasks. Look for
 |-----------|------|------|
 | CLI | `pocket_yume.py` + `yume/` | Installer, launcher, menus (Pocket Yume) |
 | Config | `config.py` | Load/save/validate settings |
-| Server | `server/faster_whisper_server.py` | Routes, auth, startup |
+| Server | `server/faster_whisper_server.py` + `_api.py` | Startup order; routes, auth |
 | Pipeline | `server/_jobs.py` | Download → regions → Whisper → translate/romanize, cache |
 | Translation | `server/_translate.py` | LLM client with structured output |
 | Session | `extension/js/session.js` | Create job, poll, show the current cue |
