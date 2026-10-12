@@ -42,12 +42,19 @@ NEAR_S = 20  # lines starting this soon after the playhead are translated first.
 NEAR_BATCH = 3  # ...in batches this small
 
 
-def _duration(value):
+MAX_SECONDS = 24 * 3600
+
+
+def seconds(value):
+    """A duration or playhead sent by the client: 0.0 unless a number in [0, MAX_SECONDS].
+
+    Live streams report Infinity, and a bogus duration would plan endless
+    regions. NaN fails both comparisons."""
     try:
-        duration = float(value or 0)
+        s = float(value or 0)
     except (TypeError, ValueError):
         return 0.0
-    return duration if 0 <= duration < 7 * 24 * 3600 else 0.0  # NaN/inf fail both tests
+    return s if 0 <= s <= MAX_SECONDS else 0.0
 
 
 def job_model(duration):
@@ -86,7 +93,7 @@ class Job:
         self.url = params.get("url") or ""
         self.stream_url = params.get("stream_url") or ""
         self.title = (params.get("title") or "")[:200]
-        self.duration = _duration(params.get("duration"))
+        self.duration = seconds(params.get("duration"))
         self.model = job_model(self.duration)
         self.isolate = self.model.endswith(_separate.MODEL_SUFFIX)  # separate the vocals first
 
@@ -102,7 +109,7 @@ class Job:
         self.segments = {}  # id -> segment dict
         self.next_sid = 1
         self.rev = 0
-        self.playhead = float(params.get("playhead") or 0.0)  # YouTube resumes where you left off
+        self.playhead = seconds(params.get("playhead"))  # YouTube resumes where you left off
         self.last_poll = time.time()
         self.events = collections.deque(maxlen=60)
         self.context = []  # recent (source, translation) pairs for the LLM
@@ -290,7 +297,7 @@ class JobManager:
         video_key = str(params.get("video_id") or params.get("url") or "")[:200]
         if not video_key:
             raise ValueError("video_id or url is required")
-        model = job_model(_duration(params.get("duration")))
+        model = job_model(seconds(params.get("duration")))
         key = (video_key, params.get("language") or "auto", params.get("target") or "", model)
         with self.lock:
             existing = self.jobs.get(self.by_key.get(key, ""))
@@ -321,7 +328,7 @@ class JobManager:
         with job.lock:
             job.last_poll = time.time()
             if playhead is not None:
-                job.playhead = max(0.0, float(playhead))
+                job.playhead = seconds(playhead)
         self._notify()
 
     def set_romanize(self, job, on):

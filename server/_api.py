@@ -7,7 +7,6 @@ _store (cache), _settings (config, blacklist) and _model (Whisper).
 """
 
 import json
-import math
 import os
 import re
 import secrets
@@ -315,7 +314,34 @@ def list_translation_models():
 _LANG_RE = re.compile(r"^[a-z]{2,3}$")
 
 
-_MAX_DURATION_S = 24 * 3600
+def _job_params(data):
+    """(params for JobManager.create, None), or (None, error message) for a bad request.
+
+    Durations and the playhead are sanitized by the job itself (_jobs.seconds)."""
+    url = str(data.get("url") or "")
+    stream_url = str(data.get("stream_url") or "")
+    if not url and not stream_url:
+        return None, "Missing url"
+    for u in (url, stream_url):
+        valid, err = validate_url(u) if u else (True, "")
+        if not valid:
+            return None, f"Invalid URL: {err}"
+    language = str(data.get("language") or "").lower()
+    if language in ("", "auto"):
+        language = None
+    elif not _LANG_RE.match(language):
+        return None, f"Invalid language code: {language!r}"
+    return {
+        "video_id": data.get("video_id"),
+        "url": url,
+        "stream_url": stream_url,
+        "language": language,
+        "target": str(data.get("target") or "").strip()[:40] or None,
+        "romanize": bool(data.get("romanize")),
+        "title": str(data.get("title") or ""),
+        "duration": data.get("duration"),
+        "playhead": data.get("t"),
+    }, None
 
 
 def _job_or_404(job_id):
@@ -331,49 +357,11 @@ def create_job():
     _settings.reload_config()  # vocal_isolation may have changed
     if _state.load_error:
         return jsonify({"error": f"Whisper could not load its model: {_state.load_error}"}), 503
-    data = request.get_json(silent=True) or {}
-    url = str(data.get("url") or "")
-    stream_url = str(data.get("stream_url") or "")
-    if not url and not stream_url:
-        return jsonify({"error": "Missing url"}), 400
-    for u in (url, stream_url):
-        if u:
-            valid, err = validate_url(u)
-            if not valid:
-                return jsonify({"error": f"Invalid URL: {err}"}), 400
-    language = str(data.get("language") or "").lower()
-    if language in ("", "auto"):
-        language = None
-    elif not _LANG_RE.match(language):
-        return jsonify({"error": f"Invalid language code: {language!r}"}), 400
-    target = str(data.get("target") or "").strip()[:40] or None
+    params, err = _job_params(request.get_json(silent=True) or {})
+    if err:
+        return jsonify({"error": err}), 400
     try:
-        duration = float(data.get("duration") or 0)
-    except (TypeError, ValueError):
-        duration = 0.0
-    # Live streams report Infinity; a bogus value would plan endless regions
-    if not math.isfinite(duration) or duration < 0 or duration > _MAX_DURATION_S:
-        duration = 0.0
-    try:
-        playhead = float(data.get("t") or 0)
-    except (TypeError, ValueError):
-        playhead = 0.0
-    if not math.isfinite(playhead) or playhead < 0 or playhead > _MAX_DURATION_S:
-        playhead = 0.0
-    try:
-        job = _state.jobs.create(
-            {
-                "video_id": data.get("video_id"),
-                "url": url,
-                "stream_url": stream_url,
-                "language": language,
-                "target": target,
-                "romanize": bool(data.get("romanize")),
-                "title": str(data.get("title") or ""),
-                "duration": duration,
-                "playhead": playhead,
-            }
-        )
+        job = _state.jobs.create(params)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     return jsonify(job.snapshot(0, events=True))

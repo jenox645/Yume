@@ -600,8 +600,31 @@ def test_enable_again_retries_failed_regions(pipeline):
 
 
 @pytest.mark.parametrize("bad", [float("inf"), float("nan"), -5, "x", 10**12])
-def test_job_duration_is_sane(bad):
-    assert _jobs.Job(("k", "ja", "", "m"), {"duration": bad}).duration == 0.0
+def test_job_duration_and_playhead_are_sane(bad):
+    job = _jobs.Job(("k", "ja", "", "m"), {"duration": bad, "playhead": bad})
+    assert job.duration == 0.0 and job.playhead == 0.0
+    manager = _jobs.JobManager.__new__(_jobs.JobManager)
+    manager._notify = lambda: None
+    manager.poll(job, 42.5)
+    assert job.playhead == 42.5
+    manager.poll(job, bad)  # a poll's ?t= goes through the same check
+    assert job.playhead == 0.0
+
+
+def test_job_request_validation():
+    sys.argv = ["server"]
+    import _api
+
+    ok, err = _api._job_params(
+        {"url": "https://www.youtube.com/watch?v=abc", "language": "JA", "t": "12.5", "target": "  French "}
+    )
+    assert err is None
+    assert (ok["language"], ok["target"], ok["playhead"]) == ("ja", "French", "12.5")
+    assert _api._job_params({"url": "https://youtu.be/x", "language": "auto"})[0]["language"] is None
+    assert _api._job_params({})[1] == "Missing url"
+    assert _api._job_params({"url": "file:///etc/passwd"})[1].startswith("Invalid URL")
+    assert _api._job_params({"stream_url": "https://cdn/x.m3u8", "url": "javascript:1"})[1].startswith("Invalid URL")
+    assert _api._job_params({"url": "https://youtu.be/x", "language": "japanese"})[1].startswith("Invalid language")
 
 
 def test_corrupt_cache_database_is_set_aside(tmp_path):
