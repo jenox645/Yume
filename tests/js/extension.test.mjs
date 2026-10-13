@@ -11,7 +11,7 @@ const ROOT = new URL('../../extension/js/', import.meta.url);
 const noop = () => {};
 const listener = { addListener: noop, removeListener: noop };
 
-function load(file, { location = 'https://www.youtube.com/watch?v=abc123', video = null } = {}) {
+function load(file, { location = 'https://www.youtube.com/watch?v=abc123', video = null, title = '' } = {}) {
   const url = new URL(location);
   const events = [];
   const ctx = vm.createContext({
@@ -24,7 +24,7 @@ function load(file, { location = 'https://www.youtube.com/watch?v=abc123', video
     },
     setTimeout, clearTimeout, URLSearchParams, URL, AbortController, fetch: async () => { throw new Error('offline'); },
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init?.detail; } },
-    document: { hidden: false, querySelector: () => video },
+    document: { hidden: false, title, querySelector: () => video },
   });
   ctx.window = ctx;
   ctx.window.location = { href: url.href, hostname: url.hostname, pathname: url.pathname, search: url.search };
@@ -63,6 +63,14 @@ test('videoId: YouTube id only on YouTube hosts; page identity elsewhere', () =>
   // the media src (CDN tokens, blob: URLs) must not change the id
   assert.equal(id('https://s.com/v/9', { duration: 61.2, currentSrc: 'https://cdn/x.mp4?token=a' }),
                id('https://s.com/v/9', { duration: 61.2, currentSrc: 'blob:https://s.com/123' }));
+});
+
+test('the job carries the page title, without the YouTube count and suffix', () => {
+  const title = (t) => load('session.js', { title: t }).ctx.SubtitleSession.pageTitle();
+  assert.equal(title('(3) 周杰倫 Jay Chou【等你下課】 - YouTube'), '周杰倫 Jay Chou【等你下課】');
+  assert.equal(title('(99+) Kun Anta - YouTube Music'), 'Kun Anta');
+  assert.equal(title('Episode 4 - My Site'), 'Episode 4 - My Site');  // other sites: as is
+  assert.equal(title(''), '');
 });
 
 test('snapshots merge, update and remove (hidden) segments', () => {

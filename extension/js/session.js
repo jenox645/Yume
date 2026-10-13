@@ -81,6 +81,7 @@ class SubtitleSession {
       target: settings.showEnglish === false ? '' : (settings.targetLanguage || 'English'),
       romanize: settings.showRomaji === true,
       duration: Number.isFinite(video.duration) ? video.duration : 0,
+      title: SubtitleSession.pageTitle(),
     };
     this._status('Starting...', 'loading');
     await this._createJob();
@@ -336,6 +337,17 @@ class SubtitleSession {
       active: this.active, videoId: this.videoId, jobId: this.jobId, status: this.status, error: this.error,
       progress: this.progress, lines: this.cues.length, events,
     };
+  }
+
+  // The video's title: context for the translator (a song title tells it the
+  // lines are lyrics) and the label in the popup's History. YouTube's "(3) "
+  // notification count and " - YouTube" suffix are dropped.
+  static pageTitle() {
+    return String(document.title || '')
+      .replace(/^\(\d+\+?\)\s*/, '')
+      .replace(/\s+-\s+YouTube(?: Music)?$/, '')
+      .trim()
+      .slice(0, 200);
   }
 
   // Stable across reloads and identical for the same video on every visit.
