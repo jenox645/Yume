@@ -178,3 +178,92 @@ def test_ffmpeg_mac_uses_homebrew_when_present(tmp_path):
 def test_ffmpeg_mac_without_homebrew_unzips(tmp_path):
     ok, tools, _ = ffmpeg(tmp_path, "mac", archive_names=("ffmpeg",))
     assert ok and (tools / "ffmpeg").exists()  # was left nested inside the archive folder
+
+
+# ── Deno + the YouTube PO token plugin and server ────────────────────────────
+
+
+def deno(tmp_path, *, deno_ok=True, bgutil_ok=True, with_main=True, codes=None, already=False, broken=False):
+    """install_deno with downloads faked as real zips. `codes` maps a command's
+    tell-tale argument to its exit code. Returns (ok, tools, commands, said)."""
+    tools = tmp_path / "tools"
+    tools.mkdir(parents=True)
+    codes = codes or {}
+    ran, said = [], []
+    if already:
+        (tools / "bgutil-ytdlp-pot-provider" / "server" / "src").mkdir(parents=True)
+        (tools / "bgutil-ytdlp-pot-provider" / "server" / "src" / "main.ts").write_text("")
+
+    def verified(key, dest, label):
+        if broken:
+            Path(dest).write_bytes(b"not a zip")
+        elif deno_ok:
+            with zipfile.ZipFile(dest, "w") as zf:
+                zf.writestr("deno.exe", "binary")
+        return deno_ok
+
+    def download(url, dest, label, **kw):
+        if bgutil_ok:
+            with zipfile.ZipFile(dest, "w") as zf:
+                zf.writestr("bgutil-ytdlp-pot-provider-1.3.1/README.md", "")
+                if with_main:
+                    zf.writestr("bgutil-ytdlp-pot-provider-1.3.1/server/src/main.ts", "")
+        return bgutil_ok
+
+    def run(cmd, **kw):
+        ran.append(cmd)
+        code = next((c for k, c in codes.items() if k in cmd), 0)
+        if code == "raise":
+            raise OSError("no such program")
+        return types.SimpleNamespace(returncode=code, stdout="", stderr="")
+
+    import yume.network
+
+    say = lambda msg="", *a, **k: said.append(str(msg))  # noqa: E731
+    with ExitStack() as stack:
+        for name, fake in {
+            "TOOLS_DIR": tools, "IS_WIN": True, "EXE": ".exe", "_download_verified": verified, "_run": run,
+            "find_tool": lambda t: "C:/deno.exe", **{n: say for n in ("info", "warn", "error", "success")},
+        }.items():  # fmt: skip
+            stack.enter_context(patch.object(inst, name, fake))
+        stack.enter_context(patch.object(yume.network, "download_file", download))
+        ok = inst.install_deno()
+    return ok, tools, ran, said
+
+
+def test_deno_install_sets_up_the_plugin_and_the_token_server(tmp_path):
+    ok, tools, ran, said = deno(tmp_path)
+    assert ok and (tools / "deno.exe").exists() and not (tools / "deno.zip").exists()
+    assert (tools / "bgutil-ytdlp-pot-provider" / "server" / "src" / "main.ts").exists()
+    assert not (tools / "bgutil.zip").exists() and not (tools / "bgutil-ytdlp-pot-provider-1.3.1").exists()
+    assert "bgutil-ytdlp-pot-provider==1.3.1" in ran[0]
+    assert ran[1] == ["C:/deno.exe", "install", "--allow-scripts=npm:canvas", "--frozen"]
+    assert len(ran) == 2 and "bgutil server dependencies installed" in said
+
+
+def test_deno_install_retries_without_the_lockfile_and_reports_failures(tmp_path):
+    _ok, _t, ran, said = deno(tmp_path / "a", codes={"--frozen": 1})
+    assert ran[2] == ["C:/deno.exe", "install", "--allow-scripts=npm:canvas"]
+    assert "bgutil server dependencies installed" in said
+    ok, _t, ran, said = deno(tmp_path / "b", codes={"--allow-scripts=npm:canvas": 1, "yt-dlp": 1})
+    assert ok and len(ran) == 3
+    assert any("PO token plugin install failed" in s for s in said)
+    assert any("deno install failed" in s for s in said)
+    ok, _t, _ran, said = deno(tmp_path / "c", codes={"--allow-scripts=npm:canvas": "raise", "yt-dlp": "raise"})
+    assert ok and any("no such program" in s for s in said)
+
+
+def test_deno_install_stops_or_goes_on_without_the_token_server(tmp_path):
+    ok, _t, ran, _said = deno(tmp_path / "a", deno_ok=False)
+    assert not ok and ran == []
+    ok, tools, ran, said = deno(tmp_path / "b", bgutil_ok=False)
+    assert ok and len(ran) == 1 and "bgutil server download failed" in said
+    ok, tools, ran, said = deno(tmp_path / "c", with_main=False)
+    assert ok and "main.ts not found after extraction" in said and len(ran) == 1
+    ok, tools, ran, said = deno(tmp_path / "d", already=True)
+    assert ok and "bgutil server already set up" in said and len(ran) == 1
+
+
+def test_a_broken_deno_archive_fails(tmp_path):
+    ok, _t, ran, said = deno(tmp_path, broken=True)
+    assert not ok and ran == [] and any(s.startswith("Failed:") for s in said)

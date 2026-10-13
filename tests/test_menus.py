@@ -478,3 +478,23 @@ def test_tools_menu_opens_each_tool_once():
         stack.enter_context(patch.object(tools, "find_tool", lambda t: None))
         tools.tools_menu({})
     assert all(m.call_count == 1 for m in calls.values()), {n: m.call_count for n, m in calls.items()}
+
+
+def test_romanization_libs_are_the_ones_yume_uses_at_their_pinned_versions():
+    import yume.installers
+    import yume.utils
+
+    ran, said = [], []
+    have = {"pykakasi", "jaconv"}
+    with ExitStack() as stack:
+        stack.enter_context(patch.object(tools, "_importable", lambda m: m in have))
+        stack.enter_context(patch.object(tools, "ask_yn", lambda *a, **k: True))
+        stack.enter_context(patch.object(yume.installers, "_check_pip", MagicMock()))
+        run = lambda cmd, **kw: ran.append(cmd) or types.SimpleNamespace(returncode=0)  # noqa: E731
+        stack.enter_context(patch.object(yume.utils, "_run", run))
+        for n in ("info", "success", "warn", "section"):
+            stack.enter_context(patch.object(tools, n, lambda msg="", *a, **k: said.append(str(msg))))
+        tools._romanization_deps()
+    # cutlet's MeCab + UniDic (Japanese by word) and pypinyin, pinned as in server/requirements.txt
+    assert ran[0][4:7] == ["fugashi==1.5.2", "unidic-lite==1.0.8", "pypinyin==0.55.0"]
+    assert any("Restart server" in s for s in said)
