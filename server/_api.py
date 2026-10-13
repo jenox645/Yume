@@ -202,66 +202,68 @@ def vocal_isolation_status():
 @app.route("/model/switch", methods=["POST"])
 def switch_model():
     """Hot-swap the Whisper model without restarting the server."""
-    data = request.get_json(silent=True) or {}
-    new_model = data.get("model")
-    if not new_model:
-        return jsonify({"error": "Missing 'model' field"}), 400
-
-    # Multilingual models only: *.en and distil-* models are English-only and
-    # cannot transcribe the languages Yume exists for.
-    valid_models = ["tiny", "base", "small", "medium", "large-v1", "large-v2", "large-v3", "turbo", "large-v3-turbo"]
-
-    is_local_path = os.path.sep in new_model or "/" in new_model
-    if is_local_path:
-        raw_path = Path(new_model)
-        if not raw_path.is_absolute() or ".." in raw_path.parts:
-            return jsonify({"error": "Model path must be absolute and must not contain '..'"}), 400
-        model_path = raw_path.resolve()
-        if not model_path.is_dir():
-            return jsonify({"error": f"Directory not found: {model_path}"}), 400
-        required = ["model.bin", "config.json"]
-        missing = [f for f in required if not (model_path / f).exists()]
-        if missing:
-            return jsonify({"error": f"Not a valid CTranslate2 model — missing: {', '.join(missing)}"}), 400
-        new_model = str(model_path)
-    elif new_model not in valid_models:
-        return jsonify({"error": f"Unknown model: {new_model}", "valid": valid_models}), 400
-
-    if new_model == "turbo":
-        new_model = "large-v3-turbo"
-
+    new_model, err = _requested_model((request.get_json(silent=True) or {}).get("model"))
+    if err:
+        return jsonify(err), 400
     if new_model == _state.model_name:
         return jsonify({"status": "already_loaded", "model": _state.model_name})
-
     if not _state.model_switch_lock.acquire(blocking=False):
         return jsonify({"error": "A model switch is already in progress"}), 409
-
     try:
-        old_model = _state.model_name
-        print(f"[Yume] Switching model: {old_model} -> {new_model}")
-
-        try:
-            # Load outside transcribe_lock so in-flight transcriptions finish on the old model
-            new_whisper = _model.load_whisper(new_model)
-        except Exception as e:
-            # The old model was never touched — it keeps serving; no rollback needed
-            print(f"[Yume] Model switch failed (still on {old_model}): {e}")
-            return jsonify({"error": f"Switch failed: {str(e)}", "model": old_model}), 500
-
-        with _state.transcribe_lock:
-            _state.model_name = new_model
-            _state.model = new_whisper
-            # The friendly name from config described the OLD model
-            _state.model_display_name = ""
-        # Jobs belong to the old model; clients recreate theirs on the next poll
-        # (404) and get transcripts for the new model.
-        if _state.jobs:
-            _state.jobs.drop_all(f"Whisper model switched to {new_model}")
-        _settings.persist_whisper_model(new_model)
-        print(f"[Yume] Model switched to {_state.model_name}")
-        return jsonify({"status": "ok", "model": _state.model_name, "previous": old_model})
+        return _swap_model(new_model)
     finally:
         _state.model_switch_lock.release()
+
+
+# Multilingual models only: *.en and distil-* models are English-only and
+# cannot transcribe the languages Yume exists for.
+_VALID_MODELS = ["tiny", "base", "small", "medium", "large-v1", "large-v2", "large-v3", "turbo", "large-v3-turbo"]
+
+
+def _requested_model(name):
+    """A model name or local CTranslate2 folder from a switch request → (model, None) or (None, error)."""
+    if not name:
+        return None, {"error": "Missing 'model' field"}
+    if os.path.sep not in name and "/" not in name:
+        if name not in _VALID_MODELS:
+            return None, {"error": f"Unknown model: {name}", "valid": _VALID_MODELS}
+        return ("large-v3-turbo" if name == "turbo" else name), None
+    raw_path = Path(name)
+    if not raw_path.is_absolute() or ".." in raw_path.parts:
+        return None, {"error": "Model path must be absolute and must not contain '..'"}
+    model_path = raw_path.resolve()
+    if not model_path.is_dir():
+        return None, {"error": f"Directory not found: {model_path}"}
+    missing = [f for f in ("model.bin", "config.json") if not (model_path / f).exists()]
+    if missing:
+        return None, {"error": f"Not a valid CTranslate2 model — missing: {', '.join(missing)}"}
+    return str(model_path), None
+
+
+def _swap_model(new_model):
+    """Load new_model, then swap it in (call with model_switch_lock held)."""
+    old_model = _state.model_name
+    print(f"[Yume] Switching model: {old_model} -> {new_model}")
+    try:
+        # Load outside transcribe_lock so in-flight transcriptions finish on the old model
+        new_whisper = _model.load_whisper(new_model)
+    except Exception as e:
+        # The old model was never touched — it keeps serving; no rollback needed
+        print(f"[Yume] Model switch failed (still on {old_model}): {e}")
+        return jsonify({"error": f"Switch failed: {str(e)}", "model": old_model}), 500
+
+    with _state.transcribe_lock:
+        _state.model_name = new_model
+        _state.model = new_whisper
+        # The friendly name from config described the OLD model
+        _state.model_display_name = ""
+    # Jobs belong to the old model; clients recreate theirs on the next poll
+    # (404) and get transcripts for the new model.
+    if _state.jobs:
+        _state.jobs.drop_all(f"Whisper model switched to {new_model}")
+    _settings.persist_whisper_model(new_model)
+    print(f"[Yume] Model switched to {_state.model_name}")
+    return jsonify({"status": "ok", "model": _state.model_name, "previous": old_model})
 
 
 @app.route("/translation/models", methods=["GET"])
