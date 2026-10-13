@@ -268,42 +268,13 @@ def _check_components(cfg: dict, gpu: dict) -> tuple[list[str], bool]:
     _step(2, "Component Check")
     info(f"{C.DIM}Checking which tools and packages are already installed...{C.RESET}")
     print()
-    missing = []
-    yt = find_tool("yt-dlp")
-    ff = find_tool("ffmpeg")
-    dn = find_tool("deno")
-    (success if yt else warn)(f"yt-dlp: {'installed — ' + yt if yt else 'missing'}")
-    (success if ff else warn)(f"FFmpeg: {'installed — ' + ff if ff else 'missing'}")
-    info(f"Deno:   {'installed — ' + dn if dn else 'not installed (optional)'}")
-    if not yt:
-        missing.append("yt-dlp")
-    if not ff:
-        missing.append("ffmpeg")
-
-    try:
-        import faster_whisper  # noqa: F401
-
-        success("faster-whisper: installed")
-    except ImportError:
-        warn("faster-whisper: missing")
-        missing.append("python_deps")
-
+    missing = _missing_tools()
     gf = find_gguf_models()
     if cfg.get("translation_backend", "llamacpp") != "llamacpp":
         # Ollama / LM Studio / custom manage their own models
         info(f"Translation engine: not needed ({cfg.get('translation_backend')} backend)")
     else:
-        if not _translation_engine_ok(gpu):
-            missing.append("llama_server")
-        if gf:
-            success(f"GGUF models: {len(gf)} found")
-            # Keep the user's choice on a re-run; only fill in a missing/stale path
-            if not cfg.get("gguf_model_path") or not Path(cfg["gguf_model_path"]).exists():
-                cfg["gguf_model_path"] = str(gf[0])
-                cfg["translation_model"] = gf[0].name
-        else:
-            warn("No GGUF translation model found")
-            missing.append("gguf_model")
+        missing += _missing_for_llamacpp(cfg, gpu, gf)
 
     print()
     detected = False
@@ -312,6 +283,41 @@ def _check_components(cfg: dict, gpu: dict) -> tuple[list[str], bool]:
             detected = True
             success(f"Detected: {bi['name']} on port {bi['dp']}")
     return missing, detected or bool(gf)
+
+
+def _missing_tools() -> list[str]:
+    """Report yt-dlp, FFmpeg, Deno and faster-whisper; return what is missing."""
+    missing = []
+    yt = find_tool("yt-dlp")
+    ff = find_tool("ffmpeg")
+    dn = find_tool("deno")
+    (success if yt else warn)(f"yt-dlp: {'installed — ' + yt if yt else 'missing'}")
+    (success if ff else warn)(f"FFmpeg: {'installed — ' + ff if ff else 'missing'}")
+    info(f"Deno:   {'installed — ' + dn if dn else 'not installed (optional)'}")
+    missing += [] if yt else ["yt-dlp"]
+    missing += [] if ff else ["ffmpeg"]
+    try:
+        import faster_whisper  # noqa: F401
+
+        success("faster-whisper: installed")
+    except ImportError:
+        warn("faster-whisper: missing")
+        missing.append("python_deps")
+    return missing
+
+
+def _missing_for_llamacpp(cfg: dict, gpu: dict, gf: list) -> list[str]:
+    """Report llama.cpp and the GGUF models; pick a model if none is set."""
+    missing = [] if _translation_engine_ok(gpu) else ["llama_server"]
+    if not gf:
+        warn("No GGUF translation model found")
+        return [*missing, "gguf_model"]
+    success(f"GGUF models: {len(gf)} found")
+    # Keep the user's choice on a re-run; only fill in a missing/stale path
+    if not cfg.get("gguf_model_path") or not Path(cfg["gguf_model_path"]).exists():
+        cfg["gguf_model_path"] = str(gf[0])
+        cfg["translation_model"] = gf[0].name
+    return missing
 
 
 def _choose_youtube_auth(cfg: dict) -> None:

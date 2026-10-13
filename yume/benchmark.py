@@ -231,8 +231,6 @@ def _benchmark_one(model_name: str, device: str, compute: str, test_wav: Path) -
 
 def _show_results(cfg: dict, results: list[dict], device: str, compute: str, gpu: dict) -> None:
     """Results table, how to read it, and an offer to switch to the best model."""
-    from config import save_config
-
     print()
     section("Benchmark Results")
     info(f"Device: {device} | Precision: {compute} | Test: {TEST_SECONDS}s audio, 3 runs (median)")
@@ -241,7 +239,18 @@ def _show_results(cfg: dict, results: list[dict], device: str, compute: str, gpu
     print()
 
     ok_results = [r for r in results if r["status"] == "OK"]
-    best_speed = max((r["speed_x"] for r in ok_results), default=0)
+    table(
+        ["Model", "Load", f"{TEST_SECONDS}s Audio", "Speed", ""],
+        _result_rows(results, max((r["speed_x"] for r in ok_results), default=0)),
+        col_styles=[C.CYAN, C.RESET, C.RESET, C.GREEN, C.RESET],
+        title="Whisper Benchmark",
+    )
+    if ok_results:
+        _explain(min(ok_results, key=lambda r: r["median_s"]))
+        _offer_most_accurate(cfg, ok_results)
+
+
+def _result_rows(results: list[dict], best_speed: float) -> list[list[str]]:
     rows = []
     for r in results:
         if r["status"] != "OK":
@@ -251,16 +260,10 @@ def _show_results(cfg: dict, results: list[dict], device: str, compute: str, gpu
         speed_bar = f"{C.GREEN}{'█' * bar_len}{C.DIM}{'░' * (25 - bar_len)}{C.RESET}"
         is_best = f" {C.GOLD}★{C.RESET}" if r["speed_x"] == best_speed and len(results) > 1 else ""
         rows.append([r["model"], f"{r['load_s']}s", f"{r['median_s']:.3f}s", f"{r['speed_x']}x{is_best}", speed_bar])
-    table(
-        ["Model", "Load", f"{TEST_SECONDS}s Audio", "Speed", ""],
-        rows,
-        col_styles=[C.CYAN, C.RESET, C.RESET, C.GREEN, C.RESET],
-        title="Whisper Benchmark",
-    )
-    if not ok_results:
-        return
+    return rows
 
-    fastest = min(ok_results, key=lambda r: r["median_s"])
+
+def _explain(fastest: dict) -> None:
     print()
     info("How to read the results:")
     info(f"  {C.DIM}Speed = how many times faster than real-time. Higher is better.{C.RESET}")
@@ -271,8 +274,12 @@ def _show_results(cfg: dict, results: list[dict], device: str, compute: str, gpu
     if fastest["speed_x"] > 0:
         info(f"  {C.DIM}→ A 4-minute song would be transcribed in ~{240 / fastest['speed_x']:.1f} seconds{C.RESET}")
 
-    # Suggest the MOST ACCURATE model that is still comfortably real-time,
-    # not the fastest one (that is always tiny, the least accurate).
+
+def _offer_most_accurate(cfg: dict, ok_results: list[dict]) -> None:
+    """Suggest the MOST ACCURATE model that is still comfortably real-time,
+    not the fastest one (that is always tiny, the least accurate)."""
+    from config import save_config
+
     usable = [r["model"] for r in ok_results if r["speed_x"] >= 5 and r["model"] in _ACCURACY_RANK]
     pick = min(usable, key=_ACCURACY_RANK.index) if usable else None
     if pick and pick != cfg.get("whisper_model"):

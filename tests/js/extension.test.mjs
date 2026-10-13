@@ -367,16 +367,47 @@ test('popup settings: typed numbers are kept inside the control range', async ()
   assert.equal(stored().originalFontSize, 19);  // empty: the default
 });
 
-test('a server notice (wrong language picked) is shown as a warning, once', () => {
+test('a server notice (wrong language picked) is sent once, and cleared', () => {
   const { ctx, events } = load('session.js');
   const s = new ctx.SubtitleSession();
   const snap = { status: 'transcribing', segments: [], progress: {}, rev: 1, notice: 'This video sounds like English' };
   s._apply(snap);
-  const warnings = () => events.filter((e) => e.type === 'display-status' && e.detail.type === 'warning');
-  assert.equal(warnings().at(-1).detail.message, 'This video sounds like English');
-  const shown = warnings().length;
+  const notices = () => events.filter((e) => e.type === 'display-notice').map((e) => e.detail.message);
+  assert.deepEqual(notices(), ['This video sounds like English']);
   s._apply({ ...snap, rev: 2, segments: [{ id: 1, start: 0, end: 2, text: 'x' }] });
-  assert.equal(warnings().length, shown);  // not repeated once lines arrive
+  assert.deepEqual(notices(), ['This video sounds like English']);  // not repeated once lines arrive
   s._apply({ ...snap, rev: 3, notice: '' });
-  assert.equal(s.notice, '');
+  assert.deepEqual(notices(), ['This video sounds like English', '']);
+});
+
+test('the notice stays on screen while lines play (a status is hidden then)', () => {
+  const { ctx } = load('subtitle-window.js');
+  const els = {};
+  const el = (sel) => (els[sel] ??= { style: {}, textContent: '', className: '', classList: { remove: noop } });
+  const w = Object.assign(Object.create(ctx.SubtitleWindow.prototype), {
+    settings: {}, isPlaying: false, element: { style: {}, querySelector: el },
+  });
+  w.updateSubtitle('原文', 'Line', '');
+  w.showNotice('This video sounds like English');
+  w.updateSubtitle('次', 'Next line', '');
+  assert.equal(el('.subtitle-notice').style.display, 'block');
+  assert.equal(el('.subtitle-notice').textContent, 'This video sounds like English');
+  w.resetProgress();  // the next video
+  assert.equal(el('.subtitle-notice').style.display, 'none');
+});
+
+// ── subtitle-window.js ─────────────────────────────────────────────────────
+
+test('window colours keep a 00 channel (pure black was drawn as #08080c)', () => {
+  const { ctx } = load('subtitle-window.js');
+  assert.equal(ctx.windowStyle({ windowBgColor: '#000000', windowOpacity: 100 }).background, 'rgba(0, 0, 0, 1)');
+  assert.equal(ctx.windowStyle({ windowBgColor: '#ff8000', glassEnabled: true }).background, 'rgba(255, 128, 0, 0.45)');
+  assert.equal(ctx.windowStyle({}).background, 'rgba(8, 8, 12, 0.88)');  // the default
+  assert.equal(ctx.windowStyle({ windowBgColor: 'nonsense' }).background, 'rgba(8, 8, 12, 0.88)');
+});
+
+test('a less sure line is drawn fainter, only when asked', () => {
+  const { ctx } = load('subtitle-window.js');
+  const at = (c, show = true) => ctx.confidenceOpacity(show, c);
+  assert.deepEqual([at(-0.1), at(-0.5), at(-0.9), at(null), at(0.1), at(-0.9, false)], [1, 0.85, 0.65, 1, 1, 1]);
 });

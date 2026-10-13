@@ -163,35 +163,38 @@ def is_hallucination(text):
 
     # Repeated word spam: "30k 30k 30k 30k" (6+ words, <=2 unique)
     words = t.split()
-    if len(words) >= 6:
-        unique = {w.lower().strip(".,!?") for w in words}
-        if len(unique) <= 2:
-            return True
-
-    # Concatenated repetition: "aaaaaa", "la la la la", 3+ times. Twice is a
-    # lyric: きらきら, もっともっと, "더 그리워 더 그리워", "I love you I love you".
-    # The repeating unit may start after a short prefix — "MACACACACA..." is
-    # "ma" + "ca"*N and never matches anchored at position 0, so try offsets
-    # up to one unit length (require an extra repeat there to avoid false
-    # positives on words like "banana").
-    clean = t_lower.replace(" ", "")
-    if len(clean) >= 4:
-        for sub_len in range(2, min(9, len(clean) // 2 + 1)):
-            for offset in range(0, sub_len + 1):
-                body = clean[offset:]
-                repeats = len(body) // sub_len
-                min_repeats = 3 if offset == 0 else 4
-                if repeats < min_repeats:
-                    continue
-                sub = body[:sub_len]
-                if sub * repeats == body[: sub_len * repeats] and sub_len * repeats >= len(body) * 0.95:
-                    print(f"[Yume] Hallucination: repeated '{sub}' x{repeats} in '{t}'")
-                    return True
-
-    if t_lower in SINGLE_WORD_BLOCKLIST:
+    if len(words) >= 6 and len({w.lower().strip(".,!?") for w in words}) <= 2:
         return True
 
-    return False
+    sub = _repeated_unit(t_lower.replace(" ", ""))
+    if sub:
+        print(f"[Yume] Hallucination: repeated '{sub}' in '{t}'")
+        return True
+
+    return t_lower in SINGLE_WORD_BLOCKLIST
+
+
+def _repeated_unit(clean):
+    """The unit a whole line repeats, or None.
+
+    Concatenated repetition: "aaaaaa", "la la la la", 3+ times. Twice is a
+    lyric: きらきら, もっともっと, "더 그리워 더 그리워", "I love you I love you".
+    The repeating unit may start after a short prefix — "MACACACACA..." is
+    "ma" + "ca"*N and never matches anchored at position 0, so try offsets
+    up to one unit length (require an extra repeat there to avoid false
+    positives on words like "banana")."""
+    if len(clean) < 4:
+        return None
+    for sub_len in range(2, min(9, len(clean) // 2 + 1)):
+        for offset in range(0, sub_len + 1):
+            body = clean[offset:]
+            repeats = len(body) // sub_len
+            if repeats < (3 if offset == 0 else 4):
+                continue
+            sub = body[:sub_len]
+            if sub * repeats == body[: sub_len * repeats] and sub_len * repeats >= len(body) * 0.95:
+                return sub
+    return None
 
 
 # A unit of 1-40 characters repeated 5+ times in a row: Whisper stuck in a loop

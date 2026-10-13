@@ -941,6 +941,57 @@ def test_non_ascii_token_header_is_rejected_not_a_crash():
     assert not _api.token_ok("")
 
 
+def _switch(body):
+    """POST /model/switch → (status code, json), past the token check. Works
+    with real Flask and with the stub test_server_modules installs."""
+    import _api
+
+    request = types.SimpleNamespace(get_json=lambda silent=False: body)
+    with patch.object(_api, "request", request), patch.object(_api, "jsonify", lambda d: d):
+        resp = _api.switch_model()
+    return resp[::-1] if isinstance(resp, tuple) else (200, resp)
+
+
+def test_model_switch_rejects_bad_requests(monkeypatch, tmp_path):
+    monkeypatch.setattr(_state, "model_name", "large-v3-turbo")
+    assert _switch({}) == (400, {"error": "Missing 'model' field"})
+    code, out = _switch({"model": "medium.en"})  # English-only: useless for Yume
+    assert code == 400 and "large-v3" in out["valid"]
+    assert _switch({"model": "turbo"}) == (200, {"status": "already_loaded", "model": "large-v3-turbo"})
+    assert _switch({"model": "models/mine"})[0] == 400  # relative
+    assert "'..'" in _switch({"model": str(tmp_path / ".." / "x")})[1]["error"]
+    assert "not found" in _switch({"model": str(tmp_path / "none")})[1]["error"]
+    (tmp_path / "model.bin").write_bytes(b"")
+    assert "config.json" in _switch({"model": str(tmp_path)})[1]["error"]
+
+
+def test_model_switch_swaps_or_keeps_the_old_model(monkeypatch, tmp_path):
+    import _api
+
+    monkeypatch.setattr(_state, "model_name", "small")
+    monkeypatch.setattr(_state, "model", "old-whisper")
+    monkeypatch.setattr(_state, "jobs", types.SimpleNamespace(drop_all=lambda why: dropped.append(why)))
+    dropped, saved = [], []
+    monkeypatch.setattr(_api._settings, "persist_whisper_model", saved.append)
+    for f in ("model.bin", "config.json"):
+        (tmp_path / f).write_bytes(b"")
+
+    with patch.object(_api._model, "load_whisper", side_effect=RuntimeError("CUDA out of memory")):
+        code, out = _switch({"model": "large-v3"})
+    assert code == 500 and out["model"] == "small" and _state.model == "old-whisper" and not saved
+
+    _state.model_switch_lock.acquire()
+    try:
+        assert _switch({"model": "large-v3"})[0] == 409  # one switch at a time
+    finally:
+        _state.model_switch_lock.release()
+
+    with patch.object(_api._model, "load_whisper", return_value="new-whisper"):
+        code, out = _switch({"model": str(tmp_path)})
+    assert (code, out) == (200, {"status": "ok", "model": str(tmp_path.resolve()), "previous": "small"})
+    assert _state.model == "new-whisper" and saved == [str(tmp_path.resolve())] and len(dropped) == 1
+
+
 def test_cookie_hint_only_where_cookies_could_help(monkeypatch):
     def fake_run(cmd, **kw):
         err = "ERROR: Could not copy Chrome cookie database."
@@ -1293,6 +1344,56 @@ def test_a_long_line_reaches_the_job_in_pieces_each_judged_by_the_filter(pipelin
         pipeline.jobs.jobs[job.id] = job
         pipeline.jobs.refilter()
     assert sum(s["hidden"] for s in job.segments.values()) == 2
+
+
+def _picker(*jobs):
+    """A JobManager with these jobs and no worker threads."""
+    mgr = object.__new__(_jobs.JobManager)
+    mgr.jobs, mgr.lock = {j.id: j for j in jobs}, threading.Lock()
+    return mgr
+
+
+def _llm_job(params, lines, playhead=0.0):
+    job = _jobs.Job(("pick", "ja", "", "m"), {"language": "ja", **params, "playhead": playhead})
+    for i, (start, translation, romaji) in enumerate(lines):
+        job.segments[i] = {
+            "id": i, "start": start, "end": start + 2, "text": f"行{i}", "hidden": False,
+            "translation": translation, "romaji": romaji,
+        }  # fmt: skip
+    return job
+
+
+def test_the_llm_works_on_what_is_on_screen_first():
+    starts = [5.0 * i for i in range(30)]
+    # a job's very first lines go in a small batch, from the playhead on
+    job = _llm_job({"target": "English"}, [(s, None, "r") for s in starts], playhead=60.0)
+    _j, kind, batch = _picker(job)._pick_llm_batch()
+    assert kind == "translate" and [s["start"] for s in batch] == [60.0, 65.0, 70.0]
+    # once something is translated: the lines due soon, still in a small batch...
+    job.segments[0]["translation"] = "done"
+    _j, kind, batch = _picker(job)._pick_llm_batch()
+    assert [s["start"] for s in batch] == [60.0, 65.0, 70.0]
+    # ...and with nothing due soon, a full batch, then the lines behind the playhead
+    job.playhead = 200.0
+    _j, kind, batch = _picker(job)._pick_llm_batch()
+    assert len(batch) == _jobs.BATCH_SIZE and batch[0]["start"] == 5.0
+    for s in job.segments.values():
+        s["translation"] = s["translation"] or "x"
+    # translations done: LLM romanization (Arabic, or no romanizer) when asked for
+    job.romanize, job.segments[3]["romaji"] = True, None
+    assert _picker(job)._pick_llm_batch()[1:] == ("romanize", [job.segments[3]])
+    job.romanize = False
+    assert _picker(job)._pick_llm_batch() == (None, None, None)
+
+
+def test_the_llm_skips_unwatched_and_backed_off_jobs():
+    idle = _llm_job({"target": "English"}, [(0.0, None, "r")])
+    idle.last_poll -= _jobs.ACTIVE_S + 1
+    waiting = _llm_job({"target": "English"}, [(0.0, None, "r")])
+    waiting.llm_backoff_until = time.time() + 30
+    watched = _llm_job({"target": "English"}, [(0.0, None, "r")])
+    assert _picker(idle, waiting, watched)._pick_llm_batch()[0] is watched
+    assert _picker(idle, waiting)._pick_llm_batch() == (None, None, None)
 
 
 def test_a_japanese_middle_dot_is_a_space_in_romaji():
