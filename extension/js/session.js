@@ -8,6 +8,7 @@
 // Events dispatched on window (consumed by content.js → SubtitleWindow):
 //   display-subtitle {original, english, romaji, confidence}
 //   display-status   {message, type}
+//   display-notice   {message}  — '' clears it
 //   display-error    {message}
 //   chunk-progress   {done, total, complete, lines, translated, status}
 //   prefetch-ready   — first visible line available
@@ -188,7 +189,6 @@ class SubtitleSession {
     if (!r.ok) throw new Error(r.data?.error || `Server error ${r.status}`);
     this.jobId = r.data.id;
     this.rev = 0;
-    this.notice = '';
     // A recreated job (after a 404) starts from scratch: drop the old cues even
     // if the new snapshot is empty, or stale lines would stay on screen.
     this.segments.clear();
@@ -238,10 +238,13 @@ class SubtitleSession {
       changed = true;
     }
     this.rev = Math.max(this.rev, snap.rev || 0);
-    // The video sounds like another language than the one picked: say so once
-    const fresh = snap.notice && snap.notice !== this.notice;
-    this.notice = snap.notice || '';
-    if (fresh) this._status(this.notice, 'warning');
+    // The video sounds like another language than the one picked: a line of
+    // its own, above the subtitles (a status is hidden once lines play, and the
+    // check needs two regions, so it comes after the first lines)
+    if ((snap.notice || '') !== this.notice) {
+      this.notice = snap.notice || '';
+      window.dispatchEvent(new CustomEvent('display-notice', { detail: { message: this.notice } }));
+    }
     if (changed) {
       this.cues = [...this.segments.values()].sort((a, b) => a.start - b.start);
       if (!this._readySignaled && this.cues.length) {
@@ -266,8 +269,7 @@ class SubtitleSession {
           transcribing: 'Transcribing...', translating: 'Translating...',
           done: 'No vocals detected in this video',
         }[snap.status];
-      if (this.notice && !allFailed) this._status(this.notice, 'warning');
-      else if (msg) this._status(msg, allFailed ? 'error' : snap.status === 'done' ? 'info' : 'loading');
+      if (msg) this._status(msg, allFailed ? 'error' : snap.status === 'done' ? 'info' : 'loading');
     }
   }
 

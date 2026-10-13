@@ -6,6 +6,45 @@
 // elements (and site CSS leaked into the overlay).
 // ============================================================================
 
+// [selector, settings prefix, default size (px), default colour] of each line
+const LINE_STYLES = [
+  ['.subtitle-original', 'original', 19, '#ffffff'],
+  ['.subtitle-romaji', 'romaji', 13, '#ffc88c'],
+  ['.subtitle-english', 'translation', 14, '#b4beff'],
+];
+
+// '#rrggbb' → [r, g, b]; an unreadable channel takes the default's
+function hexRGB(hex, fallback) {
+  return fallback.map((d, i) => {
+    const n = parseInt(String(hex).slice(1 + 2 * i, 3 + 2 * i), 16);
+    return Number.isNaN(n) ? d : n;
+  });
+}
+
+// The window's own style: background, shadow, corners and the glass effect
+function windowStyle(s) {
+  const [r, g, b] = hexRGB(s.windowBgColor || '#08080c', [8, 8, 12]);
+  const opacity = (s.windowOpacity ?? 88) / 100;
+  const radius = s.glassRadius ?? 20;  // 20 = the popup slider's default
+  const glass = Boolean(s.glassEnabled);
+  const blur = `blur(${s.glassBlur ?? 18}px) saturate(1.3)`;
+  return {
+    // Glass: a more transparent background so the blur behind shows through
+    background: `rgba(${r}, ${g}, ${b}, ${glass ? Math.min(opacity, 0.45) : opacity})`,
+    boxShadow: s.windowShadow === false ? 'none' : '',
+    borderRadius: radius > 0 ? `${radius}px` : '',
+    backdropFilter: glass ? blur : 'none',
+    webkitBackdropFilter: glass ? blur : 'none',
+    border: glass ? '1px solid rgba(255, 255, 255, 0.15)' : '',
+  };
+}
+
+// Opt-in: a less sure line (Whisper's avg_logprob) is shown fainter
+function confidenceOpacity(show, c) {
+  if (!show || c == null || c >= 0) return 1.0;
+  return c > -0.3 ? 1.0 : c > -0.7 ? 0.85 : 0.65;
+}
+
 // eslint-disable-next-line no-redeclare
 class SubtitleWindow {
   constructor() {
@@ -130,6 +169,7 @@ class SubtitleWindow {
         </div>
       </div>
       <div class="subtitle-content">
+        <div class="subtitle-notice" style="display:none"></div>
         <div class="subtitle-status">Initializing...</div>
         <div class="subtitle-original" style="display:none"></div>
         <div class="subtitle-romaji" style="display:none"></div>
@@ -173,72 +213,18 @@ class SubtitleWindow {
   applyCustomStyles() {
     if (!this.element) return;
     const s = this.settings;
-
-    // Background
-    const bgColor = s.windowBgColor || '#08080c';
-    const opacity = (s.windowOpacity ?? 88) / 100;
-    const r = parseInt(bgColor.slice(1,3), 16) || 8;
-    const g = parseInt(bgColor.slice(3,5), 16) || 8;
-    const b = parseInt(bgColor.slice(5,7), 16) || 12;
-    this.element.style.background = `rgba(${r}, ${g}, ${b}, ${opacity})`;
-
-    if (s.windowShadow === false) this.element.style.boxShadow = 'none';
-    else this.element.style.boxShadow = '';
-
-    // Corner radius — always applied (independent of glass effect).
-    // Default 20 matches the popup slider's default.
-    const radius = s.glassRadius ?? 20;
-    this.element.style.borderRadius = radius > 0 ? `${radius}px` : '';
-
-    // Glass effect — transparent blur behind subtitles
-    if (s.glassEnabled) {
-      const blur = s.glassBlur ?? 18;
-      this.element.style.backdropFilter = `blur(${blur}px) saturate(1.3)`;
-      this.element.style.webkitBackdropFilter = `blur(${blur}px) saturate(1.3)`;
-      this.element.style.border = '1px solid rgba(255, 255, 255, 0.15)';
-      // Make background more transparent so glass shows through
-      this.element.style.background = `rgba(${r}, ${g}, ${b}, ${Math.min(opacity, 0.45)})`;
-    } else {
-      this.element.style.backdropFilter = 'none';
-      this.element.style.webkitBackdropFilter = 'none';
-      this.element.style.border = '';
+    Object.assign(this.element.style, windowStyle(s));
+    // Per line: size, colour and font from the settings named after it
+    for (const [selector, name, size, color] of LINE_STYLES) {
+      const el = this.element.querySelector(selector);
+      if (!el) continue;
+      el.style.fontSize = `${s[name + 'FontSize'] || size}px`;
+      el.style.color = s[name + 'Color'] || color;
+      // Characters that could break out of the CSS font-family string are dropped
+      const font = (s[name + 'Font'] || '').replace(/["'\\;]/g, '');
+      el.style.fontFamily = s[name + 'Font'] ? `"${font}", -apple-system, sans-serif` : '';
     }
-
-    // Strip characters that could malform CSS font-family strings
-    const sanitizeFontName = (name) => name ? name.replace(/["'\\;]/g, '') : '';
-
-    // Per-line: Original text — uses originalFont if set
-    const origEl = this.element.querySelector('.subtitle-original');
-    if (origEl) {
-      origEl.style.fontSize = `${s.originalFontSize || 19}px`;
-      origEl.style.color = s.originalColor || '#ffffff';
-      origEl.style.fontFamily = s.originalFont
-        ? `"${sanitizeFontName(s.originalFont)}", -apple-system, sans-serif`
-        : '';
-    }
-
-    // Per-line: Romaji — uses romajiFont (Latin alphabet)
-    const rmEl = this.element.querySelector('.subtitle-romaji');
-    if (rmEl) {
-      rmEl.style.fontSize = `${s.romajiFontSize || 13}px`;
-      rmEl.style.color = s.romajiColor || '#ffc88c';
-      rmEl.style.fontFamily = s.romajiFont
-        ? `"${sanitizeFontName(s.romajiFont)}", -apple-system, sans-serif`
-        : '';
-    }
-
-    // Per-line: Translation — uses translationFont (only for Latin targets)
-    const enEl = this.element.querySelector('.subtitle-english');
-    if (enEl) {
-      enEl.style.fontSize = `${s.translationFontSize || 14}px`;
-      enEl.style.color = s.translationColor || '#b4beff';
-      enEl.style.fontFamily = s.translationFont
-        ? `"${sanitizeFontName(s.translationFont)}", -apple-system, sans-serif`
-        : '';
-    }
-
-    // Chunk badge visibility
-    const badge = this.element?.querySelector('.chunk-badge');
+    const badge = this.element.querySelector('.chunk-badge');
     if (badge && s.showChunkCounter === false) badge.style.display = 'none';
   }
 
@@ -333,6 +319,7 @@ class SubtitleWindow {
   resetProgress() {
     this._lastProgress = null;
     if (!this.element) return;
+    this.showNotice('');  // about the previous video
     const toast = this.element.querySelector('.ready-toast');
     if (toast) { toast.classList.remove('fade-out'); toast.style.display = 'none'; }
     const badge = this.element.querySelector('.chunk-badge');
@@ -353,14 +340,18 @@ class SubtitleWindow {
 
   updateSubtitle(original, english, romaji, confidence) {
     if (!this.element) return;
-    const originalEl = this.element.querySelector('.subtitle-original');
-    const englishEl  = this.element.querySelector('.subtitle-english');
-    const romajiEl   = this.element.querySelector('.subtitle-romaji');
-
+    const s = this.settings;
+    const q = (selector) => this.element.querySelector(selector);
+    // RTL per line: the original is Arabic when the SOURCE is, the translation
+    // when the TARGET is (romanization is always Latin; null = left as is).
+    const srcRTL = s.sourceLanguage === 'ar';
+    const lines = [  // [element, text, shown, right-to-left]
+      [q('.subtitle-original'), original, s.showOriginal !== false, srcRTL],
+      [q('.subtitle-english'), english, s.showEnglish !== false, s.targetLanguage === 'Arabic'],
+      [q('.subtitle-romaji'), romaji, s.showRomaji === true, null],
+    ];
     if (!original && !english) {
-      if (originalEl) { originalEl.textContent = ''; originalEl.style.display = 'none'; }
-      if (englishEl)  { englishEl.textContent  = ''; englishEl.style.display  = 'none'; }
-      if (romajiEl)   { romajiEl.textContent   = ''; romajiEl.style.display   = 'none'; }
+      for (const [el] of lines) if (el) { el.textContent = ''; el.style.display = 'none'; }
       this.currentOriginal = ''; this.currentEnglish = ''; this.currentRomaji = '';
       return;
     }
@@ -371,40 +362,17 @@ class SubtitleWindow {
     this.currentRomaji   = romaji || '';
     this.currentConfidence = confidence;
 
-    const statusEl = this.element.querySelector('.subtitle-status');
+    const statusEl = q('.subtitle-status');
     if (statusEl) statusEl.style.display = 'none';
-
-    const showJp = this.settings.showOriginal !== false;
-    // RTL per line: the original is Arabic when the SOURCE is, the translation
-    // when the TARGET is (romanization is always Latin, LTR).
-    const srcRTL = this.settings.sourceLanguage === 'ar';
-    const tgtRTL = this.settings.targetLanguage === 'Arabic';
-    // Align all subtitle lines consistently (center for LTR, right for RTL source)
-    const align = srcRTL ? 'right' : 'center';
-    if (originalEl) { originalEl.style.direction = srcRTL ? 'rtl' : 'ltr'; originalEl.style.textAlign = align; }
-    if (englishEl)  { englishEl.style.direction = tgtRTL ? 'rtl' : 'ltr'; englishEl.style.textAlign = align; }
-    if (romajiEl)   romajiEl.style.textAlign = align;
-
-    const showEn = this.settings.showEnglish !== false;
-    const showRm = this.settings.showRomaji === true;
-
-    if (originalEl) {
-      originalEl.textContent = original || '';
-      originalEl.style.display = (original && showJp) ? 'block' : 'none';
-      // Confidence indicator: subtle opacity on translation line (opt-in)
-      // avg_logprob: > -0.3 high, -0.3 to -0.7 medium, < -0.7 low
-      if (englishEl && this.settings.showConfidence && confidence != null && confidence < 0) {
-        let opacity;
-        if (confidence > -0.3) opacity = 1.0;
-        else if (confidence > -0.7) opacity = 0.85;
-        else opacity = 0.65;
-        englishEl.style.opacity = opacity;
-      } else if (englishEl) {
-        englishEl.style.opacity = 1.0;
-      }
+    for (const [el, text, shown, rtl] of lines) {
+      if (!el) continue;
+      if (rtl !== null) el.style.direction = rtl ? 'rtl' : 'ltr';
+      el.style.textAlign = srcRTL ? 'right' : 'center';  // every line aligned like the original
+      el.textContent = text || '';
+      el.style.display = text && shown ? 'block' : 'none';
     }
-    if (romajiEl)   { romajiEl.textContent = romaji || '';     romajiEl.style.display = (romaji && showRm) ? 'block' : 'none'; }
-    if (englishEl)  { englishEl.textContent = english || '';    englishEl.style.display = (english && showEn) ? 'block' : 'none'; }
+    const englishEl = lines[1][0];
+    if (englishEl) englishEl.style.opacity = confidenceOpacity(s.showConfidence, confidence);
   }
 
   updateStatus(message, type = 'info') {
@@ -422,6 +390,15 @@ class SubtitleWindow {
   }
 
   showError(message) { this.isPlaying = false; this.updateStatus(message, 'error'); }
+
+  // A hint about the whole video (it sounds like another language than the one
+  // picked), shown above the lines while they play; '' hides it
+  showNotice(message) {
+    const el = this.element?.querySelector('.subtitle-notice');
+    if (!el) return;
+    el.textContent = message || '';
+    el.style.display = message ? 'block' : 'none';
+  }
 
   showReady() {
     if (!this.element) return;
