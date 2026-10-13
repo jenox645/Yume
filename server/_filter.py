@@ -4,6 +4,8 @@ All detection is stateless except _is_hallucination which reads the mutable
 user_blacklist from _state.
 """
 
+import itertools
+import math
 import os
 import re
 import unicodedata
@@ -42,6 +44,10 @@ HALLUCINATION_PATTERNS = [
     "\u8bf7\u8ba2\u9605",
     "\u611f\u8c22\u89c2\u770b",
     "\u611f\u8c22\u6536\u770b",
+    "\u8c22\u8c22\u89c2\u770b",  # "thanks for watching", heard at the end of a Jay Chou song
+    "\u8b1d\u8b1d\u89c0\u770b",
+    "\u8c22\u8c22\u6536\u770b",
+    "\u8b1d\u8b1d\u6536\u770b",
     "\u5b57\u5e55\u7ec4",
     "\u8c22\u8c22\u5927\u5bb6\u7684\u652f\u6301",
     "\u8bb0\u5f97\u70b9\u8d5e",
@@ -188,26 +194,45 @@ def is_hallucination(text):
     return False
 
 
-# A unit of 1-12 characters repeated 5+ times in a row: Whisper stuck in a loop
-# ("…パープルドリームしてみてみてみてみて…" x150). Real lyrics rarely repeat a
-# word 5 times inside one line without spaces; "la la la la" is caught as a
+# A unit of 1-40 characters repeated 5+ times in a row: Whisper stuck in a loop
+# ("…パープルドリームしてみてみてみてみて…" x150); "la la la la" is caught as a
 # whole-line hallucination above.
 # The repeated unit: a syllable ("みて") up to a phrase ("عن ماذا يتحدث ", 14 chars, which a
 # 12-char limit let through: a 27 s Arabic loop line was shown)
 _LOOP_RE = re.compile(r"(.{1,40}?)\1{4,}", re.DOTALL)
+# ...over at least this many characters. A sung stutter is short and real:
+# "あたし大大大大大大嫌い" and "カイカイカイカイカイはない" in "ダイダイダイダイダイ
+# キライ" were cut to "大嫌い" and hidden. Whisper's loops run on: "みて" x150,
+# "Azumoto-" x44, a 14-char Arabic phrase x30.
+LOOP_MIN_CHARS = 20
 LOOP_LINES = 3  # this many identical consecutive lines = a hallucination loop
+
+
+def _loops(text):
+    """The loops in text: repeats of a unit over LOOP_MIN_CHARS+ characters."""
+    pos = 0
+    while m := _LOOP_RE.search(text, pos):
+        if len(m.group(0)) >= LOOP_MIN_CHARS:
+            yield m
+            pos = m.end()
+        else:  # a longer unit may still start further in ("aaaaab aaaaab …")
+            pos = m.start() + 1
 
 
 def collapse_loops(text):
     """Cut a repetition loop down to one occurrence of the repeated unit."""
-    return _LOOP_RE.sub(r"\1", text).strip()
+    out, pos = [], 0
+    for m in _loops(text):
+        out += [text[pos : m.start()], m.group(1)]
+        pos = m.end()
+    return ("".join(out) + text[pos:]).strip()
 
 
 def _without_loops(text):
     """The text with every loop removed, including a trailing partial repeat
     ("Azumoto-Azumoto-Azum" leaves nothing, not "Azum")."""
     out, pos = [], 0
-    for m in _LOOP_RE.finditer(text):
+    for m in _loops(text):
         out.append(text[pos : m.start()])
         unit, end = m.group(1), m.end()
         k = 0
@@ -228,7 +253,7 @@ def clean_raw_segments(segs):
     out, hide = [], set()
     for i, s in enumerate(segs):
         text = s["text"]
-        if _LOOP_RE.search(text):
+        if next(_loops(text), None):
             # Only what is OUTSIDE the loops counts: words before it ("…チェック
             # してみてみて…") and after it ("ラララララ 君と夢を見ていた")
             if len(re.sub(r"\W", "", _without_loops(text))) < 4:
@@ -240,8 +265,7 @@ def clean_raw_segments(segs):
         if i in hide or i + 1 in hide:
             continue
         a, b = out[i], out[i + 1]
-        if _compact(a["text"]) == _compact(b["text"]) and b["start"] - a["end"] < 2.0:
-            # The same line twice in a row (fewer than a loop): one line over both
+        if is_repeat(a, b):  # one line over both
             out[i] = {**a, "end": b["end"]}
             hide.add(i + 1)
         elif is_fragment(a, b):
@@ -258,6 +282,12 @@ def _compact(text):
     return re.sub(r"[\W_]+", "", text.lower())
 
 
+def is_repeat(seg, nxt):
+    """The same line twice in a row (fewer than a loop): Whisper heard it twice,
+    or both regions heard a line sung across their cut."""
+    return _compact(seg["text"]) == _compact(nxt["text"]) and nxt["start"] - seg["end"] < 2.0
+
+
 def is_fragment(seg, nxt):
     """Whisper wrote the start of the next line as a line of its own: "Место..."
     before "Место встречи Эрмитаж…", "호주 최고한" before "호주 최고 안보기관인…"
@@ -268,6 +298,77 @@ def is_fragment(seg, nxt):
     if not a or len(a) >= len(b):
         return False
     return len(os.path.commonprefix([a, b])) >= FRAGMENT_SHARED * len(a)
+
+
+def boundary_drop(last, first):
+    """A region's last line and the next region's first: the one to hide, or
+    None. Regions are transcribed apart, so a line sung across their cut can
+    come out twice: then `last` is stretched over both and `first` is hidden."""
+    if is_repeat(last, first):
+        last["end"] = first["end"]
+        return first
+    return last if is_fragment(last, first) else None
+
+
+SPLIT_WIDTH = 84  # wider than two subtitle lines (CJK characters count double)...
+SPLIT_MIN_S = 2.0  # ...is cut into at most one piece per this many seconds (timed by width)
+SPLIT_SLACK = 1.25  # a cut at a better place may leave a piece this much wider than even
+_SENTENCE = r"[。！？!?…]+[」』)）\"']*\s*|[.]\s+"
+_CLAUSE = r"[、，；：]\s*|[,;:]\s+"  # "6,5 миллиардов" is a number, not a clause
+# Where a long line may be cut, best first: sentence ends, clauses, words
+_CUTS = [re.compile("|".join(p)) for p in ([_SENTENCE], [_SENTENCE, _CLAUSE], [_SENTENCE, _CLAUSE, r"\s+"])]
+
+
+def _width(text):
+    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
+
+
+def _chunks(text, cut):
+    """text cut after each match of `cut` (the punctuation stays on the left)."""
+    out, pos = [], 0
+    for m in cut.finditer(text):
+        if pos < m.end() < len(text):
+            out.append(text[pos : m.end()])
+            pos = m.end()
+    return [*out, text[pos:]]
+
+
+def split_long(seg):
+    """A line too long to read in one go → pieces, timed by their share of the
+    text. Whisper sometimes writes a whole region as one line: a 384-character
+    Russian rap verse on screen for 21 s, a 123-character news sentence for 20 s."""
+    text, dur, width = seg["text"], seg["end"] - seg["start"], _width(seg["text"])
+    n = min(math.ceil(width / SPLIT_WIDTH), int(dur // SPLIT_MIN_S))
+    if n < 2:
+        return [seg]
+    pieces = None
+    for cut in _CUTS:
+        chunks = _chunks(text, cut)
+        if len(chunks) > 1:
+            pieces = _pieces(chunks, n)
+            # "Соответственно," then 107 columns: too uneven, cut finer
+            if max(_width(p) for p, _ in pieces) <= SPLIT_SLACK * max(SPLIT_WIDTH, width / n):
+                break
+    if not pieces:
+        return [seg]  # no place to cut: never inside a word
+    total, out, t = pieces[-1][1], [], seg["start"]
+    for piece, upto in pieces:
+        end = round(seg["start"] + dur * upto / total, 2) if upto < total else seg["end"]
+        out.append({**seg, "start": t, "end": end, "text": piece})
+        t = end
+    return out
+
+
+def _pieces(chunks, n):
+    """chunks joined into about n pieces of even width: [(piece, width up to its end)]."""
+    widths = list(itertools.accumulate(_width(c) for c in chunks))
+    # cut after the chunk whose running width is closest to each 1/n of the line
+    cuts = {min(range(len(chunks) - 1), key=lambda i: abs(widths[i] - k * widths[-1] / n)) for k in range(1, n)}
+    out, prev = [], 0
+    for c in [*sorted(cuts), len(chunks) - 1]:
+        out.append(("".join(chunks[prev : c + 1]).strip(), widths[c]))
+        prev = c + 1
+    return out
 
 
 def loop_indexes(texts):
