@@ -161,23 +161,36 @@ class SubtitleSession {
       } else if (r.status !== 0) {
         throw new Error(r.data?.error || `Server error ${r.status}`);
       } else if (!started) {
-        this._status('Starting Yume...', 'loading');
-        const s = await SubtitleSession.yume('start');
-        if (aborted()) return;
-        if (!s.ok) throw new Error(s.unavailable ? NOT_RUNNING : s.error || 'Yume could not start');
+        if (!await this._startYume(aborted)) return;
         started = true;
         startedAt = Date.now();
-      } else {
-        const s = await SubtitleSession.yume('status');
-        if (aborted()) return;
-        if (s.ok && s.state === 'stopped' && waited > START_GRACE_S) {
-          throw new Error(s.last_error ? `Yume could not start: ${s.last_error}` : 'Yume stopped while starting — see logs/service.log');
-        }
-        if (waited > START_WAIT_S) throw new Error('Yume is taking too long to start — see logs/service.log');
-        this._status(`${(s.message || 'Starting Yume…').replace(/…$/, '')}... (${waited}s)`, 'loading');
+      } else if (!await this._watchStart(aborted, waited)) {
+        return;
       }
       await new Promise((res) => setTimeout(res, 2000));
     }
+  }
+
+  // Ask the native helper to start Yume. False: aborted meanwhile.
+  async _startYume(aborted) {
+    this._status('Starting Yume...', 'loading');
+    const s = await SubtitleSession.yume('start');
+    if (aborted()) return false;
+    if (!s.ok) throw new Error(s.unavailable ? NOT_RUNNING : s.error || 'Yume could not start');
+    return true;
+  }
+
+  // Yume is starting: show the helper's progress, fail if it stopped or takes
+  // too long. False: aborted meanwhile.
+  async _watchStart(aborted, waited) {
+    const s = await SubtitleSession.yume('status');
+    if (aborted()) return false;
+    if (s.ok && s.state === 'stopped' && waited > START_GRACE_S) {
+      throw new Error(s.last_error ? `Yume could not start: ${s.last_error}` : 'Yume stopped while starting — see logs/service.log');
+    }
+    if (waited > START_WAIT_S) throw new Error('Yume is taking too long to start — see logs/service.log');
+    this._status(`${(s.message || 'Starting Yume…').replace(/…$/, '')}... (${waited}s)`, 'loading');
+    return true;
   }
 
   async _createJob() {
@@ -245,14 +258,7 @@ class SubtitleSession {
       this.notice = snap.notice || '';
       window.dispatchEvent(new CustomEvent('display-notice', { detail: { message: this.notice } }));
     }
-    if (changed) {
-      this.cues = [...this.segments.values()].sort((a, b) => a.start - b.start);
-      if (!this._readySignaled && this.cues.length) {
-        this._readySignaled = true;
-        window.dispatchEvent(new CustomEvent('prefetch-ready'));
-      }
-      this._render(true);
-    }
+    if (changed) this._cuesChanged();
     const p = snap.progress || {};
     window.dispatchEvent(new CustomEvent('chunk-progress', {
       detail: {
@@ -261,16 +267,30 @@ class SubtitleSession {
       },
     }));
     if (!this.cues.length) {
-      const allFailed = snap.status === 'done' && p.regions_total > 0 && p.regions_failed === p.regions_total;
-      const msg = allFailed
-        ? 'Transcription failed — see Diagnostics in the popup; press Enable again to retry'
-        : {
-          starting: 'Starting...', downloading: 'Downloading audio...', separating: 'Separating the vocals...',
-          transcribing: 'Transcribing...', translating: 'Translating...',
-          done: 'No vocals detected in this video',
-        }[snap.status];
-      if (msg) this._status(msg, allFailed ? 'error' : snap.status === 'done' ? 'info' : 'loading');
+      const [msg, type] = SubtitleSession.waitingMessage(snap.status, p);
+      if (msg) this._status(msg, type);
     }
+  }
+
+  _cuesChanged() {
+    this.cues = [...this.segments.values()].sort((a, b) => a.start - b.start);
+    if (!this._readySignaled && this.cues.length) {
+      this._readySignaled = true;
+      window.dispatchEvent(new CustomEvent('prefetch-ready'));
+    }
+    this._render(true);
+  }
+
+  // What the window says while there is no line yet: [message, type]
+  static waitingMessage(status, p) {
+    if (status === 'done' && p.regions_total > 0 && p.regions_failed === p.regions_total) {
+      return ['Transcription failed — see Diagnostics in the popup; press Enable again to retry', 'error'];
+    }
+    const msg = {
+      starting: 'Starting...', downloading: 'Downloading audio...', separating: 'Separating the vocals...',
+      transcribing: 'Transcribing...', translating: 'Translating...', done: 'No vocals detected in this video',
+    }[status];
+    return [msg, status === 'done' ? 'info' : 'loading'];
   }
 
   _fail(message) {
