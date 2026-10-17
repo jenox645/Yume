@@ -94,6 +94,35 @@ jobs:
           name: coverage-report
           path: reports/coverage.xml
 
+  browser:
+    name: Extension in a browser
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Install the server's packages (no Whisper: the test fakes it)
+        run: |
+          grep -vE '^(faster-whisper|av)' server/requirements.txt > /tmp/requirements-e2e.txt
+          pip install -r /tmp/requirements-e2e.txt
+
+      - name: Install Playwright and Chromium
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Real extension against the real server code
+        run: npm run e2e
+
   quality:
     name: Code Quality
     runs-on: ubuntu-latest
@@ -208,4 +237,4 @@ jobs:
         run: npm install
 
       - name: Run ESLint
-        run: npx eslint extension/ tests/js/
+        run: npx eslint extension/ tests/js/ tests/e2e/

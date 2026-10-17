@@ -40,10 +40,14 @@ On Windows `pytest` needs no special flags (the server no longer rebinds stdout 
 ### JavaScript (extension)
 
 ```bash
-npm install                    # ESLint
-npx eslint extension/ tests/js/  # Lint JS
+npm install                    # ESLint, Playwright
+npx eslint extension/ tests/js/ tests/e2e/  # Lint JS
 npm test                       # node --test tests/js/ (VM-evaluated extension scripts)
+npx playwright install chromium  # once, for the browser test
+npm run e2e                    # the real extension in a browser against the real server code (fake Whisper/LLM/download)
 ```
+
+`npm run e2e` uses Edge on Windows (Playwright's Chromium may fail there with "side-by-side configuration is incorrect"), Chromium elsewhere; `BROWSER=chromium|msedge|chrome` picks one, `HEADED=1` shows it. It needs Python with the server's packages (faster-whisper not required).
 
 ### Running
 

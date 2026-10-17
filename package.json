@@ -2,10 +2,12 @@
   "private": true,
   "scripts": {
     "test": "node --test tests/js/",
-    "lint": "eslint extension/ tests/js/"
+    "lint": "eslint extension/ tests/js/ tests/e2e/",
+    "e2e": "node --test tests/e2e/extension.e2e.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "eslint": "^10.12.0"
+    "eslint": "^10.12.0",
+    "playwright": "^1.61.1"
   }
 }
