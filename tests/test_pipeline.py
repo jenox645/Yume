@@ -1044,6 +1044,15 @@ def test_audio_that_is_not_16k_mono_is_converted_by_ffmpeg(tmp_path):
         ("2人", "Futari"),
         ("3人が", "3 nin ga"),
         ("20日", "Hatsuka"),
+        ("第2回の会議", "Dai 2 kai no kaigi"),  # was "Dai2 kai"
+        ("20歳", "20 sai"),  # was "20sai"
+        ("第1位", "Dai 1 i"),  # was "Dai1i"
+        ("第3話", "Dai 3 wa"),  # was "Dai3 hanashi"
+        ("MP3プレーヤー", "MP3 pureeyaa"),  # Latin words with digits stay whole
+        ("4Kテレビ", "4K terebi"),
+        ("この3つが大事", "Kono mittsu ga daiji"),  # was "3tsu"
+        ("4つ目かな", "Yottsu me ka na"),
+        ("1個", "1 ko"),  # was "1ko"
     ],
 )
 def test_japanese_dates_and_people_are_read_correctly(ja, romaji):
