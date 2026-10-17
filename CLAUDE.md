@@ -42,7 +42,7 @@ On Windows `pytest` needs no special flags (the server no longer rebinds stdout 
 ```bash
 npm install                    # ESLint, Playwright
 npx eslint extension/ tests/js/ tests/e2e/  # Lint JS
-npm test                       # node --test tests/js/ (VM-evaluated extension scripts)
+npm test                       # node --test tests/js/extension.test.mjs (VM-evaluated extension scripts)
 npx playwright install chromium  # once, for the browser test
 npm run e2e                    # the real extension in a browser against the real server code (fake Whisper/LLM/download)
 ```

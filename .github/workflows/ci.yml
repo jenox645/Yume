@@ -42,7 +42,7 @@ jobs:
           for f in extension/js/*.js extension/popup.js; do node --check "$f"; done
 
       - name: JavaScript unit tests
-        run: node --test tests/js/
+        run: npm test
 
       - name: JSON validity
         run: |

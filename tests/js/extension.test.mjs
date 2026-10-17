@@ -1,6 +1,6 @@
 // Unit tests for the extension's logic. The extension has no build step, so
 // each script is evaluated as-is in a VM context with minimal browser stubs.
-// Run: npm test   (node --test tests/js/)
+// Run: npm test
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

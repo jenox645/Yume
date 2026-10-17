@@ -1,7 +1,7 @@
 {
   "private": true,
   "scripts": {
-    "test": "node --test tests/js/",
+    "test": "node --test tests/js/extension.test.mjs",
     "lint": "eslint extension/ tests/js/ tests/e2e/",
     "e2e": "node --test tests/e2e/extension.e2e.mjs"
   },
