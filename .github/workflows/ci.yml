@@ -78,7 +78,7 @@ jobs:
       - name: Install test deps
         # numpy: the region planner and audio loader work on numpy arrays
         # (pinned to match server/requirements.txt)
-        run: pip install pytest pytest-cov numpy==2.4.3
+        run: pip install pytest pytest-cov numpy==2.4.3 pyyaml==6.0.3
 
       - name: Run tests with coverage
         shell: bash
@@ -110,7 +110,7 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install the server's packages (no Whisper: the test fakes it)
+      - name: Install the server's packages (without Whisper, which the test fakes)
         run: |
           grep -vE '^(faster-whisper|av)' server/requirements.txt > /tmp/requirements-e2e.txt
           pip install -r /tmp/requirements-e2e.txt
