@@ -156,9 +156,11 @@
   font-style: normal;
 }
 
-.subtitle-status.status-warning {
+/* About the whole video (it sounds like another language): stays while lines play */
+.subtitle-notice {
+  font-size: 12px;
   color: rgba(255, 200, 110, 0.95);
-  font-style: normal;
+  padding: 2px 0 6px;
 }
 
 /* ============================================================================

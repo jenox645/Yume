@@ -271,6 +271,23 @@ class Job:
             and ((self.target and s["translation"] is None) or (s["romaji"] is None and self._needs_llm_roma()))
         ]
 
+    def llm_batch(self):
+        """The next LLM work for this job: ("translate" | "romanize", lines), or (None, [])."""
+        # Lines at/after the playhead first, then the rest in order
+        pending = sorted(self.pending_llm(), key=lambda s: (s["end"] < self.playhead, s["start"]))
+        need_tr = [s for s in pending if self.target and s["translation"] is None]
+        if not need_tr:
+            need_roma = [s for s in pending if s["romaji"] is None]
+            return ("romanize", need_roma[:BATCH_SIZE]) if need_roma else (None, [])
+        # Lines due within NEAR_S, and the very first lines of a job, go in a
+        # small batch so they are ready in seconds; the rest goes in full
+        # batches (10 lines take ~25 s on a CPU-only llama.cpp)
+        near = [s for s in need_tr if s["start"] < self.playhead + NEAR_S and s["end"] >= self.playhead]
+        first = not any(s["translation"] for s in self.segments.values())
+        if near or first:
+            return "translate", (near or need_tr)[:NEAR_BATCH]
+        return "translate", need_tr[:BATCH_SIZE]
+
     def set_regions(self, regions, cached):
         """Install the region plan. Regions already done in this job (a stream
         preview shown before the plan existed) are kept; regions present in
@@ -301,26 +318,10 @@ class Job:
         self.add_region(0, raw)
 
     def snapshot(self, since=0, events=False):
+        """What a poll returns: the job state and the segments changed after
+        `since` (a first poll skips hidden ones: the client has nothing to drop)."""
         with self.lock:
-            segs = []
-            for s in self.segments.values():
-                if s["rev"] <= since or (since == 0 and s["hidden"]):
-                    continue
-                segs.append(
-                    {
-                        "id": s["id"],
-                        "start": s["start"],
-                        "end": s["end"],
-                        "text": s["text"],
-                        "translation": s["translation"] or "",
-                        "romaji": s["romaji"] or "",
-                        "confidence": s["confidence"],
-                        "hidden": s["hidden"],
-                    }
-                )
-            visible = [s for s in self.segments.values() if not s["hidden"]]
-            done_regions = sum(st in ("done", "failed") for st in self.region_state)
-            failed_regions = sum(st == "failed" for st in self.region_state)
+            segs = [_public(s) for s in self.segments.values() if s["rev"] > since and not (since == 0 and s["hidden"])]
             out = {
                 "id": self.id,
                 "status": self.status,
@@ -330,23 +331,38 @@ class Job:
                 "notice": self.notice,
                 "language": self.language,
                 "target": self.target,
-                "progress": {
-                    "regions_total": len(self.regions),
-                    "regions_done": done_regions,
-                    "regions_failed": failed_regions,
-                    # Seconds of the track already transcribed — lets the client tell
-                    # "no line here" apart from "not transcribed yet".
-                    "covered": [list(r) for r, st in zip(self.regions, self.region_state) if st in ("done", "failed")],
-                    "lines": len(visible),
-                    "translated": sum(1 for s in visible if s["translation"] is not None)
-                    if self.target
-                    else len(visible),
-                },
+                "progress": self._progress(),
                 "segments": segs,
             }
             if events:
                 out["events"] = list(self.events)
             return out
+
+    def _progress(self):
+        visible = [s for s in self.segments.values() if not s["hidden"]]
+        ended = [st in ("done", "failed") for st in self.region_state]
+        return {
+            "regions_total": len(self.regions),
+            "regions_done": sum(ended),
+            "regions_failed": self.region_state.count("failed"),
+            # Seconds of the track already transcribed — lets the client tell
+            # "no line here" apart from "not transcribed yet".
+            "covered": [list(r) for r, e in zip(self.regions, ended) if e],
+            "lines": len(visible),
+            "translated": sum(s["translation"] is not None for s in visible) if self.target else len(visible),
+        }
+
+
+_PUBLIC_KEYS = ("id", "start", "end", "text", "confidence", "hidden")
+
+
+def _public(seg):
+    """A segment as clients see it ('' for a translation or romaji still to come)."""
+    return {
+        **{k: seg[k] for k in _PUBLIC_KEYS},
+        "translation": seg["translation"] or "",
+        "romaji": seg["romaji"] or "",
+    }
 
 
 def _model_id():
@@ -709,24 +725,9 @@ class JobManager:
             with job.lock:
                 if now - job.last_poll > ACTIVE_S or now < job.llm_backoff_until:
                     continue
-                pending = job.pending_llm()
-                if not pending:
-                    continue
-                # Lines at/after the playhead first, then the rest in order
-                pending.sort(key=lambda s: (s["end"] < job.playhead, s["start"]))
-                need_tr = [s for s in pending if job.target and s["translation"] is None]
-                if need_tr:
-                    # Lines due within NEAR_S, and the very first lines of a job, go
-                    # in a small batch so they are ready in seconds; the rest goes in
-                    # full batches (10 lines take ~25 s on a CPU-only llama.cpp)
-                    near = [s for s in need_tr if s["start"] < job.playhead + NEAR_S and s["end"] >= job.playhead]
-                    first = not any(s["translation"] for s in job.segments.values())
-                    if near or first:
-                        return job, "translate", (near or need_tr)[:NEAR_BATCH]
-                    return job, "translate", need_tr[:BATCH_SIZE]
-                need_roma = [s for s in pending if s["romaji"] is None][:BATCH_SIZE]
-                if need_roma:
-                    return job, "romanize", need_roma
+                kind, batch = job.llm_batch()
+                if batch:
+                    return job, kind, batch
         return None, None, None
 
     def _llm_loop(self):

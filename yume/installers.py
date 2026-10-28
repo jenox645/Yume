@@ -11,6 +11,7 @@ import tarfile
 import threading
 import time
 import zipfile
+from pathlib import Path
 
 from yume.constants import BASE_DIR, TOOLS_DIR, IS_WIN, IS_MAC, IS_LIN, EXE, HEALTH_PATH_OLLAMA, DOWNLOAD_URLS
 from yume.ui import C, error, info, success, warn
@@ -235,10 +236,21 @@ def install_ffmpeg() -> bool:
     return _ffmpeg_runs()
 
 
-def install_deno() -> bool:
-    from yume.network import download_file
+BGUTIL_VERSION = "1.3.1"
 
+
+def install_deno() -> bool:
+    """Deno, the YouTube PO token plugin for yt-dlp, and the plugin's token
+    server. Only Deno itself is required; the rest warns when it fails."""
     TOOLS_DIR.mkdir(parents=True, exist_ok=True)
+    if not _install_deno_exe():
+        return False
+    _install_pot_plugin()
+    _setup_bgutil_server()
+    return True
+
+
+def _install_deno_exe() -> bool:
     zp = TOOLS_DIR / "deno.zip"
     if not _download_verified("deno", zp, "Deno"):
         return False
@@ -250,10 +262,13 @@ def install_deno() -> bool:
         if de.exists() and not IS_WIN:
             os.chmod(de, UNIX_EXEC_MODE)
         success("Deno extracted")
+        return True
     except Exception as e:
         error(f"Failed: {e}")
         return False
 
+
+def _install_pot_plugin() -> None:
     info("Installing YouTube PO token plugin (bgutil-ytdlp-pot-provider) + yt-dlp (pip)...")
     info(f"{C.DIM}This plugin uses Deno to solve YouTube's bot-detection challenges.{C.RESET}")
     info(f"{C.DIM}yt-dlp is left unpinned on purpose: YouTube changes break old versions within weeks.{C.RESET}")
@@ -261,7 +276,7 @@ def install_deno() -> bool:
         r = _run(
             [
                 sys.executable, "-m", "pip", "install", "-q", "--no-warn-script-location", "-U",
-                "yt-dlp", "bgutil-ytdlp-pot-provider==1.3.1",
+                "yt-dlp", f"bgutil-ytdlp-pot-provider=={BGUTIL_VERSION}",
             ],
             timeout=180,
         )  # fmt: skip
@@ -272,52 +287,56 @@ def install_deno() -> bool:
     except Exception as e:
         warn(f"PO token plugin install failed: {e}")
 
+
+def _setup_bgutil_server() -> None:
+    """The plugin's token server (run by Deno), from its release source."""
+    from yume.network import download_file
+
     info("Setting up bgutil PO token server...")
     bgutil_dir = TOOLS_DIR / "bgutil-ytdlp-pot-provider"
-    server_dir = bgutil_dir / "server"
-    main_ts = server_dir / "src" / "main.ts"
-
+    main_ts = bgutil_dir / "server" / "src" / "main.ts"
     if main_ts.exists():
         success("bgutil server already set up")
+        return
+    zip_url = f"https://github.com/Brainicism/bgutil-ytdlp-pot-provider/archive/refs/tags/{BGUTIL_VERSION}.zip"
+    zip_path = TOOLS_DIR / "bgutil.zip"
+    if not download_file(zip_url, zip_path, "bgutil server"):
+        warn("bgutil server download failed")
+        return
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            _safe_extractall(zf, TOOLS_DIR)  # nosec B202 — zip-slip checked inside
+        zip_path.unlink(missing_ok=True)
+        extracted = TOOLS_DIR / f"bgutil-ytdlp-pot-provider-{BGUTIL_VERSION}"
+        if extracted.exists():
+            if bgutil_dir.exists():
+                shutil.rmtree(bgutil_dir)
+            extracted.rename(bgutil_dir)
+        success("bgutil server extracted")
+    except Exception as e:
+        error(f"Extract failed: {e}")
+        zip_path.unlink(missing_ok=True)
+        return
+    if main_ts.exists():
+        _deno_install_deps(bgutil_dir / "server")
     else:
-        zip_url = "https://github.com/Brainicism/bgutil-ytdlp-pot-provider/archive/refs/tags/1.3.1.zip"
-        zip_path = TOOLS_DIR / "bgutil.zip"
-        if download_file(zip_url, zip_path, "bgutil server"):
-            try:
-                with zipfile.ZipFile(zip_path) as zf:
-                    _safe_extractall(zf, TOOLS_DIR)  # nosec B202 — zip-slip checked inside
-                zip_path.unlink(missing_ok=True)
-                extracted = TOOLS_DIR / "bgutil-ytdlp-pot-provider-1.3.1"
-                if extracted.exists():
-                    if bgutil_dir.exists():
-                        shutil.rmtree(bgutil_dir)
-                    extracted.rename(bgutil_dir)
-                success("bgutil server extracted")
-                if main_ts.exists():
-                    deno = find_tool("deno") or "deno"
-                    info("Installing bgutil server dependencies (deno install)...")
-                    try:
-                        r = _run(
-                            [deno, "install", "--allow-scripts=npm:canvas", "--frozen"],
-                            cwd=str(server_dir),
-                            timeout=180,
-                        )
-                        if r.returncode != 0:
-                            r = _run([deno, "install", "--allow-scripts=npm:canvas"], cwd=str(server_dir), timeout=180)
-                        if r.returncode == 0:
-                            success("bgutil server dependencies installed")
-                        else:
-                            warn("deno install failed — server may not start")
-                    except Exception as e:
-                        warn(f"deno install failed: {e}")
-                else:
-                    warn("main.ts not found after extraction")
-            except Exception as e:
-                error(f"Extract failed: {e}")
-                zip_path.unlink(missing_ok=True)
+        warn("main.ts not found after extraction")
+
+
+def _deno_install_deps(server_dir: Path) -> None:
+    deno = find_tool("deno") or "deno"
+    info("Installing bgutil server dependencies (deno install)...")
+    try:
+        # The lockfile first; without it if the lockfile no longer resolves
+        r = _run([deno, "install", "--allow-scripts=npm:canvas", "--frozen"], cwd=str(server_dir), timeout=180)
+        if r.returncode != 0:
+            r = _run([deno, "install", "--allow-scripts=npm:canvas"], cwd=str(server_dir), timeout=180)
+        if r.returncode == 0:
+            success("bgutil server dependencies installed")
         else:
-            warn("bgutil server download failed")
-    return True
+            warn("deno install failed — server may not start")
+    except Exception as e:
+        warn(f"deno install failed: {e}")
 
 
 def install_ollama() -> bool:

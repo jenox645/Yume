@@ -326,55 +326,59 @@ async function checkSubtitleStatus() {
 
 async function checkServers() {
   const whisperEl = document.getElementById('whisperStatus');
-  const translationEl = document.getElementById('translationStatus');
-  const whisperInfo = document.getElementById('whisperInfo');
-  const translationInfo = document.getElementById('translationInfo');
   if (!whisperEl.className.includes('connected')) whisperEl.className = 'status-indicator checking';
 
   const h = await api({ path: '/health', timeout: 5000 });
   const st = h.data?.status;
-  whisperEl.className = 'status-indicator ' + (st === 'ready' ? 'connected' : st === 'loading' ? 'checking' : 'disconnected');
-  whisperInfo.textContent = st === 'error' ? 'Model failed to load — see whisper_server.log'
-    : st === 'loading' ? 'Loading model...'
-    : st === 'ready' ? `${h.data.device || '?'} | ${h.data.model || '?'}`
-    : (h.data?.error || 'Not reachable');
-
-  if (st) {
-    // The server talks to the translation LLM; ask it whether that works.
-    const t = await api({ path: '/translation/health', timeout: 8000 });
-    translationEl.className = 'status-indicator ' + (t.data?.up ? 'connected' : 'disconnected');
-    translationInfo.textContent = t.data?.address
-      ? `${t.data.backend} @ ${t.data.address}${t.data.up ? '' : ' — not reachable'}` : 'unknown';
-  } else {
-    translationEl.className = 'status-indicator disconnected';
-    translationInfo.textContent = 'via Whisper server (offline)';
-  }
+  // The server talks to the translation LLM; ask it whether that works.
+  const t = st ? await api({ path: '/translation/health', timeout: 8000 }) : null;
   // Start/Stop through the native helper (one-click start). Each request
   // launches a Python process: ask when the server is down (to offer Start
   // and show its progress), otherwise once per popup to know about Stop.
   if (!st || !_svcStatus) _svcStatus = await yume('status');
   const svc = _svcStatus;
-  const startBtn = document.getElementById('serviceStart');
-  const stopBtn = document.getElementById('serviceStop');
   const starting = svc.ok && svc.state === 'starting';
-  startBtn.style.display = svc.ok && !st && !starting ? '' : 'none';
-  stopBtn.style.display = svc.ok && svc.managed && svc.state !== 'stopped' ? '' : 'none';
-  if (starting && !st) whisperInfo.textContent = svc.message || 'Starting...';
 
+  const whisper = whisperView(h.data);
+  const translation = translationView(t?.data, st);
+  whisperEl.className = 'status-indicator ' + whisper.state;
+  document.getElementById('whisperInfo').textContent = starting && !st ? svc.message || 'Starting...' : whisper.text;
+  document.getElementById('translationStatus').className = 'status-indicator ' + translation.state;
+  document.getElementById('translationInfo').textContent = translation.text;
+  document.getElementById('serviceStart').style.display = svc.ok && !st && !starting ? '' : 'none';
+  document.getElementById('serviceStop').style.display = svc.ok && svc.managed && svc.state !== 'stopped' ? '' : 'none';
   const hint = document.getElementById('serverHint');
-  const down = !st || !translationEl.classList.contains('connected');
-  if (!st && starting) {
-    hint.textContent = 'Yume is starting — the first start can take a few minutes.';
-  } else if (!st && svc.ok) {
-    hint.textContent = (svc.last_error ? `Last start failed: ${svc.last_error}. ` : '') +
+  hint.textContent = serverHint(st, svc, starting);
+  hint.style.display = !st || translation.state !== 'connected' ? '' : 'none';
+}
+
+// The Whisper server's light and line from its /health answer
+function whisperView(health) {
+  const st = health?.status;
+  if (st === 'ready') return { state: 'connected', text: `${health.device || '?'} | ${health.model || '?'}` };
+  if (st === 'loading') return { state: 'checking', text: 'Loading model...' };
+  if (st === 'error') return { state: 'disconnected', text: 'Model failed to load — see whisper_server.log' };
+  return { state: 'disconnected', text: health?.error || 'Not reachable' };
+}
+
+function translationView(t, whisperUp) {
+  if (!whisperUp) return { state: 'disconnected', text: 'via Whisper server (offline)' };
+  return {
+    state: t?.up ? 'connected' : 'disconnected',
+    text: t?.address ? `${t.backend} @ ${t.address}${t.up ? '' : ' — not reachable'}` : 'unknown',
+  };
+}
+
+// What to do when something is down (shown only then)
+function serverHint(whisperUp, svc, starting) {
+  if (whisperUp) return 'Translation server not reachable — check it in the Yume CLI (Settings → Translation settings).';
+  if (starting) return 'Yume is starting — the first start can take a few minutes.';
+  if (svc.ok) {
+    return (svc.last_error ? `Last start failed: ${svc.last_error}. ` : '') +
       'Press Enable on a video (or Start Yume) — it starts by itself.';
-  } else if (!st) {
-    hint.textContent = 'Server offline? Start Yume first (double-click START_YUME), then click Refresh. ' +
-      'Tip: "python pocket_yume.py autostart on" lets Enable start it for you.';
-  } else {
-    hint.textContent = 'Translation server not reachable — check it in the Yume CLI (Settings → Translation settings).';
   }
-  hint.style.display = down ? '' : 'none';
+  return 'Server offline? Start Yume first (double-click START_YUME), then click Refresh. ' +
+    'Tip: "python pocket_yume.py autostart on" lets Enable start it for you.';
 }
 
 let _svcStatus = null;

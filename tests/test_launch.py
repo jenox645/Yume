@@ -195,3 +195,78 @@ def test_missing_packages_are_offered():
     r = Launch(missing=["pypinyin==0.55.0"], yns=[True]).go()
     r.installed.assert_called_once()
     assert r.started == ["llamacpp", "whisper"]
+
+
+# ── runtime menu ──────────────────────────────────────────────────────────────
+
+
+class FakeProcs:
+    def __init__(self, exits=()):
+        self.procs = [(n, types.SimpleNamespace(poll=lambda c=c: c, returncode=c)) for n, c in exits]
+        self.stopped = False
+
+    def __iter__(self):
+        return iter(list(self.procs))
+
+    def __bool__(self):
+        return bool(self.procs)
+
+    def names(self):
+        return [n for n, _ in self.procs]
+
+    def stop(self, cfg, timeout=1):
+        self.stopped = True
+
+
+def runtime(choices, yns=(), procs=None, tmp=None):
+    """Drive the runtime menu; returns (procs, the actions called)."""
+    import yume.benchmark
+    import yume.menus
+
+    procs = procs if procs is not None else FakeProcs([("Whisper", None)])
+    called, choices, yns = [], iter(choices), iter(yns)
+    cfg = {"whisper_host": "127.0.0.1", "whisper_port": 5001, "translation_host": "127.0.0.1", "translation_port": 5000}
+    with ExitStack() as st:
+        for mod, name in [
+            (yume.menus, "cli_server_stats"),
+            (yume.menus, "_menu_blacklist"),
+            (yume.menus, "_menu_whisper_model"),
+            (yume.menus, "_test_translation"),
+            (yume.benchmark, "benchmark_whisper"),
+        ]:
+            st.enter_context(patch.object(mod, name, lambda cfg, name=name: called.append(name)))
+        st.enter_context(patch.object(launch, "ask_arrow", lambda *a, **k: next(choices)))
+        st.enter_context(patch.object(launch, "ask_yn", lambda *a, **k: next(yns)))
+        st.enter_context(patch.object(launch, "check_server", lambda *a: {"up": True}))
+        st.enter_context(patch.object(launch, "check_translation_server", lambda *a: {"up": False}))
+        st.enter_context(patch.object(launch, "LOGS_DIR", tmp or Path("does-not-exist")))
+        for name in ("clear", "panel", "pause", "section"):
+            st.enter_context(patch.object(launch, name, lambda *a, **k: None))
+        launch._runtime_menu(cfg, procs, "llamacpp")
+    return procs, called
+
+
+def test_runtime_menu_runs_each_tool_and_stop_asks_first():
+    procs, called = runtime([0, 1, 2, 3, 4, 5, 6, 6], yns=[False, True])
+    assert called == ["cli_server_stats", "_menu_blacklist", "_menu_whisper_model", "_test_translation",
+                      "benchmark_whisper"]  # fmt: skip
+    assert procs.stopped  # the second Stop was confirmed
+
+
+def test_runtime_menu_reports_a_crashed_server():
+    procs = FakeProcs([("Whisper", None), ("Translation", 1)])
+    # keep going without the dead one, then stop
+    procs, _called = runtime([6], yns=[False, True], procs=procs)
+    assert procs.names() == ["Whisper"] and procs.stopped
+    procs = FakeProcs([("Whisper", None), ("Translation", 1)])
+    procs, called = runtime([], yns=[True], procs=procs)  # stop at once
+    assert procs.stopped and called == []
+
+
+def test_runtime_logs_show_yume_lines_not_health_checks(tmp_path, capsys):
+    (tmp_path / "whisper_server.log").write_text(
+        "GET /health HTTP/1.1 200\n[Yume] Region 1/6: 16 lines\nPOST /jobs HTTP/1.1 200\n", encoding="utf-8"
+    )
+    runtime([5, 6], yns=[True], tmp=tmp_path)
+    out = capsys.readouterr().out
+    assert "[Yume] Region 1/6" in out and "POST /jobs" in out and "GET /health" not in out

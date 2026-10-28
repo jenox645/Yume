@@ -147,6 +147,7 @@
   window.addEventListener('display-subtitle', toWindow((w, d) => w.updateSubtitle(d.original, d.english, d.romaji, d.confidence)));
   window.addEventListener('display-error', toWindow((w, d) => w.showError(d.message)));
   window.addEventListener('display-status', toWindow((w, d) => w.updateStatus(d.message, d.type)));
+  window.addEventListener('display-notice', toWindow((w, d) => w.showNotice(d.message)));
   window.addEventListener('chunk-progress', toWindow((w, d) => w.updateChunkProgress(d)));
   window.addEventListener('subtitle-window-closed', () => stop());
 

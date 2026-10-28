@@ -52,6 +52,33 @@ def fetch_published_sha256(checksums_url: str, filename: str) -> str | None:
     return hexes[0] if len(hexes) == 1 else None  # single-file sum without a name
 
 
+def _room_for(dest: Path, total: int, label: str) -> bool:
+    """Enough disk space for a download of `total` bytes (with room to spare)."""
+    from yume.hardware import disk_free_gb
+
+    free = disk_free_gb(dest.parent) * GiB
+    if free >= total * 1.5:
+        return True
+    print(f"\r  {C.RED}✗{C.RESET}  {label} — Not enough disk space" + " " * 20)
+    info(f"Need ~{total * 1.5 / MiB:.0f} MB, have {free / MiB:.0f} MB free")
+    return False
+
+
+def _progress_line(dl: int, total: int, elapsed: float) -> str:
+    """The download's progress line: bar, size, speed and ETA (size and speed
+    only when the server sent no length)."""
+    speed = dl / max(0.1, elapsed)
+    speed_mb = speed / MiB
+    if total <= 0:
+        return f"\r  {C.CYAN}↓{C.RESET}  {dl / MiB:.1f} MB  {speed_mb:.1f} MB/s  "
+    pct = min(100, dl * 100 // total)
+    remaining = (total - dl) / speed if speed > 0 else 0
+    eta = f"{int(remaining // 60)}m{int(remaining % 60):02d}s" if remaining > 60 else f"{int(remaining)}s"
+    filled = 20 * pct // 100
+    bar = f"{C.GREEN}{'█' * filled}{C.DIM}{'░' * (20 - filled)}{C.RESET}"
+    return f"\r  {C.CYAN}↓{C.RESET} {bar} {pct:3d}%  {dl / MiB:.1f}/{total / MiB:.1f} MB  {speed_mb:.1f} MB/s  ETA {eta}   "
+
+
 def download_file(url: str, dest, label: str = "Downloading", sha256: str | None = None) -> bool:
     """Download a file with progress bar, speed, and ETA display.
 
@@ -74,14 +101,8 @@ def download_file(url: str, dest, label: str = "Downloading", sha256: str | None
             total = int(resp.headers.get("content-length", 0))
             dl = 0
             t0 = time.time()
-            if total > 0:
-                from yume.hardware import disk_free_gb
-
-                free = disk_free_gb(dest.parent) * GiB
-                if free < total * 1.5:
-                    print(f"\r  {C.RED}✗{C.RESET}  {label} — Not enough disk space" + " " * 20)
-                    info(f"Need ~{total * 1.5 / MiB:.0f} MB, have {free / MiB:.0f} MB free")
-                    return False
+            if total > 0 and not _room_for(dest, total, label):
+                return False
             digest = hashlib.sha256()
             with open(part, "wb") as f:
                 while True:
@@ -91,33 +112,8 @@ def download_file(url: str, dest, label: str = "Downloading", sha256: str | None
                     f.write(chunk)
                     digest.update(chunk)
                     dl += len(chunk)
-                    elapsed = max(0.1, time.time() - t0)
-                    speed = dl / elapsed
-                    speed_mb = speed / MiB
-                    if total > 0:
-                        pct = min(100, dl * 100 // total)
-                        remaining = (total - dl) / speed if speed > 0 else 0
-                        eta_str = (
-                            f"{int(remaining // 60)}m{int(remaining % 60):02d}s"
-                            if remaining > 60
-                            else f"{int(remaining)}s"
-                        )
-                        mb = dl / MiB
-                        tmb = total / MiB
-                        bar_w = 20
-                        filled = bar_w * pct // 100
-                        bar = f"{C.GREEN}{'█' * filled}{C.DIM}{'░' * (bar_w - filled)}{C.RESET}"
-                        sys.stdout.write(
-                            f"\r  {C.CYAN}↓{C.RESET} {bar} {pct:3d}%  "
-                            f"{mb:.1f}/{tmb:.1f} MB  "
-                            f"{speed_mb:.1f} MB/s  "
-                            f"ETA {eta_str}   "
-                        )
-                        sys.stdout.flush()
-                    else:
-                        mb = dl / MiB
-                        sys.stdout.write(f"\r  {C.CYAN}↓{C.RESET}  {mb:.1f} MB  {speed_mb:.1f} MB/s  ")
-                        sys.stdout.flush()
+                    sys.stdout.write(_progress_line(dl, total, time.time() - t0))
+                    sys.stdout.flush()
         if total and dl < total:
             raise OSError(f"connection closed after {dl / MiB:.1f} of {total / MiB:.1f} MB")
         if sha256 and digest.hexdigest() != sha256.lower():
