@@ -147,7 +147,8 @@ def romanize_japanese(text):
         readings.append(_counter_reading(m, after_month=text[: m.start()].endswith("月")))
         return _JA_PLACEHOLDER.format(len(readings) - 1)
 
-    held = _JA_COUNTER.sub(hold, text)
+    # ・ separates words (ジョン・レノン); cutlet wrote it as "/": "Jon/Renon"
+    held = _JA_COUNTER.sub(hold, text.replace("・", " "))
     roma = _romanize_japanese_words(held)
     if roma is None or not readings:
         return roma
