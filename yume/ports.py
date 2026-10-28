@@ -94,52 +94,50 @@ def find_free_port(start: int = DEFAULT_TRANSLATION_PORT, exclude: set | None = 
     return None
 
 
-def get_port_process(port: int) -> tuple[int | None, str | None]:
-    """Find who owns a port. Returns (pid, name) or (None, None)."""
+def _tool_lines(cmd: list[str], timeout: int = 10) -> list[str]:
+    """A command's output lines; none when it fails."""
     from yume.utils import _run
 
+    r = _run(cmd, timeout=timeout)
+    return (r.stdout or "").splitlines() if r.returncode == 0 else []
+
+
+def _listening_pid(port: int) -> int | None:
+    """The PID of the process LISTENING on the port (never a client connected to it)."""
+    on_port = re.compile(rf":{port}(?:\s|$)")
+    if IS_WIN:
+        for line in _tool_lines(["netstat", "-ano"]):
+            parts = line.split()
+            if on_port.search(line) and "LISTENING" in line and parts[-1].isdigit() and int(parts[-1]):
+                return int(parts[-1])
+        return None
+    # -sTCP:LISTEN: plain "lsof -ti :PORT" also lists clients (e.g. the browser)
+    pids = [ln.strip() for ln in _tool_lines(["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"]) if ln.strip()]
+    if pids and pids[0].isdigit():
+        return int(pids[0])
+    for line in _tool_lines(["ss", "-tlnp"]):
+        m = re.search(r"pid=(\d+)", line) if on_port.search(line) else None
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def _process_name(pid: int) -> str:
+    if IS_WIN:
+        rows = _tool_lines(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"], timeout=5)
+        return next((row.split(",")[0].strip('"') for row in rows if str(pid) in row and "," in row), "unknown")
+    lines = _tool_lines(["ps", "-p", str(pid), "-o", "comm="], timeout=5)
+    return lines[0].strip() if lines else "unknown"
+
+
+def get_port_process(port: int) -> tuple[int | None, str | None]:
+    """Find who owns a port. Returns (pid, name) or (None, None)."""
     try:
-        if IS_WIN:
-            r = _run(["netstat", "-ano"], timeout=10)
-            if r.returncode != 0 or not r.stdout:
-                return None, None
-            for line in r.stdout.splitlines():
-                if re.search(rf":{port}(?:\s|$)", line) and "LISTENING" in line:
-                    parts = line.split()
-                    pid_str = parts[-1] if parts else ""
-                    if pid_str.isdigit() and int(pid_str) != 0:
-                        pid = int(pid_str)
-                        r2 = _run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"], timeout=5)
-                        name = "unknown"
-                        if r2.returncode == 0 and r2.stdout:
-                            for row in r2.stdout.splitlines():
-                                if str(pid) in row and "," in row:
-                                    name = row.split(",")[0].strip('"')
-                                    break
-                        return pid, name
-        else:
-            # LISTEN only: plain "lsof -ti :PORT" also lists CLIENTS connected to
-            # the port (e.g. the browser), which would then be killed.
-            r = _run(["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"], timeout=10)
-            if r.returncode == 0 and r.stdout and r.stdout.strip():
-                pid_str = r.stdout.strip().split("\n")[0].strip()
-                if pid_str.isdigit():
-                    pid = int(pid_str)
-                    r2 = _run(["ps", "-p", str(pid), "-o", "comm="], timeout=5)
-                    name = (r2.stdout or "").strip() if r2.returncode == 0 else "unknown"
-                    return pid, name
-            r2 = _run(["ss", "-tlnp"], timeout=10)
-            if r2.returncode == 0 and r2.stdout:
-                for sline in r2.stdout.splitlines():
-                    if re.search(rf":{port}(?:\s|$)", sline):
-                        m = re.search(r"pid=(\d+)", sline)
-                        if m:
-                            pid = int(m.group(1))
-                            n = _run(["ps", "-p", str(pid), "-o", "comm="], timeout=5)
-                            return pid, (n.stdout or "").strip() if n.returncode == 0 else "unknown"
+        pid = _listening_pid(port)
+        return (pid, _process_name(pid)) if pid else (None, None)
     except Exception as e:
         _log.debug("[get_port_process] port-lookup failed: %s", e)
-    return None, None
+        return None, None
 
 
 def kill_port_process(port: int, interactive: bool = True) -> bool:

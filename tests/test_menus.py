@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import types
 from contextlib import ExitStack
@@ -226,3 +227,254 @@ def test_reset_only_when_confirmed():
     assert r.cfg["first_run_complete"] is True
     assert r.cfg["whisper_model"] == DEFAULT_CONFIG["whisper_model"]
     assert r.cfg["translation_backend"] == DEFAULT_CONFIG["translation_backend"]
+
+
+# ── Translation model manager ─────────────────────────────────────────────────
+
+import yume.installers  # noqa: E402
+import yume.menus.tools as tools  # noqa: E402
+
+
+def manage(choices, cfg, *, inputs=(), yns=(), ggufs=()):
+    pulled, browsed, saved = [], MagicMock(), MagicMock()
+    fakes = {
+        "ask_arrow": MagicMock(side_effect=list(choices)),
+        "ask_input": MagicMock(side_effect=list(inputs)),
+        "ask_yn": MagicMock(side_effect=list(yns)),
+        "header": MagicMock(),
+        "pause": MagicMock(),
+        "info": MagicMock(),
+        "bullet": MagicMock(),
+        "success": MagicMock(),
+        "warn": MagicMock(),
+        "find_gguf_models": lambda: list(ggufs),
+        "check_ollama_models": lambda h, p: ["qwen2.5:7b"],
+        "browse_hf": browsed,
+    }
+    with ExitStack() as stack:
+        for name, fake in fakes.items():
+            stack.enter_context(patch.object(tools, name, fake))
+        stack.enter_context(patch.object(yume.installers, "pull_ollama_model", lambda m: pulled.append(m) or True))
+        stack.enter_context(patch("config.save_config", saved))
+        tools._manage_model(cfg)
+    return types.SimpleNamespace(cfg=cfg, pulled=pulled, browsed=browsed, saved=saved)
+
+
+def test_model_manager_rename_and_pull():
+    r = manage(
+        [0, 1, 4],
+        {"translation_backend": "ollama", "translation_model": "qwen2.5:7b"},
+        inputs=["gemma3:12b", "gemma3:12b"],
+    )
+    assert r.cfg["translation_model"] == "gemma3:12b"
+    assert r.pulled == ["gemma3:12b"]
+
+
+def test_model_manager_select_a_gguf_and_switch_to_llamacpp(tmp_path):
+    a, b = tmp_path / "a.gguf", tmp_path / "qwen-7b.gguf"
+    a.write_bytes(b"x")
+    b.write_bytes(b"xx")
+    cfg = {"translation_backend": "ollama", "translation_host": "10.0.0.2", "translation_port": 11434}
+    manage([3, 1, 4], cfg, yns=[True], ggufs=[a, b])
+    assert (cfg["gguf_model_path"], cfg["translation_model"]) == (str(b), "qwen-7b")
+    assert (cfg["translation_backend"], cfg["translation_host"], cfg["translation_port"]) == (
+        "llamacpp",
+        "127.0.0.1",
+        5000,
+    )
+
+
+def test_model_manager_without_ggufs_and_browse():
+    r = manage([3, 2, -1], {"translation_backend": "llamacpp"})
+    r.browsed.assert_called_once()
+    r.saved.assert_not_called()
+
+
+# ── HuggingFace browser ───────────────────────────────────────────────────────
+
+import yume.menus.hf_browser as hf  # noqa: E402
+
+GB = 1024**3
+FILES = [
+    {"name": "qwen-q8_0.gguf", "bytes": int(8.1 * GB), "sha256": "a"},
+    {"name": "qwen-q4_k_m.gguf", "bytes": int(4.4 * GB), "sha256": "b"},
+    {"name": "qwen-q2_k.gguf", "bytes": int(3.0 * GB), "sha256": "c"},
+    {"name": "qwen-f16-00001-of-00002.gguf", "bytes": 8 * GB},
+    {"name": "qwen-f16-00002-of-00002.gguf", "bytes": 7 * GB},
+]
+
+
+def browse(choices, cfg, *, yns=(), inputs=(), files=FILES, vram_mb=8192, download_ok=True):
+    prompts, downloads = [], []
+
+    def arrow(prompt, opts, default=0, **kw):
+        prompts.append((prompt, opts, default))
+        ch = choices.pop(0)
+        return default if ch == "default" else ch
+
+    fakes = {
+        "ask_arrow": arrow,
+        "ask_input": MagicMock(side_effect=list(inputs)),
+        "ask_yn": MagicMock(side_effect=list(yns)),
+        "header": MagicMock(),
+        "pause": MagicMock(),
+        "info": MagicMock(),
+        "warn": MagicMock(),
+        "error": MagicMock(),
+        "success": MagicMock(),
+        "detect_gpu": lambda: {"has_nvidia": vram_mb > 0, "vram_mb": vram_mb, "name": "GPU"},
+        "hf_list_gguf": lambda repo: list(files),
+        "hf_download": lambda repo, part, sha: downloads.append((repo, part, sha)) or download_ok,
+    }
+    with ExitStack() as stack:
+        for name, fake in fakes.items():
+            stack.enter_context(patch.object(hf, name, fake))
+        stack.enter_context(patch("config.save_config"))
+        hf.browse_hf(cfg)
+    return types.SimpleNamespace(cfg=cfg, prompts=prompts, downloads=downloads)
+
+
+def test_hf_recommends_the_largest_q4_that_fits_and_downloads_it():
+    cfg = {"translation_backend": "llamacpp"}
+    r = browse([0, "default"], cfg, yns=[True])  # repo 0, then the preselected file
+    _prompt, opts, default = r.prompts[1]
+    labels = [label for label, _ in opts]
+    assert "★ recommended" in labels[default] and labels[default].startswith("qwen-q4_k_m.gguf")
+    assert "too large" in labels[-2]  # the 15 GB f16, both parts as one entry
+    assert "2 files" in labels[-2]
+    assert r.downloads == [("Qwen/Qwen2.5-7B-Instruct-GGUF", "qwen-q4_k_m.gguf", "b")]
+    assert cfg["gguf_model_path"].endswith("qwen-q4_k_m.gguf") and cfg["translation_model"] == "qwen-q4_k_m.gguf"
+
+
+def test_hf_split_model_downloads_every_part_and_offers_llamacpp():
+    cfg = {"translation_backend": "ollama"}
+    browse([0, 3], cfg, yns=[True, True])  # entry 3: the f16 in two parts
+    assert cfg["gguf_model_path"].endswith("qwen-f16-00001-of-00002.gguf")
+    assert cfg["translation_backend"] == "llamacpp"
+
+
+def test_hf_failed_part_stops_and_keeps_the_config():
+    cfg = {"translation_backend": "llamacpp"}
+    r = browse([0, 3], cfg, yns=[True], download_ok=False)
+    assert len(r.downloads) == 1 and "gguf_model_path" not in cfg
+
+
+def test_hf_other_repo_cpu_mode_and_back():
+    cfg = {"translation_backend": "llamacpp"}
+    n = len(hf._HF_RECOMMENDED_REPOS)
+    r = browse([n, 4, n + 1], cfg, inputs=["me/my-GGUF"], vram_mb=0)  # other repo, Back from files, Back
+    labels = [label for label, _ in r.prompts[1][1]]
+    assert not any("fits" in lbl or "too large" in lbl for lbl in labels)  # no GPU: no fit tags
+    assert "★ recommended" in labels[1]  # largest Q4_K_M; on CPU everything "fits"
+    assert r.downloads == []
+
+
+def test_hf_repo_without_ggufs():
+    r = browse([0, len(hf._HF_RECOMMENDED_REPOS) + 1], {"translation_backend": "llamacpp"}, files=[])
+    assert len(r.prompts) == 2  # back at the repo list
+
+
+# ── Blacklist: menu and `blacklist` command, server up or down ───────────────
+
+
+class Blacklist:
+    """The server's list (`server` None = server down: config/blacklist.json in tmp)."""
+
+    def __init__(self, tmp_path, server=None, saved_file=()):
+        self.server = None if server is None else list(server)
+        self.file = tmp_path / "blacklist.json"
+        if saved_file:
+            self.file.write_text(json.dumps(list(saved_file)), encoding="utf-8")
+        self.said: list[str] = []
+
+    def _get(self, h, p, path):
+        return {"blacklist": list(self.server)} if self.server is not None else None
+
+    def _post(self, h, p, path, body, **kw):
+        assert path == "/blacklist/update"
+        self.server = list(body["blacklist"])
+        return {"success": True}
+
+    def saved(self):
+        return self.server if self.server is not None else json.loads(self.file.read_text(encoding="utf-8"))
+
+    def run(self, fn, *args, choices=(), inputs=(), yns=()):
+        say = lambda msg="", *a, **k: self.said.append(str(msg))  # noqa: E731
+        fakes = {
+            "_server_get": self._get,
+            "_server_post": self._post,
+            "_bl_file": lambda: self.file,
+            "ask_arrow": MagicMock(side_effect=list(choices)),
+            "ask_input": MagicMock(side_effect=list(inputs)),
+            "ask_yn": MagicMock(side_effect=list(yns)),
+            "header": MagicMock(),
+            "pause": MagicMock(),
+            **{n: say for n in ("info", "warn", "error", "success", "bullet")},
+        }
+        with ExitStack() as stack:
+            for name, fake in fakes.items():
+                stack.enter_context(patch.object(srv, name, fake))
+            fn({"whisper_host": "127.0.0.1", "whisper_port": 5001}, *args)
+        return self
+
+
+def test_blacklist_command_add_remove_clear_on_the_server(tmp_path):
+    b = Blacklist(tmp_path, server=["Subscribe"])
+    b.run(srv.cli_blacklist, ["add", "Thank", "you"])
+    assert b.saved() == ["Subscribe", "Thank you"]
+    b.run(srv.cli_blacklist, ["add", "thank you"])
+    assert b.saved() == ["Subscribe", "Thank you"] and any("Already blocked" in s for s in b.said)
+    b.run(srv.cli_blacklist, ["rm", "SUBSCRIBE"])
+    assert b.saved() == ["Thank you"]
+    b.run(srv.cli_blacklist, ["clear"])
+    assert b.saved() == []
+
+
+def test_blacklist_command_edits_the_saved_file_when_the_server_is_down(tmp_path):
+    b = Blacklist(tmp_path, saved_file=["Subscribe"])
+    b.run(srv.cli_blacklist, ["add", "Thanks"])
+    assert b.saved() == ["Subscribe", "Thanks"]
+    b.run(srv.cli_blacklist, ["list"])
+    assert any("server not running" in s for s in b.said)
+    b.run(srv.cli_blacklist, ["remove", "nope"])
+    assert any("Not in blacklist" in s for s in b.said)
+
+
+def test_blacklist_menu_add_remove_clear(tmp_path):
+    b = Blacklist(tmp_path, server=["Subscribe"])
+    b.run(srv._menu_blacklist, choices=[0, 3], inputs=["Thank you"])
+    assert b.saved() == ["Subscribe", "Thank you"]
+    b.run(srv._menu_blacklist, choices=[1, 0, 3])  # remove the first
+    assert b.saved() == ["Thank you"]
+    b.run(srv._menu_blacklist, choices=[2, 3], yns=[False])
+    assert b.saved() == ["Thank you"]
+    b.run(srv._menu_blacklist, choices=[2, 3], yns=[True])
+    assert b.saved() == []
+
+
+def test_blacklist_menu_offline_and_back_from_remove(tmp_path):
+    items = [f"phrase {i}" for i in range(25)]
+    b = Blacklist(tmp_path, saved_file=items)
+    b.run(srv._menu_blacklist, choices=[1, 20, 3])  # index 20 is "Back" (20 shown), not phrase 20
+    assert b.saved() == items
+    assert any("Server not running" in s for s in b.said)
+
+
+def test_blacklist_menu_ignores_case_like_the_command(tmp_path):
+    b = Blacklist(tmp_path, server=["Subscribe"])
+    b.run(srv._menu_blacklist, choices=[0, 3], inputs=["subscribe"])  # the menu used to add it twice
+    assert b.saved() == ["Subscribe"] and "Already blocked" in b.said
+
+
+def test_tools_menu_opens_each_tool_once():
+    names = ["_menu_ytdlp", "_menu_ffmpeg", "_menu_deno", "_menu_backend", "_menu_llama_server", "_vocals_menu",
+             "browse_hf", "_menu_pydeps", "_test_translation", "_benchmark", "_fonts", "_extension_help"]  # fmt: skip
+    calls = {n: MagicMock() for n in names}
+    with ExitStack() as stack:
+        for n, m in calls.items():
+            stack.enter_context(patch.object(tools, n, m))
+        stack.enter_context(patch.object(tools, "ask_arrow", MagicMock(side_effect=[*range(len(names)), -1])))
+        stack.enter_context(patch.object(tools, "header", MagicMock()))
+        stack.enter_context(patch.object(tools, "find_tool", lambda t: None))
+        tools.tools_menu({})
+    assert all(m.call_count == 1 for m in calls.values()), {n: m.call_count for n, m in calls.items()}

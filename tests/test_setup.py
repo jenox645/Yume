@@ -214,13 +214,32 @@ def test_no_model_switch_to_ollama():
     w = Wizard(NVIDIA_6GB, gguf=False)
     w.arrows = [2, 0, 1]  # auth: skip; mode: install all; model: Ollama
     w.yns = [True, True]  # install Ollama, pull the model
-    with patch.object(setup.subprocess, "Popen") as popen:
-        cfg = w.run({})
+    cfg = w.run({})
     assert cfg["translation_backend"] == "ollama"
     assert cfg["translation_port"] == 11434
     assert cfg["translation_model"] == "qwen2.5:7b"
     assert w.installed == ["ollama", "ollama-pull"]
-    popen.assert_called_once()  # `ollama serve`, since none was answering
+
+
+def test_pulling_an_ollama_model_starts_ollama_when_it_is_down():
+    import types
+
+    import yume.installers as inst
+    import yume.network
+
+    ran = []
+    for up in (False, True):
+        with (
+            patch.object(yume.network, "check_server", return_value={"up": up}),
+            patch.object(inst.subprocess, "Popen") as popen,
+            patch.object(inst, "_run", lambda cmd, **kw: ran.append(cmd) or types.SimpleNamespace(returncode=0)),
+            patch.object(inst.time, "sleep"),
+            patch.object(inst, "info"),
+            patch.object(inst, "success"),
+        ):
+            assert inst.pull_ollama_model("qwen2.5:7b")
+        assert popen.called is not up  # `ollama serve` only when nothing answered
+    assert ran == [["ollama", "pull", "qwen2.5:7b"]] * 2
 
 
 def test_other_backends_need_no_engine_or_gguf():
@@ -228,3 +247,29 @@ def test_other_backends_need_no_engine_or_gguf():
     cfg = w.run({"translation_backend": "ollama"})
     assert w.arrow_prompts == []
     assert cfg["first_run_complete"] is True
+
+
+def test_uninstall_lists_every_package_yume_installs_and_not_shared_ones():
+    pkgs = setup._yume_pip_packages()
+    for name in ("faster-whisper", "fugashi", "unidic-lite", "pypinyin", "llama-cpp-python", "uvicorn",
+                 "bgutil-ytdlp-pot-provider", "demucs"):  # fmt: skip
+        assert name in pkgs
+    assert not {"numpy", "av", "torch"} & set(pkgs)
+    assert len(pkgs) == len(set(pkgs))
+
+
+@pytest.mark.parametrize(
+    ("choice", "data", "pip"), [(0, True, True), (1, True, False), (2, False, True), (3, False, False)]
+)
+def test_uninstall_choices(choice, data, pip):
+    with (
+        patch.object(setup, "ask_arrow", return_value=choice),
+        patch.object(setup, "ask_yn", return_value=True),
+        patch.object(setup, "_uninstall_targets", return_value=[]),
+        patch.object(setup, "_remove_data") as remove_data,
+        patch.object(setup, "_remove_packages") as remove_packages,
+        patch.object(setup, "header"),
+        patch.object(setup, "pause"),
+    ):
+        setup.uninstall_yume()
+    assert remove_data.called is data and remove_packages.called is pip

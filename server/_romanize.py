@@ -198,45 +198,41 @@ _KO_ASPIRATE = {_G: _K, _D: _T, _J: _CH}  # after ㅎ: 좋다 jota, 그렇게 ge
 _KO_H_FINAL = {27: 0, 6: 4, 15: 8}  # ㅎ, ㄶ, ㅀ → what is left without the ㅎ
 
 
-def _ko_assimilate(f, i, v):
-    """Sound change between a final f and the next syllable's initial i (vowel v)."""
-    if i == _O and f not in (0, 21):  # liaison: the final moves to the empty initial
-        if f in _KO_H_FINAL:  # the ㅎ is silent: 좋은 joeun, 많이 mani
-            stay = _KO_H_FINAL[f]
-            return (0, _KO_LIAISON[stay]) if stay else (0, _O)
-        if f in _KO_SPLIT:
-            stay, move = _KO_SPLIT[f]
-            f, i = stay, _KO_LIAISON[move]
-        else:
-            f, i = 0, _KO_LIAISON[f]
-        if v == _VOWEL_I and i in (_D, _T):  # palatalization: 같이 gachi, 굳이 guji
-            i = _J if i == _D else _CH
-        return f, i
-    if i == _H:  # ㄱㄷㅂㅈ + ㅎ → aspirated: 축하 chuka, 못해 motae
-        for finals, new in (({1, 2, 24}, _K), ({7, 19, 20, 25}, _T), ({17, 26}, _P), ({22, 23}, _CH)):
-            if f in finals:
-                return 0, new
-        if f == 9:  # ㄺ: 밝히다 balkida
-            return 8, _K
-        if f == 11:  # ㄼ
-            return 8, _P
-        return f, i
-    if f in _KO_H_FINAL:
-        if i in _KO_ASPIRATE:
-            return _KO_H_FINAL[f], _KO_ASPIRATE[i]
-        if i == _S:  # 좋습니다 josseumnida
-            return _KO_H_FINAL[f], _SS
-        if i == _N:
-            f = 4 if f in (27, 6) else 8  # 놓는 nonneun; ㅀ falls through to ㄹ + ㄴ
+def _ko_liaison(f, v):
+    """A final before an empty initial (ㅇ) moves into it: 좋은 joeun, 같이 gachi."""
+    if f in _KO_H_FINAL:  # the ㅎ is silent: 좋은 joeun, 많이 mani
+        stay = _KO_H_FINAL[f]
+        return (0, _KO_LIAISON[stay]) if stay else (0, _O)
+    if f in _KO_SPLIT:
+        stay, move = _KO_SPLIT[f]
+        f, i = stay, _KO_LIAISON[move]
+    else:
+        f, i = 0, _KO_LIAISON[f]
+    if v == _VOWEL_I and i in (_D, _T):  # palatalization: 같이 gachi, 굳이 guji
+        i = _J if i == _D else _CH
+    return f, i
+
+
+def _ko_aspirate(f):
+    """ㄱㄷㅂㅈ + ㅎ → aspirated: 축하 chuka, 못해 motae; None when f does not change."""
+    for finals, new in (({1, 2, 24}, _K), ({7, 19, 20, 25}, _T), ({17, 26}, _P), ({22, 23}, _CH)):
+        if f in finals:
+            return 0, new
+    if f == 9:  # ㄺ: 밝히다 balkida
+        return 8, _K
+    if f == 11:  # ㄼ
+        return 8, _P
+    return None
+
+
+def _ko_nasalize(f, i):
+    """Finals before ㄴ ㅁ ㄹ: 작년 jangnyeon, 신라 silla, 독립 dongnip; None when nothing changes."""
     if f in (8, 13, 15) and i == _N:  # ㄹ + ㄴ → ll: 설날 seollal
         return 8, _R
     if i in (_N, _M):
-        if f in _KO_K:
-            return 21, i  # 작년 jangnyeon
-        if f in _KO_T:
-            return 4, i  # 있는 inneun
-        if f in _KO_P:
-            return 16, i  # 합니다 hamnida
+        for finals, new in ((_KO_K, 21), (_KO_T, 4), (_KO_P, 16)):  # 작년 jangnyeon, 있는 inneun, 합니다 hamnida
+            if f in finals:
+                return new, i
     if i == _R:
         if f == 4:
             return 8, _R  # 신라 silla
@@ -246,7 +242,23 @@ def _ko_assimilate(f, i, v):
             return 21, _N  # 독립 dongnip
         if f in _KO_P:
             return 16, _N  # 협력 hyeomnyeok
-    return f, i
+    return None
+
+
+def _ko_assimilate(f, i, v):
+    """Sound change between a final f and the next syllable's initial i (vowel v)."""
+    if i == _O and f not in (0, 21):
+        return _ko_liaison(f, v)
+    if i == _H:
+        return _ko_aspirate(f) or (f, i)
+    if f in _KO_H_FINAL:  # a final ㅎ (ㄶ ㅀ): 좋다 jota, 좋습니다 josseumnida, 놓는 nonneun
+        if i in _KO_ASPIRATE:
+            return _KO_H_FINAL[f], _KO_ASPIRATE[i]
+        if i == _S:
+            return _KO_H_FINAL[f], _SS
+        if i == _N:
+            f = 4 if f in (27, 6) else 8  # ㅀ falls through to ㄹ + ㄴ
+    return _ko_nasalize(f, i) or (f, i)
 
 
 def romanize_korean(text):
