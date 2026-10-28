@@ -33,6 +33,7 @@ class SubtitleSession {
     this.rev = 0;
     this.status = 'idle';
     this.error = '';
+    this.notice = '';           // the server's hint, e.g. the video sounds like another language
     this.progress = null;
     this.segments = new Map();  // id -> segment
     this.cues = [];             // visible segments sorted by start
@@ -107,6 +108,7 @@ class SubtitleSession {
     this.current = null;
     this.jobId = null;
     this.rev = 0;
+    this.notice = '';
   }
 
   // Poll now instead of at the next interval (a finished job polls every 4 s):
@@ -185,6 +187,7 @@ class SubtitleSession {
     if (!r.ok) throw new Error(r.data?.error || `Server error ${r.status}`);
     this.jobId = r.data.id;
     this.rev = 0;
+    this.notice = '';
     // A recreated job (after a 404) starts from scratch: drop the old cues even
     // if the new snapshot is empty, or stale lines would stay on screen.
     this.segments.clear();
@@ -234,6 +237,10 @@ class SubtitleSession {
       changed = true;
     }
     this.rev = Math.max(this.rev, snap.rev || 0);
+    // The video sounds like another language than the one picked: say so once
+    const fresh = snap.notice && snap.notice !== this.notice;
+    this.notice = snap.notice || '';
+    if (fresh) this._status(this.notice, 'warning');
     if (changed) {
       this.cues = [...this.segments.values()].sort((a, b) => a.start - b.start);
       if (!this._readySignaled && this.cues.length) {
@@ -258,7 +265,8 @@ class SubtitleSession {
           transcribing: 'Transcribing...', translating: 'Translating...',
           done: 'No vocals detected in this video',
         }[snap.status];
-      if (msg) this._status(msg, allFailed ? 'error' : snap.status === 'done' ? 'info' : 'loading');
+      if (this.notice && !allFailed) this._status(this.notice, 'warning');
+      else if (msg) this._status(msg, allFailed ? 'error' : snap.status === 'done' ? 'info' : 'loading');
     }
   }
 

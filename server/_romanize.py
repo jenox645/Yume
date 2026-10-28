@@ -9,6 +9,7 @@ romanize() returns None when the LLM must do it: Arabic and other non-Latin
 scripts, or JA/ZH when the library is not installed.
 """
 
+import re
 import threading
 import unicodedata
 
@@ -116,8 +117,47 @@ def preload():
         get_kakasi()
 
 
+# A number followed by a counter whose reading MeCab gets wrong after Arabic
+# digits: 3月 "3 tsuki" (sangatsu), 25日 "25ka", 1人 "1nin" (hitori).
+_JA_COUNTER = re.compile(r"(\d+)(日間|日|月|人)")
+_JA_DAYS = {1: "tsuitachi", 2: "futsuka", 3: "mikka", 4: "yokka", 5: "itsuka", 6: "muika", 7: "nanoka",
+            8: "youka", 9: "kokonoka", 10: "tooka", 14: "juuyokka", 20: "hatsuka", 24: "nijuuyokka"}  # fmt: skip
+_JA_PLACEHOLDER = "ZQ{}ZQ"  # an ASCII word: cutlet and pykakasi pass it through
+
+
+def _counter_reading(m, after_month):
+    n, counter = int(m.group(1)), m.group(2)
+    if counter == "月":
+        return f"{m.group(1)} gatsu"
+    if counter == "人":
+        return {1: "hitori", 2: "futari"}.get(n, f"{m.group(1)} nin")
+    day = _JA_DAYS.get(n)
+    if n == 1 and not after_month:  # 1日: "one day", not "the 1st"
+        day = "ichinichi"
+    if counter == "日間":
+        return f"{day}kan" if day and n != 1 else f"{m.group(1)} nichikan"
+    return day or f"{m.group(1)} nichi"
+
+
 def romanize_japanese(text):
     """Japanese text (kanji/kana) to romaji: cutlet, else pykakasi. ~1 ms."""
+    readings = []
+
+    def hold(m):
+        readings.append(_counter_reading(m, after_month=text[: m.start()].endswith("月")))
+        return _JA_PLACEHOLDER.format(len(readings) - 1)
+
+    held = _JA_COUNTER.sub(hold, text)
+    roma = _romanize_japanese_words(held)
+    if roma is None or not readings:
+        return roma
+    for i, reading in enumerate(readings):
+        roma = roma.replace(_JA_PLACEHOLDER.format(i), f" {reading} ")
+    roma = re.sub(r" +([,.!?、。])", r"\1", " ".join(roma.split()))
+    return roma[:1].upper() + roma[1:] if held.startswith("ZQ") else roma
+
+
+def _romanize_japanese_words(text):
     katsu = get_cutlet()
     if katsu is not None:
         try:
