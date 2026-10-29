@@ -1409,6 +1409,31 @@ class TestModelLoadFailure(unittest.TestCase):
             _model.load_model(args)  # must not raise SystemExit
         self.assertIn("out of memory", _state.load_error)
 
+    def test_the_published_error_says_what_to_do(self):
+        # The overlay and the launcher show load_error as is: the advice was only
+        # printed to whisper_server.log, which the user never sees
+        args = MagicMock(prewarm=False, port=5001)
+        for raw, hint in (
+            ("CUDA failed with error out of memory", "smaller model"),
+            ("Library cublas64_12.dll is not found or cannot be loaded", "CUDA Toolkit"),
+            ("An error happened while trying to locate the files on the Hub", "internet"),
+            ("No module named 'ctranslate2'", "python pocket_yume.py setup"),
+        ):
+            _state.model, _state.load_error = None, ""
+            with (
+                patch.object(_model, "WhisperModel", side_effect=RuntimeError(raw)),
+                patch.object(_model, "set_low_priority"),
+                patch("builtins.print"),
+            ):
+                _model.load_model(args)
+            self.assertTrue(_state.load_error.startswith(raw), _state.load_error)
+            self.assertIn(hint, _state.load_error)
+
+    def test_load_advice_names_the_settings_menu_not_the_setup_wizard(self):
+        out = TestPrintModelLoadError._capture(self, "CUDA out of memory")
+        self.assertIn("pocket_yume.py settings", out)
+        self.assertNotIn("pocket_yume.py setup      ", out)  # re-running the whole wizard
+
     def test_health_reports_error_status(self):
         _state.model, _state.load_error = None, "CUDA out of memory"
         body, code = self._health()
