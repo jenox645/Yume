@@ -217,7 +217,6 @@ def ensure_port_free(port: int, cfg: dict, key_prefix: str, exclude: set | None 
         info(f"{C.DIM}Disable it in System Settings > General > AirDrop & Handoff > AirPlay Receiver,{C.RESET}")
         info(f"{C.DIM}or let Yume use a different port (recommended).{C.RESET}")
         print()
-    from config import save_config
 
     # Default = reassign, NOT kill: Enter-mashing must never terminate another
     # app's process (on macOS port 5000 is often AirPlay).
@@ -231,41 +230,54 @@ def ensure_port_free(port: int, cfg: dict, key_prefix: str, exclude: set | None 
         ],
         default=0,
     )
+    if ch == 0:
+        return _other_port(port, cfg, key_prefix, exclude)
     if ch == 1:
         if kill_port_process(port) and is_port_free(port):
             success(f"Port {port} is now free")
             return port
         error("Failed to free port")
         return None
-    elif ch == 0:
-        new_port = find_free_port(port + 1, exclude=exclude)
-        if new_port:
-            cfg[f"{key_prefix}_port"] = new_port
-            save_config(cfg)
-            success(f"Reassigned to port {new_port}")
-            if key_prefix == "whisper":
-                warn(f"Set the Whisper port to {new_port} in the browser extension popup (Server Settings) too.")
-            return new_port
+    if ch == 2:
+        return _typed_port(port, cfg, key_prefix)
+    return None
+
+
+def _save_port(cfg: dict, key_prefix: str, port: int) -> None:
+    from config import save_config
+
+    cfg[f"{key_prefix}_port"] = port
+    save_config(cfg)
+
+
+def _other_port(port: int, cfg: dict, key_prefix: str, exclude: set | None) -> int | None:
+    """Move to the next free port above `port` and save it."""
+    new_port = find_free_port(port + 1, exclude=exclude)
+    if not new_port:
         error("No free port found")
         return None
-    elif ch == 2:
-        np = ask_input("Port number", str(port + 1))
-        try:
-            np = int(np)
-            if np < 1 or np > 65535:
-                error("Port must be between 1 and 65535")
-                return None
-            if is_port_free(np):
-                cfg[f"{key_prefix}_port"] = np
-                save_config(cfg)
-                return np
-            else:
-                error(f"Port {np} is also in use")
-                return None
-        except ValueError:
-            error("Invalid port")
-            return None
-    return None
+    _save_port(cfg, key_prefix, new_port)
+    success(f"Reassigned to port {new_port}")
+    if key_prefix == "whisper":
+        warn(f"Set the Whisper port to {new_port} in the browser extension popup (Server Settings) too.")
+    return new_port
+
+
+def _typed_port(port: int, cfg: dict, key_prefix: str) -> int | None:
+    """Ask for a port number; save and return it if it is valid and free."""
+    try:
+        typed = int(ask_input("Port number", str(port + 1)))
+    except ValueError:
+        error("Invalid port")
+        return None
+    if not 1 <= typed <= 65535:
+        error("Port must be between 1 and 65535")
+        return None
+    if not is_port_free(typed):
+        error(f"Port {typed} is also in use")
+        return None
+    _save_port(cfg, key_prefix, typed)
+    return typed
 
 
 def show_ports_status(cfg: dict) -> None:

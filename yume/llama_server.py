@@ -206,17 +206,11 @@ def _swap_in(new: Path) -> bool:
 def install(gpu: dict | None = None) -> bool:
     """Download the right llama-server build into tools/llama.cpp/."""
     from yume.hardware import detect_gpu
-    from yume.ui import error, info, success, warn
+    from yume.ui import info, warn
 
     gpu = gpu or detect_gpu()
-    cuda = driver_cuda_version() if gpu.get("has_nvidia") else None
-    try:
-        found = _newest_build(_releases(), gpu, cuda)
-    except Exception as e:
-        error(f"Could not reach GitHub to find llama.cpp builds: {e}")
-        return False
+    found = _find_build(gpu)
     if not found:
-        error("No llama.cpp build found for this system.")
         return False
     rel, variant, assets = found
 
@@ -234,13 +228,34 @@ def install(gpu: dict | None = None) -> bool:
             return False
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+    return _runs(variant, rel["tag_name"])
+
+
+def _find_build(gpu: dict):
+    """(release, variant, assets) of the newest build for this system, or None (said why)."""
+    from yume.ui import error
+
+    cuda = driver_cuda_version() if gpu.get("has_nvidia") else None
+    try:
+        found = _newest_build(_releases(), gpu, cuda)
+    except Exception as e:
+        error(f"Could not reach GitHub to find llama.cpp builds: {e}")
+        return None
+    if not found:
+        error("No llama.cpp build found for this system.")
+    return found
+
+
+def _runs(variant: str, tag: str) -> bool:
+    """The installed llama-server answers --version."""
+    from yume.ui import error, success
 
     r = _run([str(server_path()), "--version"], timeout=30)
     version = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
     if r.returncode != 0:
         error(f"llama-server does not start: {version[-1] if version else r.returncode}")
         return False
-    success(f"llama-server installed ({variant}): {next((v for v in version if 'version' in v), rel['tag_name'])}")
+    success(f"llama-server installed ({variant}): {next((v for v in version if 'version' in v), tag)}")
     return True
 
 

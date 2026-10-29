@@ -81,6 +81,25 @@ export default [
         },
     },
     {
+        // The browser test: Node, plus the callbacks it runs in the page and the extension
+        files: ["tests/e2e/**/*.mjs"],
+        languageOptions: {
+            ecmaVersion: 2022,
+            sourceType: "module",
+            globals: {
+                console: "readonly",
+                setTimeout: "readonly",
+                clearTimeout: "readonly",
+                URL: "readonly",
+                Buffer: "readonly",
+                process: "readonly",
+                chrome: "readonly",
+                document: "readonly",
+                history: "readonly",
+            },
+        },
+    },
+    {
         ignores: ["node_modules/", "dev/", ".claude/"],
     },
 ];

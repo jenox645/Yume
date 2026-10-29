@@ -118,8 +118,11 @@ def preload():
 
 
 # A number followed by a counter whose reading MeCab gets wrong after Arabic
-# digits: 3月 "3 tsuki" (sangatsu), 25日 "25ka", 1人 "1nin" (hitori).
-_JA_COUNTER = re.compile(r"(\d+)(日間|日|月|人)")
+# digits: 3月 "3 tsuki" (sangatsu), 25日 "25ka", 1人 "1nin" (hitori), 第3話 "hanashi" (wa),
+# 3つ "3tsu" (mittsu).
+_JA_COUNTER = re.compile(r"(\d+)(日間|日|月|人|話|つ)")
+_JA_TSU = {1: "hitotsu", 2: "futatsu", 3: "mittsu", 4: "yottsu", 5: "itsutsu", 6: "muttsu", 7: "nanatsu",
+           8: "yattsu", 9: "kokonotsu", 10: "too"}  # fmt: skip
 _JA_DAYS = {1: "tsuitachi", 2: "futsuka", 3: "mikka", 4: "yokka", 5: "itsuka", 6: "muika", 7: "nanoka",
             8: "youka", 9: "kokonoka", 10: "tooka", 14: "juuyokka", 20: "hatsuka", 24: "nijuuyokka"}  # fmt: skip
 _JA_PLACEHOLDER = "ZQ{}ZQ"  # an ASCII word: cutlet and pykakasi pass it through
@@ -127,8 +130,10 @@ _JA_PLACEHOLDER = "ZQ{}ZQ"  # an ASCII word: cutlet and pykakasi pass it through
 
 def _counter_reading(m, after_month):
     n, counter = int(m.group(1)), m.group(2)
-    if counter == "月":
-        return f"{m.group(1)} gatsu"
+    if counter in ("月", "話"):
+        return f"{m.group(1)} {'gatsu' if counter == '月' else 'wa'}"
+    if counter == "つ":  # past 10 the native counter is not used: "11 tsu" stays as it was
+        return _JA_TSU.get(n, f"{m.group(1)} tsu")
     if counter == "人":
         return {1: "hitori", 2: "futari"}.get(n, f"{m.group(1)} nin")
     day = _JA_DAYS.get(n)
@@ -147,14 +152,32 @@ def romanize_japanese(text):
         readings.append(_counter_reading(m, after_month=text[: m.start()].endswith("月")))
         return _JA_PLACEHOLDER.format(len(readings) - 1)
 
-    held = _JA_COUNTER.sub(hold, text)
+    # ・ separates words (ジョン・レノン); cutlet wrote it as "/": "Jon/Renon"
+    held = _JA_COUNTER.sub(hold, text.replace("・", " "))
     roma = _romanize_japanese_words(held)
-    if roma is None or not readings:
-        return roma
-    for i, reading in enumerate(readings):
-        roma = roma.replace(_JA_PLACEHOLDER.format(i), f" {reading} ")
-    roma = re.sub(r" +([,.!?、。])", r"\1", " ".join(roma.split()))
-    return roma[:1].upper() + roma[1:] if held.startswith("ZQ") else roma
+    if roma is None:
+        return None
+    if readings:
+        for i, reading in enumerate(readings):
+            roma = roma.replace(_JA_PLACEHOLDER.format(i), f" {reading} ")
+        roma = re.sub(r" +([,.!?、。])", r"\1", " ".join(roma.split()))
+        roma = roma[:1].upper() + roma[1:] if held.startswith("ZQ") else roma
+    return _split_digits(roma, text)
+
+
+_DIGIT_GLUE = re.compile(r"[A-Za-z]*\d+[A-Za-z]*")
+
+
+def _split_digits(roma, text):
+    """MeCab glues a number to the word beside it: "Dai2 kai" (第2回), "20sai"
+    (20歳), "Dai1i" (第1位). Latin words of the line itself stay whole: MP3, 4K."""
+    own = {w.lower() for w in re.findall(r"[A-Za-z0-9]+", text)}
+
+    def split(m):
+        word = m.group(0)
+        return word if word.lower() in own else re.sub(r"(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])", " ", word)
+
+    return _DIGIT_GLUE.sub(split, roma)
 
 
 def _romanize_japanese_words(text):

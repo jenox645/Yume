@@ -82,77 +82,22 @@ def cli_blacklist(cfg: dict, args: list) -> None:
         for item in bl.items:
             bullet(item)
     elif subcmd == "add" and text:
-        if bl.has(text):
-            warn(f"Already blocked: {text}")
-        elif bl.save([*bl.items, text]):
-            success(f"Added: {text}{where}")
-        else:
-            error("Failed to save")
+        _said(bl.add(text), f"Added: {text}{where}", f"Already blocked: {text}")
     elif subcmd in ("remove", "rm") and text:
-        keep = [b for b in bl.items if b.lower() != text.lower()]
-        if len(keep) == len(bl.items):
-            warn(f"Not in blacklist: {text}")
-        elif bl.save(keep):
-            success(f"Removed: {text}{where}")
-        else:
-            error("Failed to save")
+        _said(bl.remove(text), f"Removed: {text}{where}", f"Not in blacklist: {text}")
     elif subcmd == "clear":
-        if bl.save([]):
-            success(f"Blacklist cleared{where}")
-        else:
-            error("Failed to save")
+        _said(bl.save([]), f"Blacklist cleared{where}")
     else:
         print("  Usage: pocket_yume.py blacklist [list|add <text>|remove <text>|clear]")
 
 
 def cli_model(cfg: dict, args: list) -> None:
     """CLI model management."""
-    from config import save_config
-
-    h, p = cfg["whisper_host"], cfg["whisper_port"]
-    if len(args) < 1:
-        data = _server_get(h, p, "/stats")
-        if not data:
-            error(f"Server not reachable at {h}:{p}")
-            info(f"Config model: {cfg.get('whisper_model', '?')}")
-            return
-        info(f"Active model: {C.BOLD}{data.get('model', '?')}{C.RESET}")
-        info(f"Device: {data.get('device', '?')}  |  Compute: {data.get('compute_type', '?')}")
-        if data.get("gpu"):
-            g = data["gpu"]
-            info(f"GPU: {g.get('gpu_name', '?')} ({g.get('vram_used_mb', '?')}/{g.get('vram_total_mb', '?')} MB)")
-        return
-    subcmd = args[0].lower()
-    if subcmd == "switch" and len(args) > 1:
-        new_model = args[1]
-        from yume.hardware import WHISPER_MODELS
-
-        if not _server_get(h, p, "/stats"):
-            # Server down: like the menu, remember it for the next start
-            if new_model not in {m[0] for m in WHISPER_MODELS} and not Path(new_model).is_dir():
-                error(f"Unknown model: {new_model}  (see: python pocket_yume.py model list)")
-                return
-            cfg["whisper_model"] = new_model
-            cfg["whisper_model_name"] = ""
-            save_config(cfg)
-            success(f"Config set to {new_model} (applies on next launch)")
-            return
-        info(f"Switching to {new_model}... (a model's first use downloads it)")
-        # Long timeout: the first switch to a model downloads it (up to ~3 GB)
-        result = _server_post(h, p, "/model/switch", {"model": new_model}, timeout=1800)
-        if not result:
-            error(f"Server not reachable at {h}:{p}")
-            return
-        if result.get("error"):
-            error(result["error"])
-            if result.get("valid"):
-                info(f"Valid: {', '.join(result['valid'])}")
-        elif result.get("status") == "already_loaded":
-            info(f"Already using {new_model}")
-        else:
-            success(f"Switched to {result.get('model', new_model)}")
-            cfg["whisper_model"] = result.get("model", new_model)
-            save_config(cfg)
+    subcmd = args[0].lower() if args else ""
+    if not args:
+        _model_status(cfg)
+    elif subcmd == "switch" and len(args) > 1:
+        _model_switch(cfg, args[1])
     elif subcmd == "list":
         from yume.benchmark import WHISPER_MODELS_INFO
 
@@ -162,6 +107,53 @@ def cli_model(cfg: dict, args: list) -> None:
             info(f"  {name:22s} {vram}{cur_marker}")
     else:
         print("  Usage: pocket_yume.py model [switch <name>|list]")
+
+
+def _model_status(cfg: dict) -> None:
+    h, p = cfg["whisper_host"], cfg["whisper_port"]
+    data = _server_get(h, p, "/stats")
+    if not data:
+        error(f"Server not reachable at {h}:{p}")
+        info(f"Config model: {cfg.get('whisper_model', '?')}")
+        return
+    info(f"Active model: {C.BOLD}{data.get('model', '?')}{C.RESET}")
+    info(f"Device: {data.get('device', '?')}  |  Compute: {data.get('compute_type', '?')}")
+    if data.get("gpu"):
+        g = data["gpu"]
+        info(f"GPU: {g.get('gpu_name', '?')} ({g.get('vram_used_mb', '?')}/{g.get('vram_total_mb', '?')} MB)")
+
+
+def _model_switch(cfg: dict, new_model: str) -> None:
+    """Switch the running server's model, or set it for the next start when it is down."""
+    from config import save_config
+    from yume.hardware import WHISPER_MODELS
+
+    h, p = cfg["whisper_host"], cfg["whisper_port"]
+    if not _server_get(h, p, "/stats"):
+        # Server down: like the menu, remember it for the next start
+        if new_model not in {m[0] for m in WHISPER_MODELS} and not Path(new_model).is_dir():
+            error(f"Unknown model: {new_model}  (see: python pocket_yume.py model list)")
+            return
+        cfg["whisper_model"] = new_model
+        cfg["whisper_model_name"] = ""
+        save_config(cfg)
+        success(f"Config set to {new_model} (applies on next launch)")
+        return
+    info(f"Switching to {new_model}... (a model's first use downloads it)")
+    # Long timeout: the first switch to a model downloads it (up to ~3 GB)
+    result = _server_post(h, p, "/model/switch", {"model": new_model}, timeout=1800)
+    if not result:
+        error(f"Server not reachable at {h}:{p}")
+    elif result.get("error"):
+        error(result["error"])
+        if result.get("valid"):
+            info(f"Valid: {', '.join(result['valid'])}")
+    elif result.get("status") == "already_loaded":
+        info(f"Already using {new_model}")
+    else:
+        success(f"Switched to {result.get('model', new_model)}")
+        cfg["whisper_model"] = result.get("model", new_model)
+        save_config(cfg)
 
 
 # ── Blacklist / whisper model menus ───────────────────────────────────────────
@@ -218,17 +210,28 @@ class _Blacklist:
     def has(self, text: str) -> bool:
         return text.lower() in (b.lower() for b in self.items)
 
+    def add(self, text: str) -> bool | None:
+        """None: already there (any case); else whether it was saved."""
+        return None if self.has(text) else self.save([*self.items, text])
+
+    def remove(self, text: str) -> bool | None:
+        """None: not there (any case); else whether it was saved."""
+        keep = [b for b in self.items if b.lower() != text.lower()]
+        return None if len(keep) == len(self.items) else self.save(keep)
+
+
+def _said(result: bool | None, done: str, unchanged: str = "", failed: str = "Failed to save") -> None:
+    """Report a blacklist edit: done, nothing to do (None), or not saved."""
+    if result is None:
+        warn(unchanged)
+    else:
+        (success if result else error)(done if result else failed)
+
 
 def _bl_add(bl: _Blacklist) -> None:
     text = ask_input("Phrase to block", "")
-    if not text:
-        pass
-    elif bl.has(text):
-        warn("Already blocked")
-    elif bl.save([*bl.items, text]):
-        success(f"Added: {text}")
-    else:
-        error("Failed")
+    if text:
+        _said(bl.add(text), f"Added: {text}", "Already blocked", failed="Failed")
     pause()
 
 

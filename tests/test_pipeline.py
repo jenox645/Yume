@@ -855,7 +855,7 @@ def test_line_that_is_only_a_loop_is_hidden_not_trimmed():
     assert 0 in hide  # nothing but a loop: an instrumental-intro hallucination
     assert 1 not in hide and segs[1]["text"] == "高い夢を見つけるようなパープをチェックしてみて"
     # a vocalised loop at the START does not hide the lyric that follows it
-    segs, hide = _filter.clean_raw_segments([{"start": 0, "end": 5, "text": "ラララララララ 君と夢を見ていた"}])
+    segs, hide = _filter.clean_raw_segments([{"start": 0, "end": 5, "text": "ラ" * 30 + " 君と夢を見ていた"}])
     assert not hide and segs[0]["text"] == "ラ 君と夢を見ていた"
 
 
@@ -941,6 +941,57 @@ def test_non_ascii_token_header_is_rejected_not_a_crash():
     assert not _api.token_ok("")
 
 
+def _switch(body):
+    """POST /model/switch → (status code, json), past the token check. Works
+    with real Flask and with the stub test_server_modules installs."""
+    import _api
+
+    request = types.SimpleNamespace(get_json=lambda silent=False: body)
+    with patch.object(_api, "request", request), patch.object(_api, "jsonify", lambda d: d):
+        resp = _api.switch_model()
+    return resp[::-1] if isinstance(resp, tuple) else (200, resp)
+
+
+def test_model_switch_rejects_bad_requests(monkeypatch, tmp_path):
+    monkeypatch.setattr(_state, "model_name", "large-v3-turbo")
+    assert _switch({}) == (400, {"error": "Missing 'model' field"})
+    code, out = _switch({"model": "medium.en"})  # English-only: useless for Yume
+    assert code == 400 and "large-v3" in out["valid"]
+    assert _switch({"model": "turbo"}) == (200, {"status": "already_loaded", "model": "large-v3-turbo"})
+    assert _switch({"model": "models/mine"})[0] == 400  # relative
+    assert "'..'" in _switch({"model": str(tmp_path / ".." / "x")})[1]["error"]
+    assert "not found" in _switch({"model": str(tmp_path / "none")})[1]["error"]
+    (tmp_path / "model.bin").write_bytes(b"")
+    assert "config.json" in _switch({"model": str(tmp_path)})[1]["error"]
+
+
+def test_model_switch_swaps_or_keeps_the_old_model(monkeypatch, tmp_path):
+    import _api
+
+    monkeypatch.setattr(_state, "model_name", "small")
+    monkeypatch.setattr(_state, "model", "old-whisper")
+    monkeypatch.setattr(_state, "jobs", types.SimpleNamespace(drop_all=lambda why: dropped.append(why)))
+    dropped, saved = [], []
+    monkeypatch.setattr(_api._settings, "persist_whisper_model", saved.append)
+    for f in ("model.bin", "config.json"):
+        (tmp_path / f).write_bytes(b"")
+
+    with patch.object(_api._model, "load_whisper", side_effect=RuntimeError("CUDA out of memory")):
+        code, out = _switch({"model": "large-v3"})
+    assert code == 500 and out["model"] == "small" and _state.model == "old-whisper" and not saved
+
+    _state.model_switch_lock.acquire()
+    try:
+        assert _switch({"model": "large-v3"})[0] == 409  # one switch at a time
+    finally:
+        _state.model_switch_lock.release()
+
+    with patch.object(_api._model, "load_whisper", return_value="new-whisper"):
+        code, out = _switch({"model": str(tmp_path)})
+    assert (code, out) == (200, {"status": "ok", "model": str(tmp_path.resolve()), "previous": "small"})
+    assert _state.model == "new-whisper" and saved == [str(tmp_path.resolve())] and len(dropped) == 1
+
+
 def test_cookie_hint_only_where_cookies_could_help(monkeypatch):
     def fake_run(cmd, **kw):
         err = "ERROR: Could not copy Chrome cookie database."
@@ -993,6 +1044,15 @@ def test_audio_that_is_not_16k_mono_is_converted_by_ffmpeg(tmp_path):
         ("2人", "Futari"),
         ("3人が", "3 nin ga"),
         ("20日", "Hatsuka"),
+        ("第2回の会議", "Dai 2 kai no kaigi"),  # was "Dai2 kai"
+        ("20歳", "20 sai"),  # was "20sai"
+        ("第1位", "Dai 1 i"),  # was "Dai1i"
+        ("第3話", "Dai 3 wa"),  # was "Dai3 hanashi"
+        ("MP3プレーヤー", "MP3 pureeyaa"),  # Latin words with digits stay whole
+        ("4Kテレビ", "4K terebi"),
+        ("この3つが大事", "Kono mittsu ga daiji"),  # was "3tsu"
+        ("4つ目かな", "Yottsu me ka na"),
+        ("1個", "1 ko"),  # was "1ko"
     ],
 )
 def test_japanese_dates_and_people_are_read_correctly(ja, romaji):
@@ -1191,3 +1251,161 @@ def test_a_loop_of_a_long_phrase_is_cut():
     line = "هل تتحدث عن ماذا يمكن أن يتحدث " + "عن ماذا يتحدث " * 30  # 14-char unit: was let through
     out, hide = _filter.clean_raw_segments([_seg(50.0, 77.5, line)])
     assert out[0]["text"] == "هل تتحدث عن ماذا يمكن أن يتحدث عن ماذا يتحدث" and not hide
+
+
+# ── songs live test (KO/ZH/RU/AR/JA songs on large-v3-turbo + Qwen2.5 7B) ────
+
+
+def test_a_sung_stutter_is_a_lyric_not_a_loop():
+    import _filter
+
+    lines = ["あたし大大大大大大嫌い", "カイカイカイカイカイはない", "ダイダイダイダイダイキライ"]  # "ダイダイ…キライ"
+    out, hide = _filter.clean_raw_segments([_seg(i * 2.0, i * 2.0 + 2.0, t) for i, t in enumerate(lines)])
+    assert [s["text"] for s in out] == lines and not hide
+
+
+def test_thanks_for_watching_in_chinese_is_hidden():
+    for line in ("谢谢观看", "謝謝觀看", "谢谢收看"):
+        assert _jobs._hidden(line), line
+    assert not _jobs._hidden("谢谢你")  # "thank you" in a lyric
+
+
+def test_a_line_heard_by_both_regions_at_a_cut_is_shown_once(pipeline):
+    line = "وظننت أنا أني بذلك حست غنى"
+    for order in ((0, 1), (1, 0)):
+        job = _jobs.Job(("twice", "ar", "", "m"), {"language": "ar"})
+        job.regions, job.region_state = [(0.0, 20.4), (20.4, 43.2)], ["pending", "pending"]
+        raw = {
+            0: [_seg(14.3, 19.5, "فبدوت شخصا آخر كي أتفخر"), _seg(19.5, 24.8, line)],  # cut at 20.4
+            1: [_seg(20.4, 24.8, line), _seg(24.8, 30.4, "فوجدت أني خاسر فتلك مظاهر")],
+        }
+        for idx in order:
+            job.add_region(idx, raw[idx])
+        shown = [(s["start"], s["end"], s["text"]) for s in job.segments.values() if not s["hidden"]]
+        assert sorted(shown)[1] == (19.5, 24.8, line), order
+        assert [t for _s, _e, t in shown].count(line) == 1, order
+
+
+def test_library_export_shows_a_line_heard_by_both_regions_once(pipeline):
+    store = _state.store
+    line = "وظننت أنا أني بذلك حست غنى"
+    store.put_video("twice", "https://x", "t", 43.2, [[0.0, 20.4], [20.4, 43.2]])
+    store.put_transcript("twice", "ar", "m", 0.0, 20.4, [_raw(19.5, 24.8, line)])
+    store.put_transcript("twice", "ar", "m", 20.4, 43.2, [_raw(20.4, 24.8, line), _raw(24.8, 30.4, "مظاهر")])
+    srt, n = _jobs.library_export("twice", "ar", "m", None)
+    assert n == 2 and srt.count(line) == 1
+    assert "00:00:19,500 --> 00:00:24,800" in srt
+
+
+RAP = (
+    "Наша любовь как будто открыла ват портал, и меня замотала, и тебя замотала, ты попал, малыш, и я попала, "
+    "но зачем ты прикипела, я предупреждала, я тебе ведь говорила, мы слишком разные, я хочу уют в дом, "
+    "ты хочешь праздновать, как не подгоняю вы, не сойдутся пазлы, снова в ту же реку, по новой лесте пасла, "
+    "я люблю сериал о деньги, тяжелый люкс, люблю искренность бога, и тебя люблю."
+)
+
+
+def test_a_line_too_long_to_read_is_cut_into_timed_pieces():
+    import _filter
+
+    pieces = _filter.split_long(_seg(101.75, 123.2, RAP))  # one Whisper line: 384 characters for 21 s
+    assert len(pieces) == 5
+    assert " ".join(p["text"] for p in pieces) == RAP
+    assert all(p["text"].endswith((",", ".")) for p in pieces)  # cut after a clause
+    assert all(_filter._width(p["text"]) <= _filter.SPLIT_WIDTH for p in pieces)
+    assert pieces[0]["start"] == 101.75 and pieces[-1]["end"] == 123.2
+    assert all(a["end"] == b["start"] and b["start"] - a["start"] > 3 for a, b in zip(pieces, pieces[1:]))
+
+    news = "На участок Путиловская и Каретная в следующем году направляют около 6,5 миллиардов рублей."
+    assert [p["text"] for p in _filter.split_long(_seg(129.8, 135.3, news))] == [
+        "На участок Путиловская и Каретная в следующем",
+        "году направляют около 6,5 миллиардов рублей.",  # 6,5 is a number, not a clause
+    ]
+    ja = "明るい話題にしましょう。6個目のテーマ。明るい話題。これはもう永遠のテーマですよ。無人島に持っていくならなり。"
+    assert [p["text"] for p in _filter.split_long(_seg(0.0, 10.0, ja))] == [
+        "明るい話題にしましょう。6個目のテーマ。明るい話題。",
+        "これはもう永遠のテーマですよ。無人島に持っていくならなり。",
+    ]
+
+
+def test_a_short_or_quick_line_is_not_cut():
+    import _filter
+
+    assert len(_filter.split_long(_seg(0.0, 9.2, "Пусть отболит за ночь, пока ты там совсем не ждёшь, я войду"))) == 1
+    assert len(_filter.split_long(_seg(0.0, 3.0, RAP))) == 1  # 3 s: no piece would be readable
+    no_break = "而AI的網絡" * 10  # nowhere to cut but inside a word
+    assert len(_filter.split_long(_seg(0.0, 20.0, no_break))) == 1
+
+
+def test_a_long_line_reaches_the_job_in_pieces_each_judged_by_the_filter(pipeline):
+    job = _jobs.Job(("rap", "ru", "", "m"), {"language": "ru"})
+    job.regions, job.region_state = [(101.75, 123.3)], ["pending"]
+    job.add_region(0, [_seg(101.75, 123.2, RAP)])
+    assert len(job.segments) == 5 and not any(s["hidden"] for s in job.segments.values())
+
+    job = _jobs.Job(("credits", "ru", "", "m"), {"language": "ru"})
+    job.regions, job.region_state = [(0.0, 30.0)], ["pending"]
+    job.add_region(0, [_seg(0.0, 25.0, "Субтитры создавал DimaTorzok. " + RAP)])
+    hidden = [s["text"] for s in job.segments.values() if s["hidden"]]
+    assert len(hidden) == 1 and hidden[0].startswith("Субтитры") and len(job.segments) > 2
+    # a blacklist edit hides or shows the same pieces a fresh job would have
+    with patch.object(_state, "user_blacklist", ["искренность"]):
+        pipeline.jobs.jobs[job.id] = job
+        pipeline.jobs.refilter()
+    assert sum(s["hidden"] for s in job.segments.values()) == 2
+
+
+def _picker(*jobs):
+    """A JobManager with these jobs and no worker threads."""
+    mgr = object.__new__(_jobs.JobManager)
+    mgr.jobs, mgr.lock = {j.id: j for j in jobs}, threading.Lock()
+    return mgr
+
+
+def _llm_job(params, lines, playhead=0.0):
+    job = _jobs.Job(("pick", "ja", "", "m"), {"language": "ja", **params, "playhead": playhead})
+    for i, (start, translation, romaji) in enumerate(lines):
+        job.segments[i] = {
+            "id": i, "start": start, "end": start + 2, "text": f"行{i}", "hidden": False,
+            "translation": translation, "romaji": romaji,
+        }  # fmt: skip
+    return job
+
+
+def test_the_llm_works_on_what_is_on_screen_first():
+    starts = [5.0 * i for i in range(30)]
+    # a job's very first lines go in a small batch, from the playhead on
+    job = _llm_job({"target": "English"}, [(s, None, "r") for s in starts], playhead=60.0)
+    _j, kind, batch = _picker(job)._pick_llm_batch()
+    assert kind == "translate" and [s["start"] for s in batch] == [60.0, 65.0, 70.0]
+    # once something is translated: the lines due soon, still in a small batch...
+    job.segments[0]["translation"] = "done"
+    _j, kind, batch = _picker(job)._pick_llm_batch()
+    assert [s["start"] for s in batch] == [60.0, 65.0, 70.0]
+    # ...and with nothing due soon, a full batch, then the lines behind the playhead
+    job.playhead = 200.0
+    _j, kind, batch = _picker(job)._pick_llm_batch()
+    assert len(batch) == _jobs.BATCH_SIZE and batch[0]["start"] == 5.0
+    for s in job.segments.values():
+        s["translation"] = s["translation"] or "x"
+    # translations done: LLM romanization (Arabic, or no romanizer) when asked for
+    job.romanize, job.segments[3]["romaji"] = True, None
+    assert _picker(job)._pick_llm_batch()[1:] == ("romanize", [job.segments[3]])
+    job.romanize = False
+    assert _picker(job)._pick_llm_batch() == (None, None, None)
+
+
+def test_the_llm_skips_unwatched_and_backed_off_jobs():
+    idle = _llm_job({"target": "English"}, [(0.0, None, "r")])
+    idle.last_poll -= _jobs.ACTIVE_S + 1
+    waiting = _llm_job({"target": "English"}, [(0.0, None, "r")])
+    waiting.llm_backoff_until = time.time() + 30
+    watched = _llm_job({"target": "English"}, [(0.0, None, "r")])
+    assert _picker(idle, waiting, watched)._pick_llm_batch()[0] is watched
+    assert _picker(idle, waiting)._pick_llm_batch() == (None, None, None)
+
+
+def test_a_japanese_middle_dot_is_a_space_in_romaji():
+    if _romanize.get_cutlet() is None:
+        pytest.skip("cutlet (fugashi + unidic-lite) not installed")
+    assert _romanize.romanize("ja", "ジョン・レノン") == "Jon Renon"  # was "Jon/Renon"

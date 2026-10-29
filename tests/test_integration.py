@@ -683,3 +683,16 @@ class TestCrossReferences:
         for path in used:
             assert allowed.match(path), f"{path} is called but not in background.js _ALLOWED_PATH"
             assert any(re.fullmatch(r, path) for r in routes), f"{path} is called but the server has no such route"
+
+    def test_workflows_parse(self):
+        """A workflow GitHub cannot parse fails every run at once and runs no check
+        at all: a step named "(no Whisper: the test fakes it)" did that."""
+        import yaml
+
+        files = sorted((ROOT / ".github" / "workflows").glob("*.y*ml"))
+        assert files
+        for f in files:
+            wf = yaml.safe_load(f.read_text(encoding="utf-8"))
+            assert isinstance(wf, dict) and wf.get("jobs"), f"{f.name}: no jobs"
+            for name, job in wf["jobs"].items():
+                assert all(isinstance(s, dict) for s in job.get("steps", [])), f"{f.name}: job {name} has a bad step"

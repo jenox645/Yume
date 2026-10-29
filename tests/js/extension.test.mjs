@@ -1,6 +1,6 @@
 // Unit tests for the extension's logic. The extension has no build step, so
 // each script is evaluated as-is in a VM context with minimal browser stubs.
-// Run: npm test   (node --test tests/js/)
+// Run: npm test
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,7 +11,7 @@ const ROOT = new URL('../../extension/js/', import.meta.url);
 const noop = () => {};
 const listener = { addListener: noop, removeListener: noop };
 
-function load(file, { location = 'https://www.youtube.com/watch?v=abc123', video = null } = {}) {
+function load(file, { location = 'https://www.youtube.com/watch?v=abc123', video = null, title = '' } = {}) {
   const url = new URL(location);
   const events = [];
   const ctx = vm.createContext({
@@ -24,7 +24,7 @@ function load(file, { location = 'https://www.youtube.com/watch?v=abc123', video
     },
     setTimeout, clearTimeout, URLSearchParams, URL, AbortController, fetch: async () => { throw new Error('offline'); },
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init?.detail; } },
-    document: { hidden: false, querySelector: () => video },
+    document: { hidden: false, title, querySelector: () => video },
   });
   ctx.window = ctx;
   ctx.window.location = { href: url.href, hostname: url.hostname, pathname: url.pathname, search: url.search };
@@ -63,6 +63,14 @@ test('videoId: YouTube id only on YouTube hosts; page identity elsewhere', () =>
   // the media src (CDN tokens, blob: URLs) must not change the id
   assert.equal(id('https://s.com/v/9', { duration: 61.2, currentSrc: 'https://cdn/x.mp4?token=a' }),
                id('https://s.com/v/9', { duration: 61.2, currentSrc: 'blob:https://s.com/123' }));
+});
+
+test('the job carries the page title, without the YouTube count and suffix', () => {
+  const title = (t) => load('session.js', { title: t }).ctx.SubtitleSession.pageTitle();
+  assert.equal(title('(3) 周杰倫 Jay Chou【等你下課】 - YouTube'), '周杰倫 Jay Chou【等你下課】');
+  assert.equal(title('(99+) Kun Anta - YouTube Music'), 'Kun Anta');
+  assert.equal(title('Episode 4 - My Site'), 'Episode 4 - My Site');  // other sites: as is
+  assert.equal(title(''), '');
 });
 
 test('snapshots merge, update and remove (hidden) segments', () => {
@@ -359,16 +367,47 @@ test('popup settings: typed numbers are kept inside the control range', async ()
   assert.equal(stored().originalFontSize, 19);  // empty: the default
 });
 
-test('a server notice (wrong language picked) is shown as a warning, once', () => {
+test('a server notice (wrong language picked) is sent once, and cleared', () => {
   const { ctx, events } = load('session.js');
   const s = new ctx.SubtitleSession();
   const snap = { status: 'transcribing', segments: [], progress: {}, rev: 1, notice: 'This video sounds like English' };
   s._apply(snap);
-  const warnings = () => events.filter((e) => e.type === 'display-status' && e.detail.type === 'warning');
-  assert.equal(warnings().at(-1).detail.message, 'This video sounds like English');
-  const shown = warnings().length;
+  const notices = () => events.filter((e) => e.type === 'display-notice').map((e) => e.detail.message);
+  assert.deepEqual(notices(), ['This video sounds like English']);
   s._apply({ ...snap, rev: 2, segments: [{ id: 1, start: 0, end: 2, text: 'x' }] });
-  assert.equal(warnings().length, shown);  // not repeated once lines arrive
+  assert.deepEqual(notices(), ['This video sounds like English']);  // not repeated once lines arrive
   s._apply({ ...snap, rev: 3, notice: '' });
-  assert.equal(s.notice, '');
+  assert.deepEqual(notices(), ['This video sounds like English', '']);
+});
+
+test('the notice stays on screen while lines play (a status is hidden then)', () => {
+  const { ctx } = load('subtitle-window.js');
+  const els = {};
+  const el = (sel) => (els[sel] ??= { style: {}, textContent: '', className: '', classList: { remove: noop } });
+  const w = Object.assign(Object.create(ctx.SubtitleWindow.prototype), {
+    settings: {}, isPlaying: false, element: { style: {}, querySelector: el },
+  });
+  w.updateSubtitle('原文', 'Line', '');
+  w.showNotice('This video sounds like English');
+  w.updateSubtitle('次', 'Next line', '');
+  assert.equal(el('.subtitle-notice').style.display, 'block');
+  assert.equal(el('.subtitle-notice').textContent, 'This video sounds like English');
+  w.resetProgress();  // the next video
+  assert.equal(el('.subtitle-notice').style.display, 'none');
+});
+
+// ── subtitle-window.js ─────────────────────────────────────────────────────
+
+test('window colours keep a 00 channel (pure black was drawn as #08080c)', () => {
+  const { ctx } = load('subtitle-window.js');
+  assert.equal(ctx.windowStyle({ windowBgColor: '#000000', windowOpacity: 100 }).background, 'rgba(0, 0, 0, 1)');
+  assert.equal(ctx.windowStyle({ windowBgColor: '#ff8000', glassEnabled: true }).background, 'rgba(255, 128, 0, 0.45)');
+  assert.equal(ctx.windowStyle({}).background, 'rgba(8, 8, 12, 0.88)');  // the default
+  assert.equal(ctx.windowStyle({ windowBgColor: 'nonsense' }).background, 'rgba(8, 8, 12, 0.88)');
+});
+
+test('a less sure line is drawn fainter, only when asked', () => {
+  const { ctx } = load('subtitle-window.js');
+  const at = (c, show = true) => ctx.confidenceOpacity(show, c);
+  assert.deepEqual([at(-0.1), at(-0.5), at(-0.9), at(null), at(0.1), at(-0.9, false)], [1, 0.85, 0.65, 1, 1, 1]);
 });

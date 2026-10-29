@@ -27,7 +27,14 @@ import _regions
 import _romanize
 import _separate
 import _state
-from _filter import clean_raw_segments, is_credits_line, is_fragment, is_hallucination, window_hallucinations
+from _filter import (
+    boundary_drop,
+    clean_raw_segments,
+    is_credits_line,
+    is_hallucination,
+    split_long,
+    window_hallucinations,
+)
 from _transcribe import detect_language, transcribe_audio
 from _translate import BATCH_SIZE, TranslationError, _unshout, src_name
 
@@ -73,7 +80,8 @@ def _hidden(text):
 
 def _clean_region(raw, region):
     """A region's raw Whisper segments (the cache keeps them raw) → (segments,
-    loop indexes, filler indexes), every line within the region.
+    loop indexes, filler indexes), every line within the region and lines too
+    long to read in one go cut into pieces.
 
     Lines starting after the region belong to the next one (the stream preview
     hears past region 0's cut), and Whisper stamps lines up to the end of its
@@ -82,7 +90,16 @@ def _clean_region(raw, region):
     raw = [s for s in raw if s["start"] < region[1] - 0.1]
     filler = window_hallucinations(raw, region)
     segs, loops = clean_raw_segments(raw)
-    return [{**s, "end": min(s["end"], region[1])} for s in segs], loops, filler
+    out, out_loops, out_filler = [], set(), set()
+    for i, s in enumerate(segs):
+        s = {**s, "end": min(s["end"], region[1])}
+        if i in loops:
+            out_loops.add(len(out))
+        if i in filler:
+            out_filler.add(len(out))
+        # Loops and filler stay whole; the blacklist judges each piece, as refilter() does
+        out.extend([s] if i in loops or i in filler else split_long(s))
+    return out, out_loops, out_filler
 
 
 class Job:
@@ -207,8 +224,9 @@ class Job:
     def _hide_boundary_fragments(self, idx):
         """Regions are transcribed apart, so a word spoken across a cut can end
         one region as a fragment of the next region's first line ("どのような法や
-        制度を変えるのか" before "どのような法や制度を変えたくて…"). Checked once
-        both neighbours are done; returns how many lines it hid."""
+        制度を変えるのか" before "どのような法や制度を変えたくて…"), or as the whole
+        line twice ("وظننت أنا أني بذلك حست غنى" at 19.5-20.4 and 20.4-24.8 s).
+        Checked once both neighbours are done; returns how many lines it hid."""
         hidden = 0
         for left, right in ((idx - 1, idx), (idx, idx + 1)):
             if (
@@ -220,9 +238,14 @@ class Job:
             lines = sorted((s for s in self.segments.values() if not s["hidden"]), key=lambda s: s["start"])
             last = [s for s in lines if s["region"] == self.regions[left]][-1:]
             first = [s for s in lines if s["region"] == self.regions[right]][:1]
-            if last and first and is_fragment(last[0], first[0]):
-                last[0]["hidden"] = last[0]["filler"] = True  # filler: refilter() keeps it hidden
-                self._touch(last[0])
+            if not (last and first):
+                continue
+            drop = boundary_drop(last[0], first[0])
+            if drop:
+                drop["hidden"] = drop["filler"] = True  # filler: refilter() keeps it hidden
+                self._touch(drop)
+                if drop is not last[0]:
+                    self._touch(last[0])  # stretched over both
                 hidden += 1
         return hidden
 
@@ -247,6 +270,23 @@ class Job:
             if not s["hidden"]
             and ((self.target and s["translation"] is None) or (s["romaji"] is None and self._needs_llm_roma()))
         ]
+
+    def llm_batch(self):
+        """The next LLM work for this job: ("translate" | "romanize", lines), or (None, [])."""
+        # Lines at/after the playhead first, then the rest in order
+        pending = sorted(self.pending_llm(), key=lambda s: (s["end"] < self.playhead, s["start"]))
+        need_tr = [s for s in pending if self.target and s["translation"] is None]
+        if not need_tr:
+            need_roma = [s for s in pending if s["romaji"] is None]
+            return ("romanize", need_roma[:BATCH_SIZE]) if need_roma else (None, [])
+        # Lines due within NEAR_S, and the very first lines of a job, go in a
+        # small batch so they are ready in seconds; the rest goes in full
+        # batches (10 lines take ~25 s on a CPU-only llama.cpp)
+        near = [s for s in need_tr if s["start"] < self.playhead + NEAR_S and s["end"] >= self.playhead]
+        first = not any(s["translation"] for s in self.segments.values())
+        if near or first:
+            return "translate", (near or need_tr)[:NEAR_BATCH]
+        return "translate", need_tr[:BATCH_SIZE]
 
     def set_regions(self, regions, cached):
         """Install the region plan. Regions already done in this job (a stream
@@ -278,26 +318,10 @@ class Job:
         self.add_region(0, raw)
 
     def snapshot(self, since=0, events=False):
+        """What a poll returns: the job state and the segments changed after
+        `since` (a first poll skips hidden ones: the client has nothing to drop)."""
         with self.lock:
-            segs = []
-            for s in self.segments.values():
-                if s["rev"] <= since or (since == 0 and s["hidden"]):
-                    continue
-                segs.append(
-                    {
-                        "id": s["id"],
-                        "start": s["start"],
-                        "end": s["end"],
-                        "text": s["text"],
-                        "translation": s["translation"] or "",
-                        "romaji": s["romaji"] or "",
-                        "confidence": s["confidence"],
-                        "hidden": s["hidden"],
-                    }
-                )
-            visible = [s for s in self.segments.values() if not s["hidden"]]
-            done_regions = sum(st in ("done", "failed") for st in self.region_state)
-            failed_regions = sum(st == "failed" for st in self.region_state)
+            segs = [_public(s) for s in self.segments.values() if s["rev"] > since and not (since == 0 and s["hidden"])]
             out = {
                 "id": self.id,
                 "status": self.status,
@@ -307,23 +331,38 @@ class Job:
                 "notice": self.notice,
                 "language": self.language,
                 "target": self.target,
-                "progress": {
-                    "regions_total": len(self.regions),
-                    "regions_done": done_regions,
-                    "regions_failed": failed_regions,
-                    # Seconds of the track already transcribed — lets the client tell
-                    # "no line here" apart from "not transcribed yet".
-                    "covered": [list(r) for r, st in zip(self.regions, self.region_state) if st in ("done", "failed")],
-                    "lines": len(visible),
-                    "translated": sum(1 for s in visible if s["translation"] is not None)
-                    if self.target
-                    else len(visible),
-                },
+                "progress": self._progress(),
                 "segments": segs,
             }
             if events:
                 out["events"] = list(self.events)
             return out
+
+    def _progress(self):
+        visible = [s for s in self.segments.values() if not s["hidden"]]
+        ended = [st in ("done", "failed") for st in self.region_state]
+        return {
+            "regions_total": len(self.regions),
+            "regions_done": sum(ended),
+            "regions_failed": self.region_state.count("failed"),
+            # Seconds of the track already transcribed — lets the client tell
+            # "no line here" apart from "not transcribed yet".
+            "covered": [list(r) for r, e in zip(self.regions, ended) if e],
+            "lines": len(visible),
+            "translated": sum(s["translation"] is not None for s in visible) if self.target else len(visible),
+        }
+
+
+_PUBLIC_KEYS = ("id", "start", "end", "text", "confidence", "hidden")
+
+
+def _public(seg):
+    """A segment as clients see it ('' for a translation or romaji still to come)."""
+    return {
+        **{k: seg[k] for k in _PUBLIC_KEYS},
+        "translation": seg["translation"] or "",
+        "romaji": seg["romaji"] or "",
+    }
 
 
 def _model_id():
@@ -686,24 +725,9 @@ class JobManager:
             with job.lock:
                 if now - job.last_poll > ACTIVE_S or now < job.llm_backoff_until:
                     continue
-                pending = job.pending_llm()
-                if not pending:
-                    continue
-                # Lines at/after the playhead first, then the rest in order
-                pending.sort(key=lambda s: (s["end"] < job.playhead, s["start"]))
-                need_tr = [s for s in pending if job.target and s["translation"] is None]
-                if need_tr:
-                    # Lines due within NEAR_S, and the very first lines of a job, go
-                    # in a small batch so they are ready in seconds; the rest goes in
-                    # full batches (10 lines take ~25 s on a CPU-only llama.cpp)
-                    near = [s for s in need_tr if s["start"] < job.playhead + NEAR_S and s["end"] >= job.playhead]
-                    first = not any(s["translation"] for s in job.segments.values())
-                    if near or first:
-                        return job, "translate", (near or need_tr)[:NEAR_BATCH]
-                    return job, "translate", need_tr[:BATCH_SIZE]
-                need_roma = [s for s in pending if s["romaji"] is None][:BATCH_SIZE]
-                if need_roma:
-                    return job, "romanize", need_roma
+                kind, batch = job.llm_batch()
+                if batch:
+                    return job, kind, batch
         return None, None, None
 
     def _llm_loop(self):
@@ -793,19 +817,30 @@ def export_subtitles(segments, fmt="srt"):
     return "\n".join(lines), len(cues)
 
 
-def library_export(video_key, language, model, target, fmt="srt"):
-    """Build subtitles for a cached video without a live job."""
-    store = _state.store
+def _library_lines(store, video_key, language, model):
+    """A cached video's lines, cleaned as a live job cleans them: (lines, hidden indexes)."""
     cached = store.get_transcripts(video_key, language, model)
     # The video's current plan: a region of an older plan would duplicate lines
     planned = [tuple(r) for r in (store.get_video(video_key) or {}).get("regions") or []]
-    raw, hide = [], set()
+    raw, hide, last = [], set(), None
     for region in planned or sorted(cached):
         if region not in cached:
             continue
         segs, loops, filler = _clean_region(cached[region], region)
+        shown = [len(raw) + i for i, s in enumerate(segs) if i not in loops | filler and not _hidden(s["text"])]
         hide |= {len(raw) + i for i in loops | filler}
         raw.extend(segs)
+        if last is not None and shown:  # as a live job does across each cut
+            drop = boundary_drop(raw[last], raw[shown[0]])
+            hide |= {i for i in (last, shown[0]) if raw[i] is drop}
+        last = shown[-1] if shown else None
+    return raw, hide
+
+
+def library_export(video_key, language, model, target, fmt="srt"):
+    """Build subtitles for a cached video without a live job."""
+    store = _state.store
+    raw, hide = _library_lines(store, video_key, language, model)
     # Any translation model: the library outlives model switches
     translations = store.get_translations(language, target, None, [s["text"] for s in raw]) if target else {}
     lang = None if language == "auto" else language

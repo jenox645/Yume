@@ -8,6 +8,7 @@
 // Events dispatched on window (consumed by content.js → SubtitleWindow):
 //   display-subtitle {original, english, romaji, confidence}
 //   display-status   {message, type}
+//   display-notice   {message}  — '' clears it
 //   display-error    {message}
 //   chunk-progress   {done, total, complete, lines, translated, status}
 //   prefetch-ready   — first visible line available
@@ -81,6 +82,7 @@ class SubtitleSession {
       target: settings.showEnglish === false ? '' : (settings.targetLanguage || 'English'),
       romanize: settings.showRomaji === true,
       duration: Number.isFinite(video.duration) ? video.duration : 0,
+      title: SubtitleSession.pageTitle(),
     };
     this._status('Starting...', 'loading');
     await this._createJob();
@@ -159,23 +161,36 @@ class SubtitleSession {
       } else if (r.status !== 0) {
         throw new Error(r.data?.error || `Server error ${r.status}`);
       } else if (!started) {
-        this._status('Starting Yume...', 'loading');
-        const s = await SubtitleSession.yume('start');
-        if (aborted()) return;
-        if (!s.ok) throw new Error(s.unavailable ? NOT_RUNNING : s.error || 'Yume could not start');
+        if (!await this._startYume(aborted)) return;
         started = true;
         startedAt = Date.now();
-      } else {
-        const s = await SubtitleSession.yume('status');
-        if (aborted()) return;
-        if (s.ok && s.state === 'stopped' && waited > START_GRACE_S) {
-          throw new Error(s.last_error ? `Yume could not start: ${s.last_error}` : 'Yume stopped while starting — see logs/service.log');
-        }
-        if (waited > START_WAIT_S) throw new Error('Yume is taking too long to start — see logs/service.log');
-        this._status(`${(s.message || 'Starting Yume…').replace(/…$/, '')}... (${waited}s)`, 'loading');
+      } else if (!await this._watchStart(aborted, waited)) {
+        return;
       }
       await new Promise((res) => setTimeout(res, 2000));
     }
+  }
+
+  // Ask the native helper to start Yume. False: aborted meanwhile.
+  async _startYume(aborted) {
+    this._status('Starting Yume...', 'loading');
+    const s = await SubtitleSession.yume('start');
+    if (aborted()) return false;
+    if (!s.ok) throw new Error(s.unavailable ? NOT_RUNNING : s.error || 'Yume could not start');
+    return true;
+  }
+
+  // Yume is starting: show the helper's progress, fail if it stopped or takes
+  // too long. False: aborted meanwhile.
+  async _watchStart(aborted, waited) {
+    const s = await SubtitleSession.yume('status');
+    if (aborted()) return false;
+    if (s.ok && s.state === 'stopped' && waited > START_GRACE_S) {
+      throw new Error(s.last_error ? `Yume could not start: ${s.last_error}` : 'Yume stopped while starting — see logs/service.log');
+    }
+    if (waited > START_WAIT_S) throw new Error('Yume is taking too long to start — see logs/service.log');
+    this._status(`${(s.message || 'Starting Yume…').replace(/…$/, '')}... (${waited}s)`, 'loading');
+    return true;
   }
 
   async _createJob() {
@@ -187,7 +202,6 @@ class SubtitleSession {
     if (!r.ok) throw new Error(r.data?.error || `Server error ${r.status}`);
     this.jobId = r.data.id;
     this.rev = 0;
-    this.notice = '';
     // A recreated job (after a 404) starts from scratch: drop the old cues even
     // if the new snapshot is empty, or stale lines would stay on screen.
     this.segments.clear();
@@ -237,18 +251,14 @@ class SubtitleSession {
       changed = true;
     }
     this.rev = Math.max(this.rev, snap.rev || 0);
-    // The video sounds like another language than the one picked: say so once
-    const fresh = snap.notice && snap.notice !== this.notice;
-    this.notice = snap.notice || '';
-    if (fresh) this._status(this.notice, 'warning');
-    if (changed) {
-      this.cues = [...this.segments.values()].sort((a, b) => a.start - b.start);
-      if (!this._readySignaled && this.cues.length) {
-        this._readySignaled = true;
-        window.dispatchEvent(new CustomEvent('prefetch-ready'));
-      }
-      this._render(true);
+    // The video sounds like another language than the one picked: a line of
+    // its own, above the subtitles (a status is hidden once lines play, and the
+    // check needs two regions, so it comes after the first lines)
+    if ((snap.notice || '') !== this.notice) {
+      this.notice = snap.notice || '';
+      window.dispatchEvent(new CustomEvent('display-notice', { detail: { message: this.notice } }));
     }
+    if (changed) this._cuesChanged();
     const p = snap.progress || {};
     window.dispatchEvent(new CustomEvent('chunk-progress', {
       detail: {
@@ -257,17 +267,30 @@ class SubtitleSession {
       },
     }));
     if (!this.cues.length) {
-      const allFailed = snap.status === 'done' && p.regions_total > 0 && p.regions_failed === p.regions_total;
-      const msg = allFailed
-        ? 'Transcription failed — see Diagnostics in the popup; press Enable again to retry'
-        : {
-          starting: 'Starting...', downloading: 'Downloading audio...', separating: 'Separating the vocals...',
-          transcribing: 'Transcribing...', translating: 'Translating...',
-          done: 'No vocals detected in this video',
-        }[snap.status];
-      if (this.notice && !allFailed) this._status(this.notice, 'warning');
-      else if (msg) this._status(msg, allFailed ? 'error' : snap.status === 'done' ? 'info' : 'loading');
+      const [msg, type] = SubtitleSession.waitingMessage(snap.status, p);
+      if (msg) this._status(msg, type);
     }
+  }
+
+  _cuesChanged() {
+    this.cues = [...this.segments.values()].sort((a, b) => a.start - b.start);
+    if (!this._readySignaled && this.cues.length) {
+      this._readySignaled = true;
+      window.dispatchEvent(new CustomEvent('prefetch-ready'));
+    }
+    this._render(true);
+  }
+
+  // What the window says while there is no line yet: [message, type]
+  static waitingMessage(status, p) {
+    if (status === 'done' && p.regions_total > 0 && p.regions_failed === p.regions_total) {
+      return ['Transcription failed — see Diagnostics in the popup; press Enable again to retry', 'error'];
+    }
+    const msg = {
+      starting: 'Starting...', downloading: 'Downloading audio...', separating: 'Separating the vocals...',
+      transcribing: 'Transcribing...', translating: 'Translating...', done: 'No vocals detected in this video',
+    }[status];
+    return [msg, status === 'done' ? 'info' : 'loading'];
   }
 
   _fail(message) {
@@ -336,6 +359,17 @@ class SubtitleSession {
       active: this.active, videoId: this.videoId, jobId: this.jobId, status: this.status, error: this.error,
       progress: this.progress, lines: this.cues.length, events,
     };
+  }
+
+  // The video's title: context for the translator (a song title tells it the
+  // lines are lyrics) and the label in the popup's History. YouTube's "(3) "
+  // notification count and " - YouTube" suffix are dropped.
+  static pageTitle() {
+    return String(document.title || '')
+      .replace(/^\(\d+\+?\)\s*/, '')
+      .replace(/\s+-\s+YouTube(?: Music)?$/, '')
+      .trim()
+      .slice(0, 200);
   }
 
   // Stable across reloads and identical for the same video on every visit.

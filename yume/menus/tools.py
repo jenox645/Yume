@@ -620,22 +620,40 @@ def cfg_backend() -> str:
     return load_config().get("translation_backend", "llamacpp")
 
 
-def _menu_pydeps() -> None:
-    from yume.installers import _check_pip, install_llamacpp_python, install_python_deps
-    from yume.utils import _run
+# (import name, pip name, what it does) — the libraries server/_romanize.py uses
+_ROMA_LIBS = [
+    ("fugashi", "fugashi", "Japanese → romaji by word (MeCab), with unidic-lite and jaconv"),
+    ("unidic_lite", "unidic-lite", "the dictionary MeCab reads words with"),
+    ("jaconv", "jaconv", "kana conversion used by the romaji step"),
+    ("pykakasi", "pykakasi", "Japanese → romaji fallback when the three above are missing"),
+    ("pypinyin", "pypinyin", "Chinese hanzi → pinyin"),
+]
 
+
+def _importable(module: str) -> bool:
+    try:
+        __import__(module)
+        return True
+    except ImportError:
+        return False
+
+
+def _menu_pydeps() -> None:
     header("Python Dependencies")
+    _core_deps()
+    print()
+    _romanization_deps()
+    pause()
+
+
+def _core_deps() -> None:
+    from yume.installers import install_llamacpp_python, install_python_deps
+
     section("Core (required)")
-    deps: dict[str, bool] = {}
     core = ["faster_whisper", "flask", "waitress"]
     if cfg_backend() == "llamacpp":  # only llama.cpp runs inside Yume's Python
         core += ["llama_cpp", "uvicorn", "fastapi"]
-    for p in core:
-        try:
-            __import__(p)
-            deps[p] = True
-        except ImportError:
-            deps[p] = False
+    deps = {p: _importable(p) for p in core}
     for p, ok in deps.items():
         (success if ok else warn)(f"{p}: {'installed' if ok else 'NOT installed'}")
     if all(deps.values()):
@@ -645,51 +663,35 @@ def _menu_pydeps() -> None:
         if not deps.get("llama_cpp", False):
             install_llamacpp_python()
 
-    print()
-    section("Romanization (optional — faster romaji/pinyin)")
-    roma_deps: dict[str, bool] = {"pykakasi": False, "pypinyin": False}
-    roma_desc = {
-        "pykakasi": "Japanese kanji → romaji (instant, no LLM needed)",
-        "pypinyin": "Chinese hanzi → pinyin (instant, no LLM needed)",
-    }
-    for p in roma_deps:
-        try:
-            __import__(p)
-            roma_deps[p] = True
-        except ImportError:
-            pass
-    for p, ok in roma_deps.items():
-        if ok:
-            success(f"{p}: installed — {roma_desc[p]}")
-        else:
-            info(f"{p}: {C.DIM}not installed{C.RESET} — {roma_desc[p]}")
 
-    if all(roma_deps.values()):
-        success("All romanization libs installed — instant romaji/pinyin/romanization!")
+def _romanization_deps() -> None:
+    from yume.installers import _check_pip
+    from yume.utils import _run, requirement_name, server_requirements
+
+    section("Romanization (optional — instant romaji/pinyin)")
+    missing = []
+    for module, name, desc in _ROMA_LIBS:
+        if _importable(module):
+            success(f"{name}: installed — {desc}")
+        else:
+            info(f"{name}: {C.DIM}not installed{C.RESET} — {desc}")
+            missing.append(name)
+    if not missing:
+        success("All romanization libs installed — instant romaji and pinyin!")
+        return
+    print()
+    info(f"{C.DIM}Without these, Japanese romaji and Chinese pinyin come from the LLM (slower).{C.RESET}")
+    info(f"{C.DIM}Korean and Russian always use Yume's built-in romanization.{C.RESET}")
+    if not ask_yn("Install romanization libraries? (recommended)"):
+        return
+    _check_pip()
+    # The versions server/requirements.txt pins
+    specs = [s for s in server_requirements() if requirement_name(s) in missing]
+    r = _run([sys.executable, "-m", "pip", "install", *specs, "-q", "--no-warn-script-location"], timeout=300)
+    if r.returncode == 0:
+        success("Romanization libraries installed! Restart server to activate.")
     else:
-        print()
-        info(f"{C.DIM}Without these, Japanese romaji and Chinese pinyin come from the LLM (slower).{C.RESET}")
-        info(f"{C.DIM}Korean and Russian always use Yume's built-in romanization.{C.RESET}")
-        if ask_yn("Install romanization libraries? (recommended)"):
-            _check_pip()
-            r = _run(
-                [
-                    sys.executable,
-                    "-m",
-                    "pip",
-                    "install",
-                    "pykakasi==2.3.0",
-                    "pypinyin==0.55.0",
-                    "-q",
-                    "--no-warn-script-location",
-                ],
-                timeout=120,
-            )
-            if r.returncode == 0:
-                success("Romanization libraries installed! Restart server to activate.")
-            else:
-                warn("Some libraries failed to install. Check pip output above.")
-    pause()
+        warn("Some libraries failed to install. Check pip output above.")
 
 
 def _test_translation(cfg: dict) -> None:
