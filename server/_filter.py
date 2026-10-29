@@ -17,6 +17,8 @@ import _state
 HALLUCINATION_PATTERNS = [
     "\u3054\u8996\u8074\u3042\u308a\u304c\u3068\u3046\u3054\u3056\u3044\u307e\u3057\u305f",
     "\u3054\u8996\u8074\u3042\u308a\u304c\u3068\u3046",
+    "\u3054\u8996\u8074\u3044\u305f\u3060\u304d",  # "\u6700\u5f8c\u307e\u3067\u3054\u8996\u8074\u3044\u305f\u3060\u304d\u3042\u308a\u304c\u3068\u3046\u3054\u3056\u3044\u307e\u3057\u305f"
+    "\u3054\u8996\u8074\u9802\u304d",
     "\u304a\u75b2\u308c\u69d8\u3067\u3057\u305f",
     "\u304a\u75b2\u308c\u69d8",
     "\u5b57\u5e55\u306f\u81ea\u52d5\u751f\u6210",
@@ -62,6 +64,12 @@ HALLUCINATION_PATTERNS = [
     "Amara.org",
     "明镜与点点",
     "请不吝点赞",
+    "订阅我的频道",  # "subscribe to my channel"
+    "訂閱我的頻道",
+    "欢迎订阅",
+    "歡迎訂閱",
+    "点赞订阅",  # "like and subscribe"
+    "點贊訂閱",
     # Korean common hallucinations
     "한글자막",  # "Korean subtitles by …"
     "자막 제공",
@@ -70,12 +78,19 @@ HALLUCINATION_PATTERNS = [
     "시청해주셔서 감사합니다",
     "시청해 주셔서 감사합니다",
     "구독과 좋아요",
+    "구독 좋아요",  # "subscribe, like (and the bell)"
+    "좋아요와 구독",
+    "구독과 알림",
+    "알림 설정",
     "MBC 뉴스",
     # Russian common hallucinations
     "субтитр",  # "Субтитры сделал/создавал/подогнал …" ("subtitles by …")
     "DimaTorzok",
     "Продолжение следует",  # "to be continued"
     "\u041f\u043e\u0434\u043f\u0438\u0441\u044b\u0432\u0430\u0439\u0442\u0435\u0441\u044c \u043d\u0430 \u043a\u0430\u043d\u0430\u043b",
+    "\u041f\u043e\u0434\u043f\u0438\u0441\u044b\u0432\u0430\u0439\u0442\u0435\u0441\u044c \u043d\u0430 \u043d\u0430\u0448 \u043a\u0430\u043d\u0430\u043b",
+    "\u041f\u043e\u0434\u043f\u0438\u0448\u0438\u0441\u044c \u043d\u0430 \u043a\u0430\u043d\u0430\u043b",  # the informal "subscribe to the channel"
+    "\u041f\u043e\u0434\u043f\u0438\u0441\u044b\u0432\u0430\u0439\u0441\u044f \u043d\u0430 \u043a\u0430\u043d\u0430\u043b",
     "\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440",
     "\u0421\u0442\u0430\u0432\u044c\u0442\u0435 \u043b\u0430\u0439\u043a",
     "\u041d\u0430\u0436\u0438\u043c\u0430\u0439\u0442\u0435 \u043a\u043e\u043b\u043e\u043a\u043e\u043b\u044c\u0447\u0438\u043a",
@@ -85,6 +100,8 @@ HALLUCINATION_PATTERNS = [
     "\u0644\u0627 \u062a\u0646\u0633\u0649 \u0627\u0644\u0627\u0639\u062c\u0627\u0628",  # bare alef form
     "\u0644\u0627 \u062a\u0646\u0633\u0649 \u0627\u0644\u0625\u0639\u062c\u0627\u0628",  # hamza-below form (Whisper standard)
     "نانسي قنقر",  # "ترجمة نانسي قنقر" ("translated by …")
+    "على المشاهدة",  # "شكرا على المشاهدة", "شكرا لكم على المشاهدة" ("thanks for watching")
+    "اشتركوا في القناة",  # "subscribe to the channel", plural
 ]
 
 # ── Credits-line patterns ─────────────────────────────────────────────────────
@@ -142,14 +159,18 @@ SINGLE_WORD_BLOCKLIST = ["music", "mm", "hmm", "like", "share", "comment", "foll
 _HALLUCINATION_PATTERNS_LOWER = [p.lower() for p in HALLUCINATION_PATTERNS]
 
 
+def _plain(text):
+    """NFC without combining marks: "شكراً للمشاهدة" (with its tanween) matches
+    "شكرا للمشاهدة". Kana and hangul are precomposed in NFC, so they keep theirs."""
+    return "".join(c for c in unicodedata.normalize("NFC", text) if unicodedata.category(c) != "Mn")
+
+
 def is_hallucination(text):
     """Return True if text looks like a Whisper hallucination."""
     t = text.strip()
     if not t:
         return True
-    # Normalize Unicode (NFC) to catch alternate representations of JA/ZH/AR text
-    t = unicodedata.normalize("NFC", t)
-    t_lower = t.lower()
+    t_lower = _plain(t).lower()
 
     for pat in _HALLUCINATION_PATTERNS_LOWER:
         if pat in t_lower:
@@ -157,7 +178,7 @@ def is_hallucination(text):
 
     # User-reported blacklist (sent from extension popup)
     for bl_item in _state.user_blacklist:
-        if bl_item and bl_item.lower() in t_lower:
+        if bl_item and _plain(bl_item).lower() in t_lower:
             print(f"[Yume] User blacklist match: {bl_item!r} in {t!r}")
             return True
 
@@ -177,19 +198,20 @@ def is_hallucination(text):
 def _repeated_unit(clean):
     """The unit a whole line repeats, or None.
 
-    Concatenated repetition: "aaaaaa", "la la la la", 3+ times. Twice is a
-    lyric: きらきら, もっともっと, "더 그리워 더 그리워", "I love you I love you".
+    Concatenated repetition: "aaaaaa", "la la la la", 4+ times. Three times
+    is still a lyric or speech: ダメダメダメ, 無理無理無理 and はいはいはい in a talk
+    show were hidden. Twice too: きらきら, もっともっと, "더 그리워 더 그리워".
     The repeating unit may start after a short prefix — "MACACACACA..." is
     "ma" + "ca"*N and never matches anchored at position 0, so try offsets
     up to one unit length (require an extra repeat there to avoid false
     positives on words like "banana")."""
     if len(clean) < 4:
         return None
-    for sub_len in range(2, min(9, len(clean) // 2 + 1)):
+    for sub_len in range(1, min(9, len(clean) // 2 + 1)):
         for offset in range(0, sub_len + 1):
             body = clean[offset:]
             repeats = len(body) // sub_len
-            if repeats < (3 if offset == 0 else 4):
+            if repeats < (4 if offset == 0 else 5):
                 continue
             sub = body[:sub_len]
             if sub * repeats == body[: sub_len * repeats] and sub_len * repeats >= len(body) * 0.95:
@@ -408,8 +430,7 @@ THANKS_LINES = {
 
 
 def _norm(text):
-    t = "".join(c for c in unicodedata.normalize("NFC", text) if unicodedata.category(c) != "Mn")  # ً in شكراً
-    return " ".join(re.sub(r"[\W_]+", " ", t.lower()).split())
+    return " ".join(re.sub(r"[\W_]+", " ", _plain(text).lower()).split())  # ً in شكراً
 
 
 def window_hallucinations(segs, region):

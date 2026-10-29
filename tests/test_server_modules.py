@@ -423,6 +423,47 @@ class TestIsHallucination(unittest.TestCase):
             self.assertFalse(_filter.is_hallucination(line), line)
         self.assertTrue(_filter.is_hallucination("la la la la la la"))
 
+    def test_a_word_said_three_times_is_a_lyric_four_times_filler(self):
+        # はいはいはい, 無理無理無理 and ほうほうほう were hidden in a Japanese talk show
+        for line in ["ダメダメダメ", "無理無理無理", "はいはいはい", "Baby, baby, baby", "あ、そうそうそうそう"]:
+            self.assertFalse(_filter.is_hallucination(line), line)
+        for line in ["うんうんうんうん", "ああああああ", "aaaaaa", "ラララララ"]:
+            self.assertTrue(_filter.is_hallucination(line), line)
+
+    def test_outro_lines_in_every_language_hidden(self):
+        for line in [
+            "最後までご視聴いただきありがとうございました",
+            "ご視聴頂きありがとうございます",
+            "欢迎订阅我的频道",
+            "記得點贊訂閱轉發",
+            "구독 좋아요 알림 설정 부탁드립니다",
+            "좋아요와 구독 부탁드려요",
+            "Подпишись на канал!",
+            "Подписывайтесь на наш канал и ставьте лайки",
+            "شكرا لكم على المشاهدة",
+            "اشتركوا في القناة",
+            "شكراً للمشاهدة",  # tanween: was not matched
+        ]:
+            self.assertTrue(_filter.is_hallucination(line), line)
+
+    def test_lyrics_near_the_outro_patterns_shown(self):
+        for line in [
+            "君の歌を聴いていた",
+            "为你点赞 为你唱",
+            "换个频道 换个心情",
+            "알림이 울려도 너는 없어",
+            "너의 좋아요 한마디에",
+            "Мы плыли по каналу",
+            "Я подписываю письмо",
+            "شكرا على كل شيء",
+            "شكراً يا حبيبي",
+        ]:
+            self.assertFalse(_filter.is_hallucination(line), line)
+
+    def test_blacklist_matches_with_or_without_arabic_marks(self):
+        _state.user_blacklist = ["مُرحباً"]
+        self.assertTrue(_filter.is_hallucination("مرحبا بكم"))
+
     def test_normal_short_word_not_flagged(self):
         self.assertFalse(_filter.is_hallucination("la"))
 
