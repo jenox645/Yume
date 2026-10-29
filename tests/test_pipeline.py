@@ -1093,6 +1093,24 @@ def test_audio_that_is_not_16k_mono_is_converted_by_ffmpeg(tmp_path):
         ("数着星星", "shǔ zhe xīng xīng"),  # was "shù"
         ("數著日子", "shǔ zhe rì zi"),  # was "shù zhù"
         ("无数", "wú shù"),
+        # verb + 得 + how: de, not dé ("to obtain")
+        ("你唱得很好", "nǐ chàng de hěn hǎo"),  # was "dé"
+        ("只要你过得比我好", "zhǐ yào nǐ guò de bǐ wǒ hǎo"),
+        ("距離睡得好遠", "jù lí shuì de hǎo yuǎn"),  # a cached Chinese song line
+        ("舍不得你", "shě bù de nǐ"),
+        ("他获得了冠军", "tā huò dé le guàn jūn"),  # 获得 "to win" stays dé
+        ("不得不说再见", "bù dé bù shuō zài jiàn"),
+        # 不着: can't manage to (zháo)
+        ("晚上睡不着觉", "wǎn shàng shuì bù zháo jiào"),  # was "zhe jué"
+        ("我找不着方向", "wǒ zhǎo bù zháo fāng xiàng"),
+        ("他已经睡着了", "tā yǐ jīng shuì zháo le"),
+        # 还给 "give back" (huán); 一行行 "line after line" (háng); 樂 "music" (yuè)
+        ("還給你", "huán gěi nǐ"),  # was "hái"
+        ("我还爱着你", "wǒ hái ài zhe nǐ"),
+        ("一行行泪", "yī háng háng lèi"),  # was "xíng"
+        ("一行人走进来", "yī xíng rén zǒu jìn lái"),  # a group of people: xíng
+        ("音樂響起", "yīn yuè xiǎng qǐ"),  # was "lè"
+        ("快樂", "kuài lè"),
     ],
 )
 def test_chinese_heteronyms_are_read_as_meant(zh, pinyin):
@@ -1133,6 +1151,12 @@ def test_chinese_heteronyms_are_read_as_meant(zh, pinyin):
         ("4杯", "4 hai"),
         ("3匹", "3 biki"),  # was "3 hiki"
         ("6匹の猫", "6 piki no neko"),
+        ("3軒目の店", "3 gen me no mise"),  # was "3 kenme"
+        ("1軒家に住む", "1 kenya ni sumu"),  # a house (ikkenya): not the counter
+        ("1歩ずつ前へ", "1 po zutsu mae e"),  # was "1 ho"
+        ("3歩下がって", "3 po sagatte"),
+        ("3足の靴を買った", "3 zoku no kutsu wo katta"),  # pairs of shoes, was "3 ashi"
+        ("1足す1は2", "1 tasu 1 wa 2"),  # 足す "to add": not the counter
         ("菅義偉首相が26日", "Suga Yoshihide shushou ga 26 nichi"),  # was "Kan Yoshihide"
         ("菅官房長官は", "Suga kanbou choukan wa"),
         ("菅直人元首相", "Kan Naoto moto shushou"),  # the other 菅: still Kan

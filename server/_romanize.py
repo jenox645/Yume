@@ -121,11 +121,16 @@ def preload():
 # digits: 3月 "3 tsuki" (sangatsu), 25日 "25ka", 1人 "1nin" (hitori), 第3話 "hanashi" (wa),
 # 3つ "3tsu" (mittsu); and counters whose sound changes with the number, which
 # MeCab reads one way whatever the number: 3本 "3 pon" (sanbon), 10分 "10 fun"
-# (juppun), 1杯 "1 bai" (ippai), 3匹 "3 hiki" (sanbiki). 3分の1 is a third (sanbun).
-_JA_COUNTER = re.compile(r"(\d+)(日間|日|月|人|話|つ|本|分間|分(?!の)|杯|匹)")
+# (juppun), 1杯 "1 bai" (ippai), 3匹 "3 hiki" (sanbiki), 3軒 "3 ken" (sangen),
+# 1歩 "1 ho" (ippo), 3足 "3 ashi" (sanzoku: pairs of shoes). 3分の1 is a third
+# (sanbun); 1足す1 is "1 tasu 1", 1軒家 a house (ikkenya) and 1歩く not a counter.
+_JA_COUNTER = re.compile(
+    r"(\d+)(日間|日|月|人|話|つ|本|分間|分(?!の)|杯|匹|軒(?!家)|歩(?![かきくけこいっ])|足(?![さしすせそらりるれろっ]))"
+)
 # counter: (as read after most numbers, after 1/6/8/10 (doubled consonant), after 3)
 _JA_SOUND = {"本": ("hon", "pon", "bon"), "杯": ("hai", "pai", "bai"), "匹": ("hiki", "piki", "biki"),
-             "分": ("fun", "pun", "pun"), "分間": ("funkan", "punkan", "punkan")}  # fmt: skip
+             "分": ("fun", "pun", "pun"), "分間": ("funkan", "punkan", "punkan"), "軒": ("ken", "ken", "gen"),
+             "歩": ("ho", "po", "po"), "足": ("soku", "soku", "zoku")}  # fmt: skip
 _JA_TSU = {1: "hitotsu", 2: "futatsu", 3: "mittsu", 4: "yottsu", 5: "itsutsu", 6: "muttsu", 7: "nanatsu",
            8: "yattsu", 9: "kokonotsu", 10: "too"}  # fmt: skip
 _JA_DAYS = {1: "tsuitachi", 2: "futsuka", 3: "mikka", 4: "yokka", 5: "itsuka", 6: "muika", 7: "nanoka",
@@ -287,7 +292,28 @@ _ZH_PHRASES = {
     # 重重地 "heavily" (pypinyin: "chóng chóng dì", layers upon layers of earth)
     "重重地": "zhòng zhòng de", "静悄悄地": "jìng qiāo qiāo de", "靜悄悄地": "jìng qiāo qiāo de",
     "数着": "shǔ zhe", "数一数": "shǔ yī shǔ", "數一數": "shǔ yī shǔ",  # counting, not 数 "number" (shù)
+    # 还/還 "give back" (huán), not "still" (hái); 一行行 "line after line" (háng)
+    "还给": "huán gěi", "還給": "huán gěi", "一行行": "yī háng háng", "一行一行": "yī háng yī háng",
+    # 樂 "music" (yuè) in traditional text: 音樂 was "yīn lè"
+    **{w: p for w, p in (("音樂", "yīn yuè"), ("樂隊", "yuè duì"), ("樂器", "yuè qì"), ("樂團", "yuè tuán"),
+       ("樂曲", "yuè qǔ"), ("樂章", "yuè zhāng"))},
+    "睡不着觉": "shuì bù zháo jiào", "睡不著覺": "shuì bù zháo jiào", "长相思": "cháng xiāng sī",
+    "長相思": "cháng xiāng sī", "切开": "qiē kāi", "切開": "qiē kāi",
+    # 舍不得 "can't bear to part" (de), not 不得 "must not" (dé)
+    **{f"{a}不得": f"{p} bù de" for a, p in (("舍", "shě"), ("捨", "shě"), ("怪", "guài"), ("恨", "hèn"),
+       ("巴", "bā"), ("记", "jì"), ("記", "jì"), ("顾", "gù"), ("顧", "gù"), ("由", "yóu"))},
 }  # fmt: skip
+# Verb + 得 + how: 唱得很好 "chàng de" (pypinyin: dé, "to obtain")
+_ZH_DE_VERBS = {
+    "唱": "chàng", "跑": "pǎo", "变": "biàn", "變": "biàn", "走": "zǒu", "说": "shuō", "說": "shuō",
+    "过": "guò", "過": "guò", "哭": "kū", "笑": "xiào", "活": "huó", "爱": "ài", "愛": "ài", "飞": "fēi",
+    "飛": "fēi", "睡": "shuì", "做": "zuò", "写": "xiě", "寫": "xiě", "听": "tīng", "聽": "tīng", "看": "kàn",
+    "想": "xiǎng", "吃": "chī", "玩": "wán", "跳": "tiào", "讲": "jiǎng", "講": "jiǎng", "醉": "zuì",
+    "疼": "téng", "痛": "tòng", "等": "děng", "来": "lái", "來": "lái",
+}  # fmt: skip
+# Verb + 不着/得着: can('t) manage to (zháo): 睡不着 "can't fall asleep", was "shuì bù zhe"
+_ZH_ZHAO_VERBS = {"睡": "shuì", "找": "zhǎo", "摸": "mō", "猜": "cāi", "够": "gòu", "夠": "gòu", "用": "yòng",
+                  "犯": "fàn", "见": "jiàn", "見": "jiàn", "碰": "pèng"}  # fmt: skip
 # AA地 is the adverb "-ly" (de), which pypinyin read as 地 "earth" (dì): 慢慢地
 # "màn màn dì". Not 大大/小小/高高: 小小地方 is "a small place" (dì fāng).
 _ZH_AA_DE = {
@@ -328,6 +354,13 @@ def _load_zh_phrases():
         **{f"{c}{c}地": f"{p} {p} de" for c, p in _ZH_AA_DE.items()},
         **{f"{n}只": f"{p} zhī" for n, p in _ZH_NUMBERS.items()},
         **{f"重{v}": f"chóng {p}" for v, p in _ZH_CHONG.items()},
+        **{f"{v}得": f"{p} de" for v, p in _ZH_DE_VERBS.items()},
+        **{
+            f"{v}{m}{z}": f"{p} {mp} zháo"
+            for v, p in _ZH_ZHAO_VERBS.items()
+            for m, mp in (("不", "bù"), ("得", "de"))
+            for z in "着著"
+        },
         **_ZH_PHRASES,
         **{f"{v}著": f"{p} zhe" for v, p in _ZH_ZHE_VERBS.items()},
     }
