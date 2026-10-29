@@ -67,6 +67,9 @@ class SubtitleSession {
     window.dispatchEvent(new CustomEvent('pipeline-reset'));
 
     const { settings = {}, customStreamUrl } = await chrome.storage.local.get(['settings', 'customStreamUrl']);
+    // Stopped meanwhile: stop() already ran its removeListener, so adding it
+    // now would leave it registered for good
+    if (aborted()) return false;
     this.timingOffset = (settings.timingOffset || 0) / 10;
     chrome.storage.onChanged.addListener(this._onStorage);
 

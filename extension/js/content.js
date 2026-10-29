@@ -126,6 +126,9 @@
     if (state.session) state.session.stop();
     if (state.window) {
       state.window.updateSubtitle('', '', '');
+      // A window that has shown lines ignores statuses: without this it stayed
+      // blank until the restart below (1.5-4 s later)
+      state.window.isPlaying = false;
       state.window.updateStatus('Loading subtitles for the new video...', 'loading');
     }
     // Give the page a moment to swap the video source before reading its
