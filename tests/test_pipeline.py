@@ -249,10 +249,27 @@ def test_korean_and_russian_romanization():
         ("없지만", "eopjiman"),
         ("행운이", "haenguni"),  # ㅇ final does not move
         ("닭", "dak"),
+        ("굳히다", "guchida"),  # ㄷ + 히 palatalized (was "gutida", the RR rules' own example)
+        ("닫혀", "dachyeo"),  # was "datyeo"
+        ("앉히다", "anchida"),  # was "anhida"
+        ("읽고 쓰고", "ilgo sseugo"),  # ㄺ before ㄱ is ㄹ (was "ikgo")
+        ("밟다", "bapda"),  # 밟 is said ㅂ before a consonant (was "balda")...
+        ("밟는", "bamneun"),
+        ("밟아", "balba"),  # ...not before a vowel
+        ("넓다", "neolda"),  # other ㄼ stay ㄹ
+        ("꽃잎", "kkonnip"),  # ㄴ added before 잎 (was "kkochip")
+        ("솔잎", "sollip"),
+        ("꽃이", "kkochi"),
     ],
 )
 def test_korean_romanization_follows_pronunciation(hangul, rr):
     assert _romanize.romanize("ko", hangul) == rr
+
+
+def test_russian_words_in_capitals_stay_in_capitals():
+    assert _romanize.romanize("ru", "ЮЛЯ ЛЮБИТ ТЕБЯ") == "YULYA LYUBIT TEBYA"  # was "YuLYa LYuBIT TEBYa"
+    assert _romanize.romanize("ru", "Юля и Ёлка") == "Yulya i Yolka"
+    assert _romanize.romanize("ru", "Я") == "Ya"
 
 
 # ── jobs ──────────────────────────────────────────────────────────────────────
