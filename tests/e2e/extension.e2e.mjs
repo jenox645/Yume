@@ -211,6 +211,31 @@ test('the popup shows both servers up', async () => {
   await popup.close();
 });
 
+test('popup: every control has a name, and sections open from the keyboard', async () => {
+  const popup = await context.newPage();
+  await popup.goto(`chrome-extension://${new URL(worker.url()).host}/popup.html`);
+  // What a screen reader would announce: aria-label, a <label>, or a button's own text
+  const unnamed = await popup.evaluate(() => [...document.querySelectorAll('input, select, button, [role="button"]')]
+    .filter((el) => !(el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') ||
+      (el.id && document.querySelector(`label[for="${el.id}"]`)) ||
+      ((el.tagName === 'BUTTON' || el.getAttribute('role') === 'button') && /\w/.test(el.textContent))))
+    .map((el) => el.id || el.outerHTML.slice(0, 80)));
+  assert.deepEqual(unnamed, []);
+
+  const toggle = '[data-section="history"] .section-toggle';
+  const state = () => popup.evaluate((sel) => {
+    const t = document.querySelector(sel);
+    return { tabIndex: t.tabIndex, expanded: t.getAttribute('aria-expanded'), open: !t.closest('.yume-section').classList.contains('collapsed') };
+  }, toggle);
+  assert.deepEqual(await state(), { tabIndex: 0, expanded: 'false', open: false });
+  await popup.focus(toggle);
+  await popup.keyboard.press('Enter');
+  assert.deepEqual(await state(), { tabIndex: 0, expanded: 'true', open: true });
+  await popup.keyboard.press(' ');
+  assert.deepEqual(await state(), { tabIndex: 0, expanded: 'false', open: false });
+  await popup.close();
+});
+
 test('export gives every line with its translation', async () => {
   const r = await toTab({ action: 'EXPORT_SRT' });
   assert.equal(r.success, true, JSON.stringify(r));

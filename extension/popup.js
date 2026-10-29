@@ -45,6 +45,7 @@ function showToast(message, type = 'success') {
   document.querySelectorAll('.yume-toast').forEach(t => t.remove());
   const toast = document.createElement('div');
   toast.className = `yume-toast ${type}`;
+  toast.setAttribute('role', type === 'error' ? 'alert' : 'status');  // read out by screen readers
   toast.textContent = message;
   document.body.appendChild(toast);
   setTimeout(() => { toast.classList.add('fade-out'); setTimeout(() => toast.remove(), 300); }, 1500);
@@ -210,21 +211,34 @@ function restoreCollapsibleState() {
       const id = section.getAttribute('data-section');
       if (id && expanded.includes(id)) {
         section.classList.remove('collapsed');
-        const arrow = section.querySelector('.toggle-arrow');
-        if (arrow) arrow.textContent = '▼';
+        showSectionState(section);
         loadSectionData(id);
       }
     });
   });
 }
 
+// Arrow and aria-expanded follow the section's collapsed class
+function showSectionState(section) {
+  const open = !section.classList.contains('collapsed');
+  const arrow = section.querySelector('.toggle-arrow');
+  if (arrow) arrow.textContent = open ? '▼' : '▶';
+  section.querySelector('.section-toggle')?.setAttribute('aria-expanded', String(open));
+}
+
 function setupCollapsibleSections() {
   document.querySelectorAll('.section-toggle').forEach(label => {
+    // A heading that works as a button: reachable with Tab, opened with Enter/Space
+    label.setAttribute('role', 'button');
+    label.tabIndex = 0;
+    label.setAttribute('aria-expanded', 'false');
+    label.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); label.click(); }
+    });
     label.addEventListener('click', () => {
       const section = label.closest('.yume-section');
       section.classList.toggle('collapsed');
-      const arrow = label.querySelector('.toggle-arrow');
-      if (arrow) arrow.textContent = section.classList.contains('collapsed') ? '▶' : '▼';
+      showSectionState(section);
       const expanded = [...document.querySelectorAll('.yume-section.collapsible:not(.collapsed)')]
         .map(s => s.getAttribute('data-section')).filter(Boolean);
       chrome.storage.local.set({ expandedSections: expanded });
@@ -372,8 +386,11 @@ async function checkServers() {
   const whisper = whisperView(h.data);
   const translation = translationView(t?.data, st);
   whisperEl.className = 'status-indicator ' + whisper.state;
+  whisperEl.setAttribute('aria-label', `Whisper server: ${INDICATOR_WORDS[whisper.state]}`);
   document.getElementById('whisperInfo').textContent = starting && !st ? svc.message || 'Starting...' : whisper.text;
-  document.getElementById('translationStatus').className = 'status-indicator ' + translation.state;
+  const trEl = document.getElementById('translationStatus');
+  trEl.className = 'status-indicator ' + translation.state;
+  trEl.setAttribute('aria-label', `Translation server: ${INDICATOR_WORDS[translation.state]}`);
   document.getElementById('translationInfo').textContent = translation.text;
   document.getElementById('serviceStart').style.display = svc.ok && !st && !starting ? '' : 'none';
   document.getElementById('serviceStop').style.display = svc.ok && svc.managed && svc.state !== 'stopped' ? '' : 'none';
@@ -381,6 +398,9 @@ async function checkServers() {
   hint.textContent = serverHint(st, svc, starting);
   hint.style.display = !st || translation.state !== 'connected' ? '' : 'none';
 }
+
+// What a status light means, for screen readers (the colour alone says nothing)
+const INDICATOR_WORDS = { connected: 'connected', checking: 'checking', disconnected: 'not connected' };
 
 // The Whisper server's light and line from its /health answer
 function whisperView(health) {
@@ -616,7 +636,7 @@ async function loadBlacklist() {
   container.innerHTML = list.map((item, i) => `
     <div class="blacklist-item">
       <span class="blacklist-text">${_escapeHtml(item)}</span>
-      <button class="blacklist-remove" data-index="${i}" title="Remove">×</button>
+      <button class="blacklist-remove" data-index="${i}" title="Remove" aria-label="Remove ${_escapeHtml(item)} from the blacklist">×</button>
     </div>`).join('');
   container.querySelectorAll('.blacklist-remove').forEach(btn => btn.addEventListener('click', async () => {
     await api({ method: 'POST', path: '/blacklist/remove', body: { text: list[+btn.dataset.index] } });
@@ -770,8 +790,8 @@ async function loadHistory() {
         <span class="blacklist-text" title="${_escapeHtml(e.url || '')}">${_escapeHtml(label)}
           <span style="color:var(--text-dim);font-size:10px;display:block">${_escapeHtml(date)} · ${_escapeHtml(e.language)} · ${_escapeHtml(e.model)} · ${pct}%</span>
         </span>
-        <button class="yume-button secondary hist-srt" data-i="${i}" style="padding:2px 8px;font-size:10px;margin-top:0">SRT</button>
-        <button class="blacklist-remove hist-del" data-i="${i}" title="Remove">×</button>
+        <button class="yume-button secondary hist-srt" data-i="${i}" aria-label="Download the SRT of ${_escapeHtml(label)}" style="padding:2px 8px;font-size:10px;margin-top:0">SRT</button>
+        <button class="blacklist-remove hist-del" data-i="${i}" title="Remove" aria-label="Remove ${_escapeHtml(label)} from History">×</button>
       </div>`;
   }).join('');
   listEl.querySelectorAll('.hist-srt').forEach(btn => btn.addEventListener('click', async () => {
@@ -845,6 +865,8 @@ function setupEventListeners() {
     blacklistVisible = !blacklistVisible;
     $('blacklistContainer').style.display = blacklistVisible ? '' : 'none';
     $('toggleBlacklistView').textContent = blacklistVisible ? '▲' : '▼';
+    $('toggleBlacklistView').setAttribute('aria-expanded', String(blacklistVisible));
+    $('toggleBlacklistView').setAttribute('aria-label', blacklistVisible ? 'Hide the blacklist' : 'Show the blacklist');
     if (blacklistVisible) return loadBlacklist();
   });
 
