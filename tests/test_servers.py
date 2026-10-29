@@ -159,3 +159,21 @@ def test_logs_rotate_past_5_mb(logs):
     servers.open_rotating_log("whisper_server.log").close()
     assert (logs / "whisper_server.log.1").stat().st_size > 5 * 1024 * 1024
     assert big.stat().st_size == 0
+
+
+def test_ollama_is_started_from_where_it_was_found(logs, monkeypatch):
+    spawned = []
+
+    def spawn(self, name, cmd, log_name, env):
+        spawned.append(cmd)
+        raise FileNotFoundError(cmd[0])
+
+    monkeypatch.setattr("yume.network.check_server", lambda *a: {"up": False, "data": {}})
+    monkeypatch.setattr(servers.Processes, "spawn", spawn)
+    monkeypatch.setattr(servers, "find_ollama", lambda: "/Applications/Ollama.app/Contents/Resources/ollama")
+    r = servers.start_ollama(CFG, servers.Processes(), {})
+    assert spawned == [["/Applications/Ollama.app/Contents/Resources/ollama", "serve"]]
+    assert "not installed" in r.error
+    monkeypatch.setattr(servers, "find_ollama", lambda: None)
+    r = servers.start_ollama(CFG, servers.Processes(), {})
+    assert len(spawned) == 1 and "ollama.com/download" in r.error

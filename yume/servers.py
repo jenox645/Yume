@@ -24,7 +24,7 @@ from pathlib import Path
 
 from yume.constants import TOOLS_DIR, SERVER_DIR, LOGS_DIR, IS_WIN, HEALTH_PATH_OLLAMA
 from yume.hardware import detect_gpu
-from yume.utils import _run, find_gguf_models
+from yume.utils import _run, find_gguf_models, find_ollama
 
 _log = logging.getLogger("pocket_yume")
 
@@ -457,8 +457,11 @@ def start_ollama(cfg: dict, procs: Processes, env: dict, stop=None, tick=None, t
 
     if up():
         return StartResult(already_running=True)
+    ollama = find_ollama()
     try:
-        p = procs.spawn("Ollama", ["ollama", "serve"], OLLAMA_LOG, env)
+        if not ollama:
+            raise FileNotFoundError("ollama")
+        p = procs.spawn("Ollama", [ollama, "serve"], OLLAMA_LOG, env)
     except FileNotFoundError:
         return StartResult(error="Ollama is not installed (https://ollama.com/download)")
     return _started(
