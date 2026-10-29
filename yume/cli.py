@@ -143,7 +143,7 @@ def _export(cfg, args):
 def _import(cfg, args):
     if not args:
         error("Usage: python pocket_yume.py import <path>")
-        return
+        sys.exit(2)
     config_import(args[0])  # merges with defaults and saves
 
 
@@ -382,6 +382,7 @@ def run_command(name: str, args: list[str]) -> None:
         COMMANDS[name].run(load_config(), args)
     else:
         print(f"  Unknown: {name}. Try: python pocket_yume.py help")
+        sys.exit(2)  # a typo in a script must not look like success
 
 
 def main() -> None:

@@ -380,7 +380,11 @@ def _download_audio_segment_fallback(url, start_time, duration, output_path, _re
 # ── Full audio download ───────────────────────────────────────────────────────
 
 
-_COOKIES_FIX = "Fix: In yume_config.json set youtube_auth_method to 'cookies' and cookies_browser to your browser name"
+# Where users change it: the CLI menu, not the JSON file by hand
+_SETTINGS = "python pocket_yume.py settings"
+_COOKIES_FIX = (
+    f"Fix: Settings → YouTube auth → Browser cookies, and pick a browser you are logged in with ({_SETTINGS})"
+)
 
 # (conditions, message): the first rule whose every condition matches wins.
 # A condition is a tuple of phrases, any of which may appear in the error.
@@ -400,15 +404,15 @@ _YTDLP_ERRORS = [
     (
         (("http error 403", "403 forbidden"),),
         "Access denied (403). The site is blocking yt-dlp. "
-        "For YouTube: try switching to cookie auth in yume_config.json. "
+        f"For YouTube: switch to browser cookies in Settings → YouTube auth ({_SETTINGS}). "
         "For other sites: use the Custom Stream URL option in the extension — "
         "open DevTools > Network > filter 'm3u8' or 'mp4' > copy the URL. "
-        "Also try: pip install -U yt-dlp",
+        "Also update yt-dlp (Tools → yt-dlp → Install / Update).",
     ),
     ((("video unavailable", "private video"),), "This video is unavailable or private."),
     (
         (("age",), ("restricted",)),
-        "Age-restricted video. Fix: Set youtube_auth_method to 'cookies' with a logged-in browser.",
+        f"Age-restricted video. {_COOKIES_FIX}.",
     ),
     ((("geo",), ("block",)), "This video is not available in your region."),
     (
@@ -422,12 +426,12 @@ _YTDLP_ERRORS = [
     ),
     (
         (("no video formats", _state.ERR_REQUESTED_FORMAT),),
-        "No compatible audio format found. Try updating yt-dlp: pip install -U yt-dlp",
+        "No compatible audio format found. Update yt-dlp (Tools → yt-dlp → Install / Update).",
     ),
     (
         (("deno",), ("not found", _state.ERR_NO_SUCH_FILE)),
         "Deno is not installed (needed for YouTube auth). "
-        "Fix: Switch youtube_auth_method to 'cookies' in yume_config.json, "
+        f"Fix: Settings → YouTube auth → Browser cookies ({_SETTINGS}), "
         "or install Deno: https://deno.land/#installation",
     ),
 ]
@@ -642,7 +646,7 @@ def download_full_audio(url, stereo=False):
     shutil.rmtree(tmp_dir, ignore_errors=True)
     auth_error = any(k in last_error.lower() for k in ("403", "sign-in", "sign in", "age-restricted", "access denied"))
     if cookies_unreadable() and is_yt and auth_error:
-        last_error = last_error.split(" For YouTube: try switching to cookie auth")[0] + _cookies_hint()
+        last_error = last_error.split(" For YouTube:")[0] + _cookies_hint()  # cookies are what failed
     return None, last_error
 
 
@@ -760,7 +764,12 @@ def download_direct(stream_url):
         if result.returncode == 0 and os.path.exists(output_path):
             return output_path, None
         shutil.rmtree(tmp_dir, ignore_errors=True)
-        return None, f"Direct download failed: {(result.stderr or '')[-200:]}"
+        lines = [ln.strip() for ln in (result.stderr or "").splitlines() if "ERROR" in ln.upper()]
+        reason = lines[-1].replace("ERROR: ", "")[:150] if lines else f"exit code {result.returncode}"
+        return None, (
+            f"Could not download the custom stream URL ({reason}). Stream URLs copied from the browser "
+            "usually expire within hours: copy a fresh one (DevTools > Network) and paste it again."
+        )
     except subprocess.TimeoutExpired:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         return None, "Direct download timed out"

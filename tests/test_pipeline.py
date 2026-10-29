@@ -752,8 +752,41 @@ def test_unreadable_browser_cookies_are_skipped(monkeypatch):
     assert path is None
     with_cookies = [c for c in calls if "--cookies-from-browser" in c]
     assert len(with_cookies) == 1  # was 6: every cookie strategy x 2 format passes
-    assert "Brave" in err and "switching to cookie auth" not in err
+    assert "Brave" in err and "switch to browser cookies" not in err  # they are what failed
     assert _audio.build_auth_args("https://www.youtube.com/watch?v=x") == []
+
+
+def test_download_errors_point_to_the_settings_menu_not_the_config_file():
+    # The overlay told users to edit yume_config.json by hand; the CLI has a menu for it
+    for raw in (
+        "ERROR: [youtube] x: Sign in to confirm you're not a bot",
+        "ERROR: [youtube] x: HTTP Error 403: Forbidden",
+        "ERROR: [youtube] x: This video is DRM protected",
+        "ERROR: [youtube] x: age-restricted",
+        "ERROR: deno: not found",
+    ):
+        msg = _audio.friendlify_ytdlp_error(raw)
+        assert msg != raw and "yume_config.json" not in msg, msg
+        assert "python pocket_yume.py settings" in msg, msg
+
+
+def test_a_failed_custom_stream_url_gives_advice_not_raw_output(monkeypatch, tmp_path):
+    def fake_run(cmd, **kw):
+        if cmd[0] == "ffmpeg":
+            return types.SimpleNamespace(returncode=1, stderr="Server returned 403 Forbidden", stdout="")
+        return types.SimpleNamespace(
+            returncode=1, stdout="", stderr="[generic] x: Downloading\nERROR: [generic] x: HTTP Error 403: Forbidden\n"
+        )
+
+    monkeypatch.setattr(_audio.subprocess, "run", fake_run)
+    monkeypatch.setattr(_audio.tempfile, "mkdtemp", lambda prefix: str(tmp_path))
+    path, err = _audio.download_direct("https://cdn.example.com/a.m3u8")
+    assert path is None
+    # was the raw stderr tail ("[generic] x: Downloading ERROR: …"), and the generic 403 advice
+    # would say "use the Custom Stream URL option", which is what failed
+    assert err.startswith("Could not download the custom stream URL ([generic] x: HTTP Error 403"), err
+    assert "Downloading" not in err and "copy a fresh one" in err
+    assert _audio.download_direct("-o x")[1].startswith("Invalid URL")
 
 
 def test_old_ytdlp_self_updates_once_a_day(tmp_path, monkeypatch):
