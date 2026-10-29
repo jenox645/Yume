@@ -1338,6 +1338,44 @@ def test_a_line_heard_by_both_regions_at_a_cut_is_shown_once(pipeline):
         assert [t for _s, _e, t in shown].count(line) == 1, order
 
 
+LONG = (
+    "Я помню чудное мгновенье, передо мной явилась ты, как мимолётное виденье, "
+    "как гений чистой красоты, в томленьях грусти безнадежной, в тревогах шумной суеты."
+)
+
+
+def test_a_long_line_heard_by_both_regions_at_a_cut_is_shown_once(pipeline):
+    # Too long to read in one go, so each region cuts it into pieces: region 0
+    # holds 8.4 s of it (until the cut), region 1 the whole 13.6 s. The pieces
+    # are timed differently, so the last piece of one region never equalled the
+    # first piece of the next, and the whole line was shown twice.
+    for order in ((0, 1), (1, 0)):
+        job = _jobs.Job(("long", "ru", "", "m"), {"language": "ru"})
+        job.regions, job.region_state = [(0.0, 20.4), (20.4, 50.0)], ["pending", "pending"]
+        raw = {
+            0: [_seg(3.0, 11.0, "Я помню."), _seg(12.0, 26.0, LONG)],
+            1: [_seg(20.4, 34.0, LONG), _seg(35.0, 40.0, "Шли годы.")],
+        }
+        for idx in order:
+            job.add_region(idx, raw[idx])
+        shown = sorted((s["start"], s["end"], s["text"]) for s in job.segments.values() if not s["hidden"])
+        assert len(shown) > 3, "the long line is cut into pieces"
+        assert " ".join(t for _s, _e, t in shown[1:-1]) == LONG, order  # once, whole
+        # Its pieces now span both regions' share of it, one after the other
+        assert shown[1][0] == 12.0 and shown[-2][1] == 34.0, order
+        assert all(a[1] == b[0] for a, b in zip(shown[1:-1], shown[2:-1])), order
+
+
+def test_library_export_shows_a_long_line_heard_by_both_regions_once(pipeline):
+    store = _state.store
+    store.put_video("long", "https://x", "t", 50.0, [[0.0, 20.4], [20.4, 50.0]])
+    store.put_transcript("long", "ru", "m", 0.0, 20.4, [_raw(12.0, 26.0, LONG)])
+    store.put_transcript("long", "ru", "m", 20.4, 50.0, [_raw(20.4, 34.0, LONG), _raw(35.0, 40.0, "Шли годы.")])
+    srt, n = _jobs.library_export("long", "ru", "m", None)
+    assert srt.count("Я помню чудное мгновенье") == 1, srt
+    assert "00:00:12,000 -->" in srt and "--> 00:00:34,000" in srt
+
+
 def test_library_export_shows_a_line_heard_by_both_regions_once(pipeline):
     store = _state.store
     line = "وظننت أنا أني بذلك حست غنى"
