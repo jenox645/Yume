@@ -513,7 +513,7 @@ test('popup: Diagnostics shows the job and its log; Export and Download Log save
   assert.match(log.name, /^yume-diag-.*\.json$/);
   const diag = JSON.parse(log.body);
   assert.equal(diag.status, 'done');
-  assert.match(diag.videoId, /v=three/);
+  assert.equal(diag.videoId, jobsCreated().at(-1).video_id);
   await popup.close();
 });
 
