@@ -1033,6 +1033,25 @@ def test_audio_that_is_not_16k_mono_is_converted_by_ffmpeg(tmp_path):
 
 
 @pytest.mark.parametrize(
+    ("zh", "pinyin"),
+    [
+        ("弹着琴唱你爱的歌", "tán zhe qín chàng nǐ ài de gē"),  # was "dàn" (a Jay Chou line)
+        ("为什么不好好读书", "wèi shén me bù hǎo hǎo dú shū"),  # was "hǎo hào"
+        ("教室裡的燈還亮著", "jiào shì lǐ de dēng hái liàng zhe"),  # was "zhù"
+        ("到現在我還在寫著", "dào xiàn zài wǒ hái zài xiě zhe"),
+        ("这条路很长", "zhè tiáo lù hěn cháng"),  # was "zhǎng"
+        ("他长得很高", "tā zhǎng de hěn gāo"),  # was "dé"
+        ("著名的歌手", "zhù míng de gē shǒu"),  # 著 that is not "-ing" stays zhù
+        ("我长大了", "wǒ zhǎng dà le"),
+        ("不好意思", "bù hǎo yì sī"),
+    ],
+)
+def test_chinese_heteronyms_are_read_as_meant(zh, pinyin):
+    pytest.importorskip("pypinyin")
+    assert _romanize.romanize("zh", zh) == pinyin
+
+
+@pytest.mark.parametrize(
     ("ja", "romaji"),
     [
         ("去年3月、東京", "Kyonen 3 gatsu, Tokyo"),  # was "3 tsuki"
@@ -1053,6 +1072,11 @@ def test_audio_that_is_not_16k_mono_is_converted_by_ffmpeg(tmp_path):
         ("この3つが大事", "Kono mittsu ga daiji"),  # was "3tsu"
         ("4つ目かな", "Yottsu me ka na"),
         ("1個", "1 ko"),  # was "1ko"
+        ("菅義偉首相が26日", "Suga Yoshihide shushou ga 26 nichi"),  # was "Kan Yoshihide"
+        ("菅官房長官は", "Suga kanbou choukan wa"),
+        ("菅直人元首相", "Kan Naoto moto shushou"),  # the other 菅: still Kan
+        ("菅田将暉", "Suda Masaki"),
+        ("菅野美穂", "Kanno Miho"),
     ],
 )
 def test_japanese_dates_and_people_are_read_correctly(ja, romaji):

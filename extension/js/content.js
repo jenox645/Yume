@@ -128,8 +128,25 @@
       state.window.updateSubtitle('', '', '');
       state.window.updateStatus('Loading subtitles for the new video...', 'loading');
     }
-    // Give the page a moment to swap the video source before reading its duration
-    setTimeout(() => restart('Loading subtitles for the new video...'), 1500);
+    // Give the page a moment to swap the video source before reading its
+    // duration, and its title: the job takes the title (translation context,
+    // History label), and YouTube changes it after the URL
+    const oldTitle = document.title;
+    setTimeout(async () => {
+      await titleChanged(oldTitle, TITLE_WAIT_MS);
+      restart('Loading subtitles for the new video...');
+    }, 1500);
+  }
+
+  // Resolves once document.title differs from `old`, or after `ms` (some sites
+  // keep one title for every page)
+  const TITLE_WAIT_MS = 2500;
+  function titleChanged(old, ms) {
+    return new Promise((resolve) => {
+      const t0 = Date.now();
+      const tick = () => (document.title !== old || Date.now() - t0 >= ms ? resolve() : setTimeout(tick, 200));
+      tick();
+    });
   }
   setInterval(onUrlChange, 1000);
   window.addEventListener('popstate', () => setTimeout(onUrlChange, 100));

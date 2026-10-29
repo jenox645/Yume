@@ -126,6 +126,14 @@ _JA_TSU = {1: "hitotsu", 2: "futatsu", 3: "mittsu", 4: "yottsu", 5: "itsutsu", 6
 _JA_DAYS = {1: "tsuitachi", 2: "futsuka", 3: "mikka", 4: "yokka", 5: "itsuka", 6: "muika", 7: "nanoka",
             8: "youka", 9: "kokonoka", 10: "tooka", 14: "juuyokka", 20: "hatsuka", 24: "nijuuyokka"}  # fmt: skip
 _JA_PLACEHOLDER = "ZQ{}ZQ"  # an ASCII word: cutlet and pykakasi pass it through
+# Names UniDic reads wrong, only where the full name settles it: 菅 alone is
+# Suga (菅義偉) or Kan (菅直人), and 菅首相 was both, so it is left as UniDic reads it
+_JA_NAMES = {
+    "菅義偉": "Suga Yoshihide",  # was "Kan Yoshihide"
+    "菅官房長官": "Suga kanbou choukan",  # Suga's post 2012-2020
+    "菅田将暉": "Suda Masaki",  # was "Sugata Susumu Akira"
+}
+_JA_NAME_RE = re.compile("|".join(map(re.escape, _JA_NAMES)))
 
 
 def _counter_reading(m, after_month):
@@ -148,12 +156,13 @@ def romanize_japanese(text):
     """Japanese text (kanji/kana) to romaji: cutlet, else pykakasi. ~1 ms."""
     readings = []
 
-    def hold(m):
-        readings.append(_counter_reading(m, after_month=text[: m.start()].endswith("月")))
+    def hold(reading):
+        readings.append(reading)
         return _JA_PLACEHOLDER.format(len(readings) - 1)
 
     # ・ separates words (ジョン・レノン); cutlet wrote it as "/": "Jon/Renon"
-    held = _JA_COUNTER.sub(hold, text.replace("・", " "))
+    held = _JA_NAME_RE.sub(lambda m: hold(_JA_NAMES[m.group(0)]), text.replace("・", " "))
+    held = _JA_COUNTER.sub(lambda m: hold(_counter_reading(m, m.string[: m.start()].endswith("月"))), held)
     roma = _romanize_japanese_words(held)
     if roma is None:
         return None
@@ -225,12 +234,52 @@ def romanize_chinese(text):
     try:
         from pypinyin import pinyin, Style
 
+        _load_zh_phrases()
         result = pinyin(text, style=Style.TONE)
         return " ".join(p[0] for p in result).strip()
     except ImportError:
         return None
     except Exception:
         return None
+
+
+# Phrases pypinyin reads wrong, from a Jay Chou song in the live run: 弹着琴
+# "dàn" (tán, to play), 好好读书 "hǎo hào", 亮著 "liàng zhù" (zhe: the -ing
+# particle, written 著 in traditional text), 很长 "zhǎng" (cháng, long)
+_ZH_PHRASES = {
+    "弹着": "tán zhe", "彈著": "tán zhe", "弹琴": "tán qín", "彈琴": "tán qín", "弹吉他": "tán jí tā",
+    "彈吉他": "tán jí tā", "长得": "zhǎng de", "長得": "zhǎng de",
+    # 好好 + verb: pypinyin's 好读书 ("loves reading", hào) won over 好好
+    **{f"好好{v}": f"hǎo hǎo {p}" for v, p in (("读书", "dú shū"), ("讀書", "dú shū"), ("学习", "xué xí"),
+       ("學習", "xué xí"), ("休息", "xiū xi"), ("过", "guò"), ("過", "guò"), ("活着", "huó zhe"),
+       ("活著", "huó zhe"), ("的", "de"), ("爱", "ài"), ("愛", "ài"))},
+    # ...and after 不/没 the segmenter took 不好, leaving 好读书 again
+    "不好好": "bù hǎo hǎo", "没好好": "méi hǎo hǎo", "沒好好": "méi hǎo hǎo",
+    **{f"{a}{b}": f"{pa} cháng" for a, pa in (("很", "hěn"), ("太", "tài"), ("好", "hǎo"), ("多", "duō"))
+       for b in "长長"},
+}  # fmt: skip
+# Verbs 著 follows as "-ing" (看著 kàn zhe), where pypinyin reads zhù
+_ZH_ZHE_VERBS = {
+    "看": "kàn", "想": "xiǎng", "等": "děng", "聽": "tīng", "唱": "chàng", "走": "zǒu", "笑": "xiào",
+    "哭": "kū", "坐": "zuò", "站": "zhàn", "躺": "tǎng", "睡": "shuì", "拿": "ná", "帶": "dài",
+    "抱": "bào", "牽": "qiān", "望": "wàng", "亮": "liàng", "活": "huó", "忙": "máng", "記": "jì",
+    "陪": "péi", "守": "shǒu", "吃": "chī", "喝": "hē", "寫": "xiě", "念": "niàn", "讀": "dú",
+    "找": "zhǎo", "追": "zhuī", "愛": "ài", "等待": "děng dài", "看見": "kàn jiàn",
+}  # fmt: skip
+_zh_loaded = False
+
+
+def _load_zh_phrases():
+    global _zh_loaded
+    if _zh_loaded:
+        return
+    _zh_loaded = True
+    try:
+        from pypinyin import load_phrases_dict
+    except ImportError:  # a pypinyin without it still romanizes, only less well
+        return
+    phrases = {**_ZH_PHRASES, **{f"{v}著": f"{p} zhe" for v, p in _ZH_ZHE_VERBS.items()}}
+    load_phrases_dict({k: [[s] for s in v.split()] for k, v in phrases.items()})
 
 
 # ── Korean (Revised Romanization, as pronounced) ─────────────────────────────

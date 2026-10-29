@@ -78,7 +78,7 @@ jobs:
       - name: Install test deps
         # numpy: the region planner and audio loader work on numpy arrays
         # (pinned to match server/requirements.txt)
-        run: pip install pytest pytest-cov numpy==2.4.3 pyyaml==6.0.3
+        run: pip install pytest pytest-cov numpy==2.4.3 pyyaml==6.0.3 pypinyin==0.55.0
 
       - name: Run tests with coverage
         shell: bash

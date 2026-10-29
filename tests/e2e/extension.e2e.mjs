@@ -240,6 +240,16 @@ test('in-page navigation starts a job for the new video', async () => {
   assert.equal(job.title, 'Second Song');
 });
 
+test('the new video\'s title is used even when the page sets it after the URL', async () => {
+  // YouTube: the URL changes first, the title follows once the page data arrives
+  await page.evaluate(() => {
+    history.pushState({}, '', '/watch?v=three');
+    setTimeout(() => { document.title = 'Third Song - YouTube'; }, 2000);
+  });
+  const job = await until('POST /jobs for the third page', () => jobsCreated().find((j) => /v=three/.test(j.video_id)));
+  assert.equal(job.title, 'Third Song');
+});
+
 test('romaji switched off disappears from the line on screen', async () => {
   await seek(25.5);  // line 6
   await until('line 6 with romaji', async () => /gyou/i.test((await overlay()).romaji || ''));
