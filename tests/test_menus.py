@@ -498,3 +498,22 @@ def test_romanization_libs_are_the_ones_yume_uses_at_their_pinned_versions():
     # cutlet's MeCab + UniDic (Japanese by word) and pypinyin, pinned as in server/requirements.txt
     assert ran[0][4:7] == ["fugashi==1.5.2", "unidic-lite==1.0.8", "pypinyin==0.55.0"]
     assert any("Restart server" in s for s in said)
+
+
+def test_stats_and_model_say_how_to_start_a_stopped_server(capsys):
+    # `stats` printed "Whisper server not reachable" and exited 0, with no next step
+    import pytest
+
+    import yume.cli as cli
+
+    cfg = {"whisper_host": "127.0.0.1", "whisper_port": 5999, "whisper_model": "small"}
+    with patch.object(srv, "_server_get", return_value=None):
+        assert srv.cli_server_stats(cfg) is False
+        out = capsys.readouterr().out
+        assert "not reachable" in out and "pocket_yume.py launch" in out
+        with pytest.raises(SystemExit) as e:
+            cli._stats(cfg, [])
+        assert e.value.code == 1
+        srv.cli_model(cfg, [])
+        out = capsys.readouterr().out
+        assert "pocket_yume.py launch" in out and "small" in out

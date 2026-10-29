@@ -28,6 +28,7 @@ class Check:
         self.port_owner = over.pop("port_owner", (1234, "other.exe"))
         self.e2e = over.pop("e2e", {"success": True, "translation": "Nice weather today"})
         self.native_llama = over.pop("native_llama", True)
+        self.ggufs = over.pop("ggufs", [Path("qwen.gguf")])
         assert not over, over
         self.rows: list[tuple] = []
         self.advice: list[str] = []
@@ -60,7 +61,7 @@ class Check:
             "check_translation_server": lambda h, p, bi: {"up": self.translation_up, "data": {}},
             "is_port_free": lambda port: port in self.free_ports,
             "get_port_process": MagicMock(return_value=self.port_owner),
-            "find_gguf_models": MagicMock(return_value=[Path("qwen.gguf")]),
+            "find_gguf_models": MagicMock(return_value=self.ggufs),
             "header": MagicMock(),
             "panel": MagicMock(),
             "table": self._table,
@@ -141,6 +142,36 @@ def test_a_whisper_error_status_fails_with_restart_advice():
     assert c.row("Whisper server responding")[1:] == (False, "status: error — CUDA out of memory")
     assert not any(r[0] == "Translation end-to-end" for r in c.rows)
     assert any("pocket_yume.py launch" in line for line in c.advice)
+
+
+def test_no_translation_model_says_where_to_get_one():
+    # A new user's first health check: the row failed with no advice at all
+    c = Check(ggufs=[]).go()
+    assert c.row("GGUF model present")[1:] == (False, "none in models/translation/")
+    assert any("Download Translation Model" in line for line in c.advice)
+
+
+def test_a_cpu_only_llama_cpp_python_points_at_the_gpu_engine(monkeypatch):
+    # llama-cpp-python without CUDA: re-running setup reinstalls the same CPU
+    # wheel; Tools → Translation Engine installs llama.cpp's prebuilt GPU server
+    lib = types.ModuleType("llama_cpp.llama_cpp")
+    monkeypatch.setitem(sys.modules, "llama_cpp", types.ModuleType("llama_cpp"))
+    monkeypatch.setitem(sys.modules, "llama_cpp.llama_cpp", lib)
+    c = Check(native_llama=False).go()
+    assert c.row("llama-cpp CUDA support")[1] is False
+    assert any("Translation Engine" in line for line in c.advice)
+
+
+def test_status_without_a_translation_model_says_where_to_get_one(capsys):
+    import yume.benchmark
+
+    with (
+        patch.object(health, "find_gguf_models", return_value=[]),
+        patch.object(yume.benchmark, "_is_whisper_model_cached", return_value=True),
+    ):
+        health._status_models({"whisper_model": "small", "gguf_model_path": ""})
+    out = capsys.readouterr().out
+    assert "no GGUF models found" in out and "Download Translation Model" in out
 
 
 def test_issue_summary_lists_the_failures():

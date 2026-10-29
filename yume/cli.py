@@ -95,7 +95,8 @@ def _health(cfg, args):
 def _stats(cfg, args):
     from yume.menus import cli_server_stats
 
-    cli_server_stats(cfg)
+    if not cli_server_stats(cfg):
+        sys.exit(1)
 
 
 def _ports(cfg, args):
