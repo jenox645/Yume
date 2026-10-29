@@ -93,6 +93,8 @@ def _clean_region(raw, region):
     out, out_loops, out_filler = [], set(), set()
     for i, s in enumerate(segs):
         s = {**s, "end": min(s["end"], region[1])}
+        # The line its pieces were cut from: compared whole at a region cut
+        s["whole"] = (s["start"], s["end"], s["text"])
         if i in loops:
             out_loops.add(len(out))
         if i in filler:
@@ -100,6 +102,36 @@ def _clean_region(raw, region):
         # Loops and filler stay whole; the blacklist judges each piece, as refilter() does
         out.extend([s] if i in loops or i in filler else split_long(s))
     return out, out_loops, out_filler
+
+
+def _last_line(lines):
+    """The pieces of the last line among a region's visible lines (sorted by start)."""
+    return [s for s in lines if s["whole"] == lines[-1]["whole"]] if lines else []
+
+
+def _first_line(lines):
+    """The pieces of the first line among a region's visible lines (sorted by start)."""
+    return [s for s in lines if s["whole"] == lines[0]["whole"]] if lines else []
+
+
+def join_across_cut(last, first):
+    """A region's last line and the next region's first line, each as its
+    pieces (split_long): the pieces to hide. Compared whole, as Whisper wrote
+    them: a long line heard by both regions is cut into pieces timed
+    differently, and its last and first pieces never matched.
+
+    When both regions heard the same line, the left one is kept and its pieces
+    are stretched over both regions' share of it."""
+    a, b = (dict(zip(("start", "end", "text"), line[0]["whole"])) for line in (last, first))
+    left_end = a["end"]
+    drop = boundary_drop(a, b)  # stretches a over b when it hides b
+    if drop is b:
+        span, new_span = left_end - a["start"], a["end"] - a["start"]
+        for s in last:
+            for k in ("start", "end"):
+                s[k] = round(a["start"] + (s[k] - a["start"]) * new_span / span, 2) if span > 0 else a[k]
+        return first
+    return last if drop is a else []
 
 
 class Job:
@@ -185,6 +217,7 @@ class Job:
                 "romaji": roma,  # None = still to be produced by the LLM
                 "hidden": hidden,
                 "region": region,
+                "whole": s["whole"],
                 "orphan": False,
                 "loop": i in loops,
                 "filler": i in filler,  # region-level, so refilter() keeps it hidden
@@ -236,17 +269,18 @@ class Job:
             ):
                 continue
             lines = sorted((s for s in self.segments.values() if not s["hidden"]), key=lambda s: s["start"])
-            last = [s for s in lines if s["region"] == self.regions[left]][-1:]
-            first = [s for s in lines if s["region"] == self.regions[right]][:1]
+            last = _last_line([s for s in lines if s["region"] == self.regions[left]])
+            first = _first_line([s for s in lines if s["region"] == self.regions[right]])
             if not (last and first):
                 continue
-            drop = boundary_drop(last[0], first[0])
-            if drop:
-                drop["hidden"] = drop["filler"] = True  # filler: refilter() keeps it hidden
-                self._touch(drop)
-                if drop is not last[0]:
-                    self._touch(last[0])  # stretched over both
-                hidden += 1
+            drop = join_across_cut(last, first)
+            if not drop:
+                continue
+            for s in drop:
+                s["hidden"] = s["filler"] = True  # filler: refilter() keeps it hidden
+            for s in (*last, *first):
+                self._touch(s)  # hidden, or stretched over both
+            hidden += len(drop)
         return hidden
 
     def _update_status(self):
@@ -822,18 +856,19 @@ def _library_lines(store, video_key, language, model):
     cached = store.get_transcripts(video_key, language, model)
     # The video's current plan: a region of an older plan would duplicate lines
     planned = [tuple(r) for r in (store.get_video(video_key) or {}).get("regions") or []]
-    raw, hide, last = [], set(), None
+    raw, hide, last = [], set(), []
     for region in planned or sorted(cached):
         if region not in cached:
             continue
         segs, loops, filler = _clean_region(cached[region], region)
-        shown = [len(raw) + i for i, s in enumerate(segs) if i not in loops | filler and not _hidden(s["text"])]
+        shown = [s for i, s in enumerate(segs) if i not in loops | filler and not _hidden(s["text"])]
         hide |= {len(raw) + i for i in loops | filler}
         raw.extend(segs)
-        if last is not None and shown:  # as a live job does across each cut
-            drop = boundary_drop(raw[last], raw[shown[0]])
-            hide |= {i for i in (last, shown[0]) if raw[i] is drop}
-        last = shown[-1] if shown else None
+        if last and shown:  # as a live job does across each cut
+            drop = {id(s) for s in join_across_cut(_last_line(last), _first_line(shown))}
+            hide |= {i for i, s in enumerate(raw) if id(s) in drop}
+            shown = [s for s in shown if id(s) not in drop]
+        last = shown
     return raw, hide
 
 
