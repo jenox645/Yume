@@ -136,6 +136,12 @@ def _blacklist(cfg, args):
     cli_blacklist(cfg, args)
 
 
+def _vocals(cfg, args):
+    from yume import vocals
+
+    vocals.cli(cfg, args)
+
+
 def _export(cfg, args):
     config_export(cfg, args[0] if args else None)
 
@@ -183,6 +189,15 @@ COMMANDS: dict[str, Command] = {
             ("blacklist add <t>", "Block a phrase"),
             ("blacklist remove <t>", "Unblock a phrase"),
             ("blacklist clear", "Clear all entries"),
+        ),
+    ),
+    "vocals": Command(
+        _vocals,
+        "Manage",
+        (
+            ("vocals", "Vocal isolation for songs: installed? on?"),
+            ("vocals on|off", "Use it for the next videos, or not"),
+            ("vocals install", "Install PyTorch (CUDA) + demucs (~4 GB)"),
         ),
     ),
     "export": Command(_export, "Manage", (("export [path]", "Export config to backup file"),)),
