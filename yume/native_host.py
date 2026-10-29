@@ -23,10 +23,13 @@ import struct
 import sys
 from pathlib import Path
 
-from yume.constants import BASE_DIR, IS_WIN
-
-if __package__ in (None, ""):  # run as a script by the browser
+# The browser runs this file as a script (through the launcher): put Yume's
+# folder on the path before importing from it, or the host dies at once and
+# one-click start falls back to "start it with START_YUME".
+if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from yume.constants import BASE_DIR, IS_WIN  # noqa: E402
 
 
 _log = logging.getLogger("pocket_yume.native_host")
