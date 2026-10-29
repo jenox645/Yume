@@ -63,7 +63,30 @@ function downloadText(content, filename, mime) {
   a.href = url;
   a.download = filename;
   document.body.appendChild(a); a.click(); a.remove();
-  URL.revokeObjectURL(url);
+  // Not at once: Firefox reads the blob after click() returns, and a revoked
+  // URL cancels the download
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+// "yume-<title>.srt": the video's title made safe for a file name
+function exportName(title, ext) {
+  const safe = String(title || '').replace(/[\\/:*?"<>|\s]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60);
+  return `yume-${safe || new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-')}.${ext}`;
+}
+
+// Destructive buttons act on a second click within 4 s (confirm() is not
+// available in Firefox popups). True when this click is the confirming one.
+function confirmedClick(btn, prompt) {
+  if (btn.dataset.armed) {
+    clearTimeout(Number(btn.dataset.armed));
+    btn.textContent = btn.dataset.label;
+    delete btn.dataset.armed;
+    return true;
+  }
+  btn.dataset.label = btn.textContent;
+  btn.textContent = prompt;
+  btn.dataset.armed = String(setTimeout(() => { btn.textContent = btn.dataset.label; delete btn.dataset.armed; }, 4000));
+  return false;
 }
 
 // ============================================================================
@@ -313,7 +336,14 @@ async function checkSubtitleStatus() {
     flash(statusMsg, "Yume can't run on this page — open a video page (like YouTube).", '', 0);
     return;
   }
-  const response = await chrome.tabs.sendMessage(tab.id, { action: 'GET_STATUS' });
+  let response;
+  try {
+    response = await chrome.tabs.sendMessage(tab.id, { action: 'GET_STATUS' });
+  } catch (_e) {
+    // The page was open before Yume was installed or updated: no content script yet
+    flash(statusMsg, 'Reload this page (F5) to use Yume on it.', '', 0);
+    return;
+  }
   if (response?.success) {
     updateToggleButton(response.active);
     if (!response.active && response.hasVideo === false) flash(statusMsg, 'No video detected on this page yet.', '', 0);
@@ -623,6 +653,8 @@ async function reportHallucination() {
 }
 
 async function clearBlacklist() {
+  // One click wiped every phrase the user had blocked
+  if (!confirmedClick($('clearBlacklist'), 'Click again to clear all')) return;
   const r = await api({ method: 'POST', path: '/blacklist/update', body: { blacklist: [] } });
   showToast(r.ok ? 'Blacklist cleared' : (r.data?.error || 'Failed'), r.ok ? 'success' : 'error');
   refreshTab();
@@ -712,7 +744,7 @@ async function exportSubtitles(format) {
   }
   if (!r?.success) { flash(statusEl, r?.error || 'Export failed', 'error'); return; }
   if (!r.count) { flash(statusEl, 'No subtitles to export yet', 'error'); return; }
-  downloadText(r.content, `yume-subtitles-${new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-')}.${format}`,
+  downloadText(r.content, exportName(r.title, format),
     format === 'vtt' ? 'text/vtt;charset=utf-8' : 'application/x-subrip;charset=utf-8');
   const p = r.progress || {};
   const pct = p.regions_total ? Math.round((p.regions_done / p.regions_total) * 100) : 0;
@@ -747,7 +779,7 @@ async function loadHistory() {
     const target = settings.showEnglish === false ? '' : (settings.targetLanguage || 'English');
     const x = await api({ path: '/library/export', query: { video_key: e.video_key, language: e.language, model: e.model, target, format: 'srt' } });
     if (!x.ok || !x.data.count) { showToast(x.data?.error || 'No subtitles in this entry', 'error'); return; }
-    downloadText(x.data.content, `yume-${(e.title || 'subtitles').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 60)}.srt`, 'application/x-subrip;charset=utf-8');
+    downloadText(x.data.content, exportName(e.title, 'srt'), 'application/x-subrip;charset=utf-8');
   }));
   listEl.querySelectorAll('.hist-del').forEach(btn => btn.addEventListener('click', async () => {
     await api({ method: 'POST', path: '/library/delete', body: { video_key: entries[+btn.dataset.i].video_key } });
@@ -755,20 +787,8 @@ async function loadHistory() {
   }));
 }
 
-let _clearArmed = null;
 async function clearCache() {
-  const btn = $('clearHistory');
-  if (!_clearArmed) {
-    // confirm() is not available in Firefox popups — ask with a second click
-    const label = btn.textContent;
-    btn.textContent = 'Click again to delete everything';
-    _clearArmed = setTimeout(() => { btn.textContent = label; _clearArmed = null; }, 4000);
-    btn.dataset.label = label;
-    return;
-  }
-  clearTimeout(_clearArmed);
-  _clearArmed = null;
-  btn.textContent = btn.dataset.label || btn.textContent;
+  if (!confirmedClick($('clearHistory'), 'Click again to delete everything')) return;
   const r = await api({ method: 'POST', path: '/cache/clear' });
   showToast(r.ok ? 'Cache cleared' : (r.data?.error || 'Failed'), r.ok ? 'success' : 'error');
   loadHistory();
