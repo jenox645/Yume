@@ -34,6 +34,21 @@ async function sendToTab(message) {
   return chrome.tabs.sendMessage(tab.id, message);
 }
 
+// chrome.tabs.sendMessage's error on a page without the content script, in words
+function tabError(e) {
+  return /Receiving end does not exist|Could not establish connection/.test(e?.message || '')
+    ? 'Yume is not loaded on this tab yet — reload the page (F5), then try again.'
+    : (e?.message || String(e));
+}
+
+// A server action from a list row (remove, delete): a failure is said, not
+// swallowed. True when it worked.
+async function serverAction(request, failMessage) {
+  const r = await api(request);
+  if (!r.ok) showToast(r.data?.error || failMessage, 'error');
+  return r.ok;
+}
+
 // Escapes quotes too — results are also interpolated into attribute values.
 function _escapeHtml(text) {
   return String(text ?? '').replace(/[&<>"']/g, (c) => (
@@ -322,10 +337,7 @@ async function toggleSubtitles() {
     try {
       response = await chrome.tabs.sendMessage(tab.id, { action: 'TOGGLE_SUBTITLES' });
     } catch (e) {
-      if (/Receiving end does not exist|Could not establish connection/.test(e.message)) {
-        throw new Error('Yume is not loaded on this tab yet — reload the page (F5), then try again.', { cause: e });
-      }
-      throw e;
+      throw new Error(tabError(e), { cause: e });
     }
     if (!response?.success) throw new Error(response?.error || 'Toggle failed');
     updateToggleButton(response.active);
@@ -544,7 +556,14 @@ async function setCustomStreamUrl() {
   const statusEl = $('streamUrlStatus');
   if (!/^https?:\/\//.test(url)) { flash(statusEl, 'Enter an http(s) URL first', 'error', 3000); return; }
   await chrome.storage.local.set({ customStreamUrl: url });
-  flash(statusEl, '✓ Stream URL set. Click Enable to start.', 'success', 0);
+  // "Set & Enable": a session reads the URL when it starts, so start one now
+  // (a running one is restarted). It used to only store it.
+  let status = null;
+  try { status = await sendToTab({ action: 'GET_STATUS' }); } catch (_e) { /* no content script */ }
+  if (!status?.success) { flash(statusEl, '✓ Stream URL set. Click Enable on the video page to start.', 'success', 0); return; }
+  flash(statusEl, '✓ Stream URL set — starting...', 'success', 4000);
+  if (status.active) await sendToTab({ action: 'TOGGLE_SUBTITLES' }).catch(() => {});
+  await toggleSubtitles();
 }
 
 async function clearCustomStreamUrl() {
@@ -589,8 +608,8 @@ async function fetchDiagnostics() {
   const statusEl = $('diagStatus');
   const logEl = $('diagLog');
   let response;
-  try { response = await sendToTab({ action: 'GET_DIAGNOSTICS' }); } catch (_e) {
-    statusEl.textContent = 'Content script not loaded'; logEl.innerHTML = ''; return;
+  try { response = await sendToTab({ action: 'GET_DIAGNOSTICS' }); } catch (e) {
+    statusEl.textContent = tabError(e); logEl.innerHTML = ''; return;
   }
   const d = response?.diagnostics;
   if (!d) { statusEl.textContent = 'Idle — enable subtitles on a video'; logEl.innerHTML = ''; return; }
@@ -639,7 +658,7 @@ async function loadBlacklist() {
       <button class="blacklist-remove" data-index="${i}" title="Remove" aria-label="Remove ${_escapeHtml(item)} from the blacklist">×</button>
     </div>`).join('');
   container.querySelectorAll('.blacklist-remove').forEach(btn => btn.addEventListener('click', async () => {
-    await api({ method: 'POST', path: '/blacklist/remove', body: { text: list[+btn.dataset.index] } });
+    await serverAction({ method: 'POST', path: '/blacklist/remove', body: { text: list[+btn.dataset.index] } }, 'Could not remove it');
     refreshTab();
     loadBlacklist();
   }));
@@ -649,8 +668,8 @@ async function reportHallucination() {
   const previewEl = $('hallucinationPreview');
   const statusEl = $('blacklistStatus');
   let response;
-  try { response = await sendToTab({ action: 'GET_CURRENT_SUBTITLE' }); } catch (_e) {
-    flash(statusEl, 'Content script not loaded', 'error', 3000); return;
+  try { response = await sendToTab({ action: 'GET_CURRENT_SUBTITLE' }); } catch (e) {
+    flash(statusEl, tabError(e), 'error', 5000); return;
   }
   const text = (response?.subtitle?.original || '').trim();
   if (!text) { flash(statusEl, 'No subtitle currently displayed', 'error', 3000); return; }
@@ -741,8 +760,14 @@ function stopStatsPolling() { clearInterval(statsInterval); statsInterval = null
 async function switchWhisperModel() {
   const model = $('whisperModelSelect').value;
   const statusEl = $('modelSwitchStatus');
+  const btn = $('switchWhisperModel');
   flash(statusEl, `Loading ${model}... (first use downloads it)`, '', 0);
-  const r = await api({ method: 'POST', path: '/model/switch', body: { model }, timeout: 600000 });
+  // A switch can take minutes: a second click used to send a second switch
+  btn.disabled = true;
+  let r;
+  try {
+    r = await api({ method: 'POST', path: '/model/switch', body: { model }, timeout: 600000 });
+  } finally { btn.disabled = false; }
   if (r.ok) {
     flash(statusEl, r.data.status === 'already_loaded' ? `Already using ${model}` : `✓ Switched to ${r.data.model}`, 'success', 5000);
     $('currentWhisperModel').textContent = r.data.model;
@@ -760,7 +785,7 @@ async function exportSubtitles(format) {
   flash(statusEl, 'Exporting...', '', 0);
   let r;
   try { r = await sendToTab({ action: format === 'vtt' ? 'EXPORT_VTT' : 'EXPORT_SRT' }); } catch (e) {
-    flash(statusEl, e.message, 'error'); return;
+    flash(statusEl, tabError(e), 'error'); return;
   }
   if (!r?.success) { flash(statusEl, r?.error || 'Export failed', 'error'); return; }
   if (!r.count) { flash(statusEl, 'No subtitles to export yet', 'error'); return; }
@@ -802,7 +827,7 @@ async function loadHistory() {
     downloadText(x.data.content, exportName(e.title, 'srt'), 'application/x-subrip;charset=utf-8');
   }));
   listEl.querySelectorAll('.hist-del').forEach(btn => btn.addEventListener('click', async () => {
-    await api({ method: 'POST', path: '/library/delete', body: { video_key: entries[+btn.dataset.i].video_key } });
+    await serverAction({ method: 'POST', path: '/library/delete', body: { video_key: entries[+btn.dataset.i].video_key } }, 'Could not delete it');
     loadHistory();
   }));
 }

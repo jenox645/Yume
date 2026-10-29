@@ -113,7 +113,7 @@ async function overlay() {
   const walk = (n) => {
     const a = n.attributes || [];
     const attr = (name) => (a.indexOf(name) >= 0 && a.indexOf(name) % 2 === 0 ? a[a.indexOf(name) + 1] : '');
-    const cls = attr('class').split(' ').find((c) => /^subtitle-(original|english|romaji|notice|status)$/.test(c));
+    const cls = attr('class').split(' ').find((c) => /^subtitle-(original|english|romaji|notice|status|title)$/.test(c));
     if (cls) {
       const text = (n.children || []).filter((c) => c.nodeType === 3).map((c) => c.nodeValue).join('');
       out[cls.replace('subtitle-', '')] = /display:\s*none/.test(attr('style')) ? '' : text;
@@ -293,6 +293,15 @@ test('the new video\'s title is used even when the page sets it after the URL', 
   assert.equal(job.title, 'Third Song');
 });
 
+test('after lines played, the window says at once that the next video is loading', async () => {
+  await seek(5.5);  // line 1
+  await until('line 1 on screen', async () => (await overlay()).english === 'Line 1');
+  // The title stays the same: the restart waits for it 2.5 s more (4 s after the URL change)
+  await page.evaluate(() => history.pushState({}, '', '/watch?v=four'));
+  await until('the loading message', async () => /next|new video/.test((await overlay()).status || ''), 3500);
+  await until('POST /jobs for the fourth page', () => jobsCreated().find((j) => /v=four/.test(j.video_id)));
+});
+
 test('romaji switched off disappears from the line on screen', async () => {
   await seek(25.5);  // line 6
   await until('line 6 with romaji', async () => /gyou/i.test((await overlay()).romaji || ''));
@@ -328,4 +337,17 @@ test('Enable with Yume not running says how to start it', async () => {
   }, 20000);
   assert.match(o.status, /START_YUME|autostart on/);
   await setSettings({ whisperUrl: `http://127.0.0.1:${serverPort}` });
+});
+
+test('a custom window title shows as soon as the window opens', async () => {
+  // Close the window: a failed start (the last test) keeps it open to show its error
+  if (!(await toTab({ action: 'GET_STATUS' })).active) await toTab({ action: 'TOGGLE_SUBTITLES' });
+  await toTab({ action: 'TOGGLE_SUBTITLES' });
+  assert.equal((await overlay()).title, undefined);
+  await setSettings({ windowTitle: 'My Subs' });
+  await toTab({ action: 'TOGGLE_SUBTITLES' });
+  await sleep(1000);  // no settings change after the window opened
+  assert.equal((await overlay()).title, 'My Subs');
+  await toTab({ action: 'TOGGLE_SUBTITLES' });
+  await setSettings({ windowTitle: 'Yume' });
 });
