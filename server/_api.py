@@ -482,8 +482,9 @@ def translation_test():
             [text], data.get("language") or "ja", data.get("target") or "English"
         )
         return jsonify({"success": True, "translation": out[0]})
-    except _translate.TranslationError as e:
-        return jsonify({"success": False, "error": str(e)}), 502
+    except Exception as e:  # anything else was an HTML 500 the health check could not read
+        detail = str(e) if isinstance(e, _translate.TranslationError) else f"{type(e).__name__}: {e}"
+        return jsonify({"success": False, "error": detail}), 502
 
 
 @app.route("/cache/clear", methods=["POST"])

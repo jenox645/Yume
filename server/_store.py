@@ -109,6 +109,23 @@ class Store:
             "last_used=excluded.last_used",
             (video_key, url, title or "", duration, json.dumps(regions) if regions else None, time.time()),
         )
+        if regions:
+            self._drop_unplanned(video_key, regions)
+
+    def _drop_unplanned(self, video_key, regions):
+        """Transcripts of regions the video's plan no longer has (the stream
+        preview's 0-30 s, an older plan): never served again, and counted in the
+        History's progress (13 of 12 regions, 108 %)."""
+        planned = {(float(s), float(e)) for s, e in regions}
+        rows = self._q("SELECT DISTINCT region_start, region_end FROM transcripts WHERE video_key=?", (video_key,))
+        with self._lock:
+            for s, e in rows:
+                if (s, e) not in planned:
+                    self._db.execute(
+                        "DELETE FROM transcripts WHERE video_key=? AND region_start=? AND region_end=?",
+                        (video_key, s, e),
+                    )
+            self._db.commit()
 
     def delete_video(self, video_key):
         with self._lock:
@@ -120,12 +137,18 @@ class Store:
         """Videos with at least one cached region, newest first."""
         rows = self._q(
             "SELECT v.video_key, v.url, v.title, v.duration, v.regions, v.last_used, t.language, t.model, "
-            "COUNT(t.region_start) FROM videos v JOIN transcripts t ON t.video_key = v.video_key "
+            "GROUP_CONCAT(t.region_start || ':' || t.region_end) FROM videos v "
+            "JOIN transcripts t ON t.video_key = v.video_key "
             "GROUP BY v.video_key, t.language, t.model ORDER BY v.last_used DESC"
         )
         out = []
-        for key, url, title, duration, regions, last_used, lang, model, n in rows:
-            total = len(json.loads(regions)) if regions else 0
+        for key, url, title, duration, regions, last_used, lang, model, done in rows:
+            plan = json.loads(regions) if regions else []
+            total = len(plan)
+            cached = {tuple(map(float, r.split(":"))) for r in (done or "").split(",") if r}
+            # Only regions of the current plan count (a stream preview or an older
+            # plan left other rows: 13 "done" of 12)
+            n = sum((float(s), float(e)) in cached for s, e in plan) if plan else len(cached)
             out.append(
                 {
                     "video_key": key,
