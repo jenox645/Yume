@@ -90,7 +90,31 @@ def load_model(args):
         # reporting "loading" forever. Publish the failure instead: /health then
         # returns status "error" with the message, which the extension and the
         # CLI launcher both surface to the user.
-        _state.load_error = str(e) or type(e).__name__
+        _state.load_error = with_advice(str(e) or type(e).__name__)
+
+
+_WHISPER_SETTINGS = "python pocket_yume.py settings → Whisper settings"
+# (any of these in the error, what to do): one line, shown in the overlay and the launcher
+_ADVICE = [
+    (("out of memory", "oom"), f"Not enough GPU memory: pick a smaller model or the CPU ({_WHISPER_SETTINGS})."),
+    (
+        ("cublas", "cudnn", "cudart"),
+        f"CUDA libraries are missing: install the CUDA Toolkit, or pick the CPU ({_WHISPER_SETTINGS}).",
+    ),
+    (("no module", "modulenotfound"), "A Python package is missing: run python pocket_yume.py setup."),
+    (
+        ("hub", "connection", "resolve", "max retries", "offline", _state.ERR_NO_SUCH_FILE, "filenotfound"),
+        "The model could not be downloaded (the first start needs the internet), or its files are missing: "
+        f"check the connection, or pick another model ({_WHISPER_SETTINGS}).",
+    ),
+]
+
+
+def with_advice(message):
+    """The load error with what to do about it, when the cause is known."""
+    low = message.lower()
+    hint = next((h for words, h in _ADVICE if any(w in low for w in words)), "")
+    return f"{message} — {hint}" if hint else message
 
 
 def print_model_load_error(e):
@@ -106,9 +130,9 @@ def print_model_load_error(e):
         print("")
         print("  SOLUTIONS (pick one):")
         print("    1. Use a smaller model:")
-        print("       python pocket_yume.py setup      → change Whisper model to 'small' or 'base'")
+        print("       python pocket_yume.py settings   → Whisper settings → a smaller model ('small', 'base')")
         print("    2. Use CPU instead (slower but works):")
-        print("       python pocket_yume.py setup      → set device to 'cpu'")
+        print("       python pocket_yume.py settings   → Whisper settings → device 'cpu'")
         print("    3. Or restart with: --device cpu --compute-type int8")
     elif "cublas" in err_msg or "cudnn" in err_msg or "cudart" in err_msg:
         print("")
@@ -117,7 +141,7 @@ def print_model_load_error(e):
         print("  SOLUTIONS (pick one):")
         print("    1. Install CUDA Toolkit: https://developer.nvidia.com/cuda-toolkit")
         print("    2. Or switch to CPU mode (no CUDA needed):")
-        print("       python pocket_yume.py setup      → set device to 'cpu'")
+        print("       python pocket_yume.py settings   → Whisper settings → device 'cpu'")
         print("    3. Or restart with: --device cpu --compute-type int8")
     elif "no module" in err_msg or "modulenotfound" in err_msg:
         missing = str(e).split("'")[1] if "'" in str(e) else "unknown"
