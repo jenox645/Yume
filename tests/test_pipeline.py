@@ -1376,6 +1376,76 @@ def test_library_export_shows_a_long_line_heard_by_both_regions_once(pipeline):
     assert "00:00:12,000 -->" in srt and "--> 00:00:34,000" in srt
 
 
+def test_a_long_line_is_kept_in_the_pieces_of_the_region_that_held_more_of_it(pipeline):
+    # Region 0 holds 2.5 s of the line: one 157-column piece. Region 1 holds
+    # 19.5 s and cuts it in two: those two are kept, over both regions' share.
+    for order in ((0, 1), (1, 0)):
+        job = _jobs.Job(("more", "ru", "", "m"), {"language": "ru"})
+        job.regions, job.region_state = [(0.0, 14.5), (14.5, 50.0)], ["pending", "pending"]
+        raw = {
+            0: [_seg(3.0, 11.0, "Я помню."), _seg(12.0, 26.0, LONG)],
+            1: [_seg(14.5, 34.0, LONG), _seg(35.0, 40.0, "Шли годы.")],
+        }
+        for idx in order:
+            job.add_region(idx, raw[idx])
+        shown = sorted((s["start"], s["end"], s["text"], s["region"]) for s in job.segments.values() if not s["hidden"])
+        pieces = shown[1:-1]
+        assert len(pieces) == 2 and {p[3] for p in pieces} == {(14.5, 50.0)}, order
+        assert " ".join(p[2] for p in pieces) == LONG, order
+        assert pieces[0][0] == 12.0 and pieces[0][1] == pieces[1][0] and pieces[1][1] == 34.0, order
+
+
+TAIL_LEFT = [
+    _seg(16.76, 19.18, "싱가포르에 있는 국내 프랜차이즈 빵집"),
+    _seg(19.48, 23.82, "매장입니다. 제품 안내판에 한글로 된 로고가 보입니다."),  # stamped past the cut at 20.7
+]
+TAIL_RIGHT = [
+    _seg(20.7, 23.7, "제품 안내판에 한글로 된 로고가 보입니다."),
+    _seg(24.0, 29.5, "지난 2월 판매를 시작했습니다."),
+]
+
+
+def test_the_end_of_a_line_heard_again_after_the_cut_is_shown_once(pipeline):
+    # SBS Korean news: region 0 wrote its last line on past the cut, region 1
+    # wrote what it heard after the cut; both were shown
+    for order in ((0, 1), (1, 0)):
+        job = _jobs.Job(("tail", "ko", "", "m"), {"language": "ko"})
+        job.regions, job.region_state = [(0.0, 20.7), (20.7, 45.0)], ["pending", "pending"]
+        for idx in order:
+            job.add_region(idx, (TAIL_LEFT, TAIL_RIGHT)[idx])
+        shown = sorted((s["start"], s["end"], s["text"]) for s in job.segments.values() if not s["hidden"])
+        assert shown[1] == (19.48, 23.7, TAIL_LEFT[1]["text"]), order
+        assert len(shown) == 3, order
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        (
+            _seg(19.48, 20.5, "매장입니다. 제품 안내판에 한글로 된 로고가 보입니다."),
+            TAIL_RIGHT[0],
+        ),  # ends before the cut
+        (_seg(17.0, 22.0, "너를 사랑해 사랑해"), _seg(20.7, 22.0, "사랑해")),  # a short end is sung again
+    ],
+)
+def test_a_line_that_only_ends_like_the_next_one_is_kept(pipeline, left, right):
+    job = _jobs.Job(("tail", "ko", "", "m"), {"language": "ko"})
+    job.regions, job.region_state = [(0.0, 20.7), (20.7, 45.0)], ["pending", "pending"]
+    job.add_region(0, [left])
+    job.add_region(1, [right])
+    assert not any(s["hidden"] for s in job.segments.values())
+
+
+def test_library_export_shows_the_end_of_a_line_heard_again_once(pipeline):
+    store = _state.store
+    store.put_video("tail", "https://x", "t", 45.0, [[0.0, 20.7], [20.7, 45.0]])
+    store.put_transcript("tail", "ko", "m", 0.0, 20.7, [_raw(s["start"], s["end"], s["text"]) for s in TAIL_LEFT])
+    store.put_transcript("tail", "ko", "m", 20.7, 45.0, [_raw(s["start"], s["end"], s["text"]) for s in TAIL_RIGHT])
+    srt, n = _jobs.library_export("tail", "ko", "m", None)
+    assert n == 3 and srt.count("로고가 보입니다") == 1
+    assert "00:00:19,480 --> 00:00:23,700" in srt
+
+
 def test_library_export_shows_a_line_heard_by_both_regions_once(pipeline):
     store = _state.store
     line = "وظننت أنا أني بذلك حست غنى"
