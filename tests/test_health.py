@@ -62,7 +62,6 @@ class Check:
             "get_port_process": MagicMock(return_value=self.port_owner),
             "find_gguf_models": MagicMock(return_value=[Path("qwen.gguf")]),
             "header": MagicMock(),
-            "pause": MagicMock(),
             "panel": MagicMock(),
             "table": self._table,
             "info": lambda msg="", *a: self.advice.append(str(msg)),
@@ -162,3 +161,22 @@ def test_fonts_are_found_by_their_windows_file_names():
         "Arabic": [],
     }
     assert health._SCRIPT_FONTS["Arabic"][1] == "Noto Naskh Arabic"  # was "Noto Sans AR", which does not exist
+
+
+def test_reports_run_as_commands_do_not_wait_for_enter(monkeypatch):
+    """`pocket_yume.py status | health | fonts` printed their report, then sat at
+    "Press Enter to continue..."; the menu still waits so its next screen does
+    not wipe the report."""
+    import yume.cli as cli
+    import yume.menus.tools as tools
+
+    for fn in (health.show_status, health.health_check, health.detect_fonts):
+        assert "pause" not in fn.__code__.co_names, fn.__name__
+    waited = []
+    monkeypatch.setattr(cli, "pause", lambda *a: waited.append(1))
+    assert cli._then_pause(lambda cfg, args: "report")({}, []) == "report" and waited == [1]
+    menu = {label: fn for label, _d, fn in cli.MAIN_MENU}
+    for label, command in (("System Status", cli._status), ("Health Check", cli._health)):
+        assert menu[label].__closure__[0].cell_contents is command  # the menu waits...
+    assert cli.COMMANDS["status"].run is cli._status  # ...the command does not
+    assert "pause" in tools._fonts.__code__.co_names

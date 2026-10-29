@@ -280,11 +280,23 @@ def _uninstall(cfg, args):
     uninstall_yume()
 
 
+def _then_pause(fn):
+    """A report run from the menu waits for Enter before the menu redraws over
+    it; the same report run as a command (`pocket_yume.py status`) does not."""
+
+    def run(cfg, args):
+        result = fn(cfg, args)
+        pause()
+        return result
+
+    return run
+
+
 # (label, description, handler); a handler returning a dict replaces the config
 MAIN_MENU = [
     ("Launch Yume", "Start servers + runtime menu", _launch),
-    ("System Status", "Hardware, tools, packages, ports", _status),
-    ("Health Check", "Test every component end-to-end", _health),
+    ("System Status", "Hardware, tools, packages, ports", _then_pause(_status)),
+    ("Health Check", "Test every component end-to-end", _then_pause(_health)),
     ("Settings", "Whisper, translation, addresses, subtitles", _settings),
     ("Tools & Fonts", "Install, update, manage components, detect fonts", _tools),
     ("Help & Guides", "Step-by-step recipes: first subtitles, models, fixes", _guide),

@@ -50,6 +50,7 @@ def _fonts(cfg: dict) -> None:
     from yume.health import detect_fonts
 
     detect_fonts()
+    pause()
 
 
 def _extension_help(cfg: dict) -> None:
