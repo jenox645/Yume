@@ -162,12 +162,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // KEYBOARD SHORTCUT (Alt+Y → toggle subtitles on the active tab)
 // ============================================================================
 
-chrome.commands.onCommand.addListener(async (command) => {
+// Named (not an inline listener) so the browser test can press the shortcut
+async function onShortcut(command) {
   if (command !== 'toggle-subtitles') return;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (tab?.id) {
-    chrome.tabs.sendMessage(tab.id, { action: 'TOGGLE_SUBTITLES' }).catch(() => {
+    await chrome.tabs.sendMessage(tab.id, { action: 'TOGGLE_SUBTITLES' }).catch(() => {
       /* no content script on this tab (browser page) */
     });
   }
-});
+}
+chrome.commands.onCommand.addListener(onShortcut);
