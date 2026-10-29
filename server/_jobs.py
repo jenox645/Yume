@@ -28,10 +28,13 @@ import _romanize
 import _separate
 import _state
 from _filter import (
-    boundary_drop,
+    _width,
     clean_raw_segments,
     is_credits_line,
+    is_fragment,
     is_hallucination,
+    is_repeat,
+    is_tail,
     split_long,
     window_hallucinations,
 )
@@ -92,9 +95,9 @@ def _clean_region(raw, region):
     segs, loops = clean_raw_segments(raw)
     out, out_loops, out_filler = [], set(), set()
     for i, s in enumerate(segs):
-        s = {**s, "end": min(s["end"], region[1])}
         # The line its pieces were cut from: compared whole at a region cut
-        s["whole"] = (s["start"], s["end"], s["text"])
+        whole = {"start": s["start"], "end": min(s["end"], region[1]), "text": s["text"]}
+        s = {**s, "end": whole["end"], "whole": {**whole, "past_cut": s["end"] > region[1]}}
         if i in loops:
             out_loops.add(len(out))
         if i in filler:
@@ -114,24 +117,34 @@ def _first_line(lines):
     return [s for s in lines if s["whole"] == lines[0]["whole"]] if lines else []
 
 
+def _spread(pieces, start, end):
+    """Time the pieces of one line over [start, end] by their share of its width."""
+    upto, total, t = 0, sum(_width(p["text"]) for p in pieces) or 1, start
+    for p in pieces:
+        upto += _width(p["text"])
+        p["start"], p["end"] = t, (round(start + (end - start) * upto / total, 2) if p is not pieces[-1] else end)
+        t = p["end"]
+
+
 def join_across_cut(last, first):
     """A region's last line and the next region's first line, each as its
     pieces (split_long): the pieces to hide. Compared whole, as Whisper wrote
     them: a long line heard by both regions is cut into pieces timed
     differently, and its last and first pieces never matched.
 
-    When both regions heard the same line, the left one is kept and its pieces
-    are stretched over both regions' share of it."""
-    a, b = (dict(zip(("start", "end", "text"), line[0]["whole"])) for line in (last, first))
-    left_end = a["end"]
-    drop = boundary_drop(a, b)  # stretches a over b when it hides b
-    if drop is b:
-        span, new_span = left_end - a["start"], a["end"] - a["start"]
-        for s in last:
-            for k in ("start", "end"):
-                s[k] = round(a["start"] + (s[k] - a["start"]) * new_span / span, 2) if span > 0 else a[k]
-        return first
-    return last if drop is a else []
+    A line both regions heard is kept once, over both regions' share of it:
+    the copy cut into more pieces (the region that held more of it), or the
+    left one when it also holds what came before. A short fragment of the next
+    line is hidden."""
+    a, b = last[0]["whole"], first[0]["whole"]
+    if is_fragment(a, b):
+        return last
+    same = is_repeat(a, b)
+    if not (same or is_tail(a, b)):
+        return []
+    keep, drop = (first, last) if same and len(first) > len(last) else (last, first)
+    _spread(keep, a["start"], b["end"])
+    return drop
 
 
 class Job:
@@ -265,23 +278,23 @@ class Job:
             if (
                 left < 0
                 or right >= len(self.regions)
-                or {self.region_state[left], self.region_state[right]} != {"done"}
+                or not self.region_state[left] == self.region_state[right] == "done"
             ):
                 continue
-            lines = sorted((s for s in self.segments.values() if not s["hidden"]), key=lambda s: s["start"])
-            last = _last_line([s for s in lines if s["region"] == self.regions[left]])
-            first = _first_line([s for s in lines if s["region"] == self.regions[right]])
-            if not (last and first):
-                continue
-            drop = join_across_cut(last, first)
-            if not drop:
-                continue
+            last, first = _last_line(self._shown(left)), _first_line(self._shown(right))
+            drop = join_across_cut(last, first) if last and first else []
             for s in drop:
                 s["hidden"] = s["filler"] = True  # filler: refilter() keeps it hidden
-            for s in (*last, *first):
+            for s in (*last, *first) if drop else ():
                 self._touch(s)  # hidden, or stretched over both
             hidden += len(drop)
         return hidden
+
+    def _shown(self, idx):
+        """Region idx's visible lines, by start."""
+        region = self.regions[idx]
+        lines = (s for s in self.segments.values() if s["region"] == region and not s["hidden"])
+        return sorted(lines, key=lambda s: s["start"])
 
     def _update_status(self):
         if self.status in ("error", "downloading", "separating", "starting") or not self.regions:
@@ -857,19 +870,22 @@ def _library_lines(store, video_key, language, model):
     # The video's current plan: a region of an older plan would duplicate lines
     planned = [tuple(r) for r in (store.get_video(video_key) or {}).get("regions") or []]
     raw, hide, last = [], set(), []
-    for region in planned or sorted(cached):
-        if region not in cached:
-            continue
+    for region in [r for r in planned or sorted(cached) if r in cached]:
         segs, loops, filler = _clean_region(cached[region], region)
         shown = [s for i, s in enumerate(segs) if i not in loops | filler and not _hidden(s["text"])]
         hide |= {len(raw) + i for i in loops | filler}
         raw.extend(segs)
-        if last and shown:  # as a live job does across each cut
-            drop = {id(s) for s in join_across_cut(_last_line(last), _first_line(shown))}
-            hide |= {i for i, s in enumerate(raw) if id(s) in drop}
-            shown = [s for s in shown if id(s) not in drop]
-        last = shown
+        drop = _cut_drop(last, shown)  # as a live job does across each cut
+        hide |= {i for i, s in enumerate(raw) if id(s) in drop}
+        last = [s for s in shown if id(s) not in drop]
     return raw, hide
+
+
+def _cut_drop(last, shown):
+    """ids of the lines to hide at the cut between a region's shown lines and the next region's."""
+    if not (last and shown):
+        return set()
+    return {id(s) for s in join_across_cut(_last_line(last), _first_line(shown))}
 
 
 def library_export(video_key, language, model, target, fmt="srt"):
