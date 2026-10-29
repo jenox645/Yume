@@ -24,7 +24,7 @@ from yume.constants import (
 from yume.hardware import detect_gpu, detect_ram_gb, disk_free_gb, recommend_whisper_model
 from yume.network import check_server, check_translation_server
 from yume.ports import get_port_process, is_port_free
-from yume.ui import C, bullet, header, info, panel, pause, section, success, table, warn
+from yume.ui import C, bullet, header, info, panel, section, success, table, warn
 from yume.utils import find_gguf_models, find_tool
 
 
@@ -336,7 +336,6 @@ def health_check(cfg: dict) -> None:
         title="Performance Estimate",
         style=C.CYAN,
     )
-    pause()
 
 
 def _hardware() -> dict:
@@ -476,7 +475,6 @@ def show_status(cfg: dict) -> None:
     _status_servers(cfg)
     _status_models(cfg)
     _status_ports(cfg)
-    pause()
 
 
 _FONT_EXTENSIONS = {".ttf", ".otf", ".ttc", ".woff", ".woff2"}
@@ -579,4 +577,3 @@ def detect_fonts() -> None:
     print()
     for line in _FONT_HELP:
         info(line)
-    pause()

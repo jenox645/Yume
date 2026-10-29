@@ -516,6 +516,20 @@ def test_lines_end_with_their_region_and_window_fillers_are_hidden(pipeline):
     assert segs["다음 노래"]["hidden"] and segs["안녕"]["hidden"] and not segs["그대"]["hidden"]
 
 
+def test_library_progress_counts_only_the_plan(store):
+    seg = [{"start": 1, "end": 2, "text": "あ"}]
+    store.put_video("v", "https://x", "t", 40.0, None)
+    store.put_transcript("v", "ja", "m", 0.0, 30.0, seg)  # the stream preview, before the plan
+    store.put_video("v", "https://x", "t", 40.0, [[0.0, 20.0], [20.0, 40.0]])
+    assert store.get_transcripts("v", "ja", "m") == {}  # the preview's region is not in the plan: gone
+    store.put_transcript("v", "ja", "m", 0.0, 20.0, seg)
+    store.put_transcript("v", "ja", "m", 0.0, 30.0, seg)  # a late preview, after the plan
+    (entry,) = store.library()
+    assert (entry["regions_done"], entry["regions_total"]) == (1, 2)  # was 2 of 2
+    store.put_transcript("v", "ja", "m", 20.0, 40.0, seg)
+    assert store.library()[0]["regions_done"] == 2
+
+
 def test_library_export_follows_the_plan_and_the_filters(pipeline):
     store = _state.store
     store.put_video("lib", "https://x", "t", 40.0, [[0.0, 20.0], [20.0, 40.0]])
@@ -939,6 +953,20 @@ def test_non_ascii_token_header_is_rejected_not_a_crash():
     assert _api.token_ok("abc")
     assert not _api.token_ok("\u00e9")  # compare_digest on str raised TypeError -> HTTP 500
     assert not _api.token_ok("")
+
+
+def test_translation_test_reports_any_failure_as_json(monkeypatch):
+    """The health check reads its JSON; an unexpected error was an HTML 500."""
+    import _api
+
+    def boom(*a, **k):
+        raise ValueError("bad JSON from the model")
+
+    monkeypatch.setattr(_state, "jobs", types.SimpleNamespace(translator=types.SimpleNamespace(translate_batch=boom)))
+    request = types.SimpleNamespace(get_json=lambda silent=False: {})
+    with patch.object(_api, "request", request), patch.object(_api, "jsonify", lambda d: d):
+        body, code = _api.translation_test()
+    assert code == 502 and body == {"success": False, "error": "ValueError: bad JSON from the model"}
 
 
 def _switch(body):

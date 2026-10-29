@@ -411,3 +411,20 @@ test('a less sure line is drawn fainter, only when asked', () => {
   const at = (c, show = true) => ctx.confidenceOpacity(show, c);
   assert.deepEqual([at(-0.1), at(-0.5), at(-0.9), at(null), at(0.1), at(-0.9, false)], [1, 0.85, 0.65, 1, 1, 1]);
 });
+
+test('popup: a destructive button acts on the second click only', () => {
+  const { ctx } = loadPopup();
+  const btn = { textContent: 'Clear', dataset: {} };
+  assert.equal(ctx.confirmedClick(btn, 'Click again to clear all'), false);  // one click wiped the blacklist
+  assert.equal(btn.textContent, 'Click again to clear all');
+  assert.equal(ctx.confirmedClick(btn, 'Click again to clear all'), true);
+  assert.equal(btn.textContent, 'Clear');
+  assert.equal(ctx.confirmedClick(btn, 'Click again to clear all'), false);  // armed again from scratch
+});
+
+test('popup: exports are named after the video', () => {
+  const { ctx } = loadPopup();
+  assert.equal(ctx.exportName('周杰倫 Jay Chou【等你下課】', 'srt'), 'yume-周杰倫_Jay_Chou【等你下課】.srt');
+  assert.equal(ctx.exportName('a/b: c?', 'vtt'), 'yume-a_b_c.vtt');
+  assert.match(ctx.exportName('', 'srt'), /^yume-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.srt$/);  // no title: the date
+});

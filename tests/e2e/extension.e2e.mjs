@@ -216,6 +216,24 @@ test('export gives every line with its translation', async () => {
   assert.equal(r.success, true, JSON.stringify(r));
   assert.match(r.content, /第0行です\r?\nLine 0/);
   assert.equal(r.count, 29);  // 30 lines, one blacklisted
+  assert.equal(r.title, 'Test Song【MV】');  // names the file
+});
+
+test('the popup clears the blacklist only on a second click', async () => {
+  const popup = await context.newPage();
+  await popup.goto(`chrome-extension://${new URL(worker.url()).host}/popup.html`);
+  const blacklist = () => popup.evaluate(() => new Promise((res) => chrome.runtime.sendMessage(
+    { type: 'API', request: { path: '/blacklist' } }, (r) => res(r.data.blacklist))));
+  assert.deepEqual(await blacklist(), ['第3行です']);
+  await popup.evaluate(() => document.getElementById('clearBlacklist').click());
+  await sleep(500);
+  assert.deepEqual(await blacklist(), ['第3行です']);  // one click: still there
+  await popup.evaluate(() => document.getElementById('clearBlacklist').click());
+  await until('the blacklist cleared', async () => (await blacklist()).length === 0);
+  await popup.close();
+  await toTab({ action: 'REFRESH_SUBTITLES' });
+  await seek(13.5);
+  await until('line 3 back', async () => (await overlay()).english === 'Line 3');
 });
 
 test('the wrong-language notice stays on screen while lines play', async () => {

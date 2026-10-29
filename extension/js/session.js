@@ -346,7 +346,8 @@ class SubtitleSession {
   async exportSubtitles(format) {
     if (!this.jobId) return { success: false, error: 'No active session' };
     const r = await SubtitleSession.api({ path: `/jobs/${this.jobId}/export`, query: { format }, timeout: 15000 });
-    return r.ok ? { success: true, ...r.data } : { success: false, error: r.data?.error || 'Export failed' };
+    // The title names the file (History exports were named after it; these were "yume-subtitles-<date>")
+    return r.ok ? { success: true, title: this.params?.title || '', ...r.data } : { success: false, error: r.data?.error || 'Export failed' };
   }
 
   async getDiagnostics() {
