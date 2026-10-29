@@ -1072,6 +1072,27 @@ def test_audio_that_is_not_16k_mono_is_converted_by_ffmpeg(tmp_path):
         ("著名的歌手", "zhù míng de gē shǒu"),  # 著 that is not "-ing" stays zhù
         ("我长大了", "wǒ zhǎng dà le"),
         ("不好意思", "bù hǎo yì sī"),
+        # AA地 is the adverb "-ly" (de), not 地 "earth" (dì)
+        ("慢慢地走", "màn màn de zǒu"),  # was "dì"
+        ("轻轻地说", "qīng qīng de shuō"),
+        ("靜靜地看著你", "jìng jìng de kàn zhe nǐ"),
+        ("静悄悄地", "jìng qiāo qiāo de"),
+        ("大地", "dà dì"),  # the earth stays dì
+        ("小小地方", "xiǎo xiǎo dì fāng"),  # a small place: no adverb here
+        # 只 after a number counts animals (zhī), it is not "only" (zhǐ)
+        ("两只老虎", "liǎng zhī lǎo hǔ"),  # was "zhǐ"
+        ("三只小猫", "sān zhī xiǎo māo"),
+        ("只有你", "zhǐ yǒu nǐ"),
+        # 重 + verb: "again" (chóng), not "heavy" (zhòng)
+        ("我们重来", "wǒ men chóng lái"),  # was "zhòng"
+        ("重回那一天", "chóng huí nà yī tiān"),
+        ("重拾回忆", "chóng shí huí yì"),
+        ("很重", "hěn zhòng"),
+        ("重重地摔", "zhòng zhòng de shuāi"),  # "heavily" (was "chóng chóng dì")
+        # 数 as a verb: counting (shǔ)
+        ("数着星星", "shǔ zhe xīng xīng"),  # was "shù"
+        ("數著日子", "shǔ zhe rì zi"),  # was "shù zhù"
+        ("无数", "wú shù"),
     ],
 )
 def test_chinese_heteronyms_are_read_as_meant(zh, pinyin):
@@ -1100,6 +1121,18 @@ def test_chinese_heteronyms_are_read_as_meant(zh, pinyin):
         ("この3つが大事", "Kono mittsu ga daiji"),  # was "3tsu"
         ("4つ目かな", "Yottsu me ka na"),
         ("1個", "1 ko"),  # was "1ko"
+        # Counters whose sound changes with the number: MeCab read them one way
+        ("1本", "1 pon"),
+        ("3本の花", "3 bon no hana"),  # was "3 pon"
+        ("2本", "2 hon"),  # was "2 pon"
+        ("10分", "10 pun"),  # was "10 fun"
+        ("3分間", "3 punkan"),  # was "3 fun aida"
+        ("5分", "5 fun"),
+        ("3分の1", "3 bun no 1"),  # a third: 分 is not minutes here
+        ("1杯", "1 pai"),  # was "1 bai"
+        ("4杯", "4 hai"),
+        ("3匹", "3 biki"),  # was "3 hiki"
+        ("6匹の猫", "6 piki no neko"),
         ("菅義偉首相が26日", "Suga Yoshihide shushou ga 26 nichi"),  # was "Kan Yoshihide"
         ("菅官房長官は", "Suga kanbou choukan wa"),
         ("菅直人元首相", "Kan Naoto moto shushou"),  # the other 菅: still Kan
