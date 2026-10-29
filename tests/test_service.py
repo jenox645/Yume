@@ -177,6 +177,33 @@ class TestHostRunsAsTheBrowserRunsIt:
         assert p.returncode == 0, p.stderr.decode(errors="replace")[-1500:]
         assert _replies(p.stdout) == [{"ok": True, "protocol": native_host.PROTOCOL}]
 
+    def _launcher_answers(self, tmp_path, monkeypatch, python: str, host_dir: Path) -> None:
+        monkeypatch.setattr("yume.servers.console_python", lambda: python)
+        monkeypatch.setattr(native_host, "HOST_DIR", host_dir)
+        launcher = native_host._write_launcher()
+        cmd = ["cmd", "/d", "/c", str(launcher)] if sys.platform == "win32" else [str(launcher)]
+        p = subprocess.run(cmd, input=_frame({"cmd": "ping"}), capture_output=True, timeout=60, cwd=tmp_path)
+        assert p.returncode == 0, p.stderr.decode(errors="replace")[-1500:]
+        assert _replies(p.stdout) == [{"ok": True, "protocol": native_host.PROTOCOL}]
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="cmd.exe reads .bat files in the console code page")
+    def test_the_launcher_works_from_a_non_ascii_user_folder(self, tmp_path, monkeypatch):
+        """A Japanese user name puts Python under C:\\Users\\田中\\: cmd.exe
+        decodes the .bat in the console code page (cp932, cp850), not UTF-8,
+        and could not find python.exe ("The system cannot find the path")."""
+        import _winapi
+
+        py_dir = tmp_path / "田中 100% é"  # a junction to this Python's folder
+        _winapi.CreateJunction(str(Path(sys.executable).parent), str(py_dir))
+        python = str(py_dir / Path(sys.executable).name)
+        self._launcher_answers(tmp_path, monkeypatch, python, tmp_path / "設定")
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell launcher")
+    def test_the_launcher_quotes_shell_characters(self, tmp_path, monkeypatch):
+        odd = tmp_path / 'py "$HOME" `x`'
+        odd.symlink_to(sys.executable)
+        self._launcher_answers(tmp_path, monkeypatch, str(odd), tmp_path / "nh $x")
+
     def test_a_message_too_large_gets_an_error_reply(self):
         p = subprocess.run(
             [sys.executable, str(ROOT / "yume" / "native_host.py")],
