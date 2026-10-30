@@ -3,8 +3,8 @@
 from __future__ import annotations  # Allows int | str type hint syntax
 
 import json
-import os
 import re
+import os
 import time
 import logging
 from pathlib import Path
