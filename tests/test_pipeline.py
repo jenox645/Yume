@@ -752,8 +752,41 @@ def test_unreadable_browser_cookies_are_skipped(monkeypatch):
     assert path is None
     with_cookies = [c for c in calls if "--cookies-from-browser" in c]
     assert len(with_cookies) == 1  # was 6: every cookie strategy x 2 format passes
-    assert "Brave" in err and "switching to cookie auth" not in err
+    assert "Brave" in err and "switch to browser cookies" not in err  # they are what failed
     assert _audio.build_auth_args("https://www.youtube.com/watch?v=x") == []
+
+
+def test_download_errors_point_to_the_settings_menu_not_the_config_file():
+    # The overlay told users to edit yume_config.json by hand; the CLI has a menu for it
+    for raw in (
+        "ERROR: [youtube] x: Sign in to confirm you're not a bot",
+        "ERROR: [youtube] x: HTTP Error 403: Forbidden",
+        "ERROR: [youtube] x: This video is DRM protected",
+        "ERROR: [youtube] x: age-restricted",
+        "ERROR: deno: not found",
+    ):
+        msg = _audio.friendlify_ytdlp_error(raw)
+        assert msg != raw and "yume_config.json" not in msg, msg
+        assert "python pocket_yume.py settings" in msg, msg
+
+
+def test_a_failed_custom_stream_url_gives_advice_not_raw_output(monkeypatch, tmp_path):
+    def fake_run(cmd, **kw):
+        if cmd[0] == "ffmpeg":
+            return types.SimpleNamespace(returncode=1, stderr="Server returned 403 Forbidden", stdout="")
+        return types.SimpleNamespace(
+            returncode=1, stdout="", stderr="[generic] x: Downloading\nERROR: [generic] x: HTTP Error 403: Forbidden\n"
+        )
+
+    monkeypatch.setattr(_audio.subprocess, "run", fake_run)
+    monkeypatch.setattr(_audio.tempfile, "mkdtemp", lambda prefix: str(tmp_path))
+    path, err = _audio.download_direct("https://cdn.example.com/a.m3u8")
+    assert path is None
+    # was the raw stderr tail ("[generic] x: Downloading ERROR: …"), and the generic 403 advice
+    # would say "use the Custom Stream URL option", which is what failed
+    assert err.startswith("Could not download the custom stream URL ([generic] x: HTTP Error 403"), err
+    assert "Downloading" not in err and "copy a fresh one" in err
+    assert _audio.download_direct("-o x")[1].startswith("Invalid URL")
 
 
 def test_old_ytdlp_self_updates_once_a_day(tmp_path, monkeypatch):
@@ -1072,6 +1105,45 @@ def test_audio_that_is_not_16k_mono_is_converted_by_ffmpeg(tmp_path):
         ("著名的歌手", "zhù míng de gē shǒu"),  # 著 that is not "-ing" stays zhù
         ("我长大了", "wǒ zhǎng dà le"),
         ("不好意思", "bù hǎo yì sī"),
+        # AA地 is the adverb "-ly" (de), not 地 "earth" (dì)
+        ("慢慢地走", "màn màn de zǒu"),  # was "dì"
+        ("轻轻地说", "qīng qīng de shuō"),
+        ("靜靜地看著你", "jìng jìng de kàn zhe nǐ"),
+        ("静悄悄地", "jìng qiāo qiāo de"),
+        ("大地", "dà dì"),  # the earth stays dì
+        ("小小地方", "xiǎo xiǎo dì fāng"),  # a small place: no adverb here
+        # 只 after a number counts animals (zhī), it is not "only" (zhǐ)
+        ("两只老虎", "liǎng zhī lǎo hǔ"),  # was "zhǐ"
+        ("三只小猫", "sān zhī xiǎo māo"),
+        ("只有你", "zhǐ yǒu nǐ"),
+        # 重 + verb: "again" (chóng), not "heavy" (zhòng)
+        ("我们重来", "wǒ men chóng lái"),  # was "zhòng"
+        ("重回那一天", "chóng huí nà yī tiān"),
+        ("重拾回忆", "chóng shí huí yì"),
+        ("很重", "hěn zhòng"),
+        ("重重地摔", "zhòng zhòng de shuāi"),  # "heavily" (was "chóng chóng dì")
+        # 数 as a verb: counting (shǔ)
+        ("数着星星", "shǔ zhe xīng xīng"),  # was "shù"
+        ("數著日子", "shǔ zhe rì zi"),  # was "shù zhù"
+        ("无数", "wú shù"),
+        # verb + 得 + how: de, not dé ("to obtain")
+        ("你唱得很好", "nǐ chàng de hěn hǎo"),  # was "dé"
+        ("只要你过得比我好", "zhǐ yào nǐ guò de bǐ wǒ hǎo"),
+        ("距離睡得好遠", "jù lí shuì de hǎo yuǎn"),  # a cached Chinese song line
+        ("舍不得你", "shě bù de nǐ"),
+        ("他获得了冠军", "tā huò dé le guàn jūn"),  # 获得 "to win" stays dé
+        ("不得不说再见", "bù dé bù shuō zài jiàn"),
+        # 不着: can't manage to (zháo)
+        ("晚上睡不着觉", "wǎn shàng shuì bù zháo jiào"),  # was "zhe jué"
+        ("我找不着方向", "wǒ zhǎo bù zháo fāng xiàng"),
+        ("他已经睡着了", "tā yǐ jīng shuì zháo le"),
+        # 还给 "give back" (huán); 一行行 "line after line" (háng); 樂 "music" (yuè)
+        ("還給你", "huán gěi nǐ"),  # was "hái"
+        ("我还爱着你", "wǒ hái ài zhe nǐ"),
+        ("一行行泪", "yī háng háng lèi"),  # was "xíng"
+        ("一行人走进来", "yī xíng rén zǒu jìn lái"),  # a group of people: xíng
+        ("音樂響起", "yīn yuè xiǎng qǐ"),  # was "lè"
+        ("快樂", "kuài lè"),
     ],
 )
 def test_chinese_heteronyms_are_read_as_meant(zh, pinyin):
@@ -1100,6 +1172,24 @@ def test_chinese_heteronyms_are_read_as_meant(zh, pinyin):
         ("この3つが大事", "Kono mittsu ga daiji"),  # was "3tsu"
         ("4つ目かな", "Yottsu me ka na"),
         ("1個", "1 ko"),  # was "1ko"
+        # Counters whose sound changes with the number: MeCab read them one way
+        ("1本", "1 pon"),
+        ("3本の花", "3 bon no hana"),  # was "3 pon"
+        ("2本", "2 hon"),  # was "2 pon"
+        ("10分", "10 pun"),  # was "10 fun"
+        ("3分間", "3 punkan"),  # was "3 fun aida"
+        ("5分", "5 fun"),
+        ("3分の1", "3 bun no 1"),  # a third: 分 is not minutes here
+        ("1杯", "1 pai"),  # was "1 bai"
+        ("4杯", "4 hai"),
+        ("3匹", "3 biki"),  # was "3 hiki"
+        ("6匹の猫", "6 piki no neko"),
+        ("3軒目の店", "3 gen me no mise"),  # was "3 kenme"
+        ("1軒家に住む", "1 kenya ni sumu"),  # a house (ikkenya): not the counter
+        ("1歩ずつ前へ", "1 po zutsu mae e"),  # was "1 ho"
+        ("3歩下がって", "3 po sagatte"),
+        ("3足の靴を買った", "3 zoku no kutsu wo katta"),  # pairs of shoes, was "3 ashi"
+        ("1足す1は2", "1 tasu 1 wa 2"),  # 足す "to add": not the counter
         ("菅義偉首相が26日", "Suga Yoshihide shushou ga 26 nichi"),  # was "Kan Yoshihide"
         ("菅官房長官は", "Suga kanbou choukan wa"),
         ("菅直人元首相", "Kan Naoto moto shushou"),  # the other 菅: still Kan
@@ -1336,6 +1426,114 @@ def test_a_line_heard_by_both_regions_at_a_cut_is_shown_once(pipeline):
         shown = [(s["start"], s["end"], s["text"]) for s in job.segments.values() if not s["hidden"]]
         assert sorted(shown)[1] == (19.5, 24.8, line), order
         assert [t for _s, _e, t in shown].count(line) == 1, order
+
+
+LONG = (
+    "Я помню чудное мгновенье, передо мной явилась ты, как мимолётное виденье, "
+    "как гений чистой красоты, в томленьях грусти безнадежной, в тревогах шумной суеты."
+)
+
+
+def test_a_long_line_heard_by_both_regions_at_a_cut_is_shown_once(pipeline):
+    # Too long to read in one go, so each region cuts it into pieces: region 0
+    # holds 8.4 s of it (until the cut), region 1 the whole 13.6 s. The pieces
+    # are timed differently, so the last piece of one region never equalled the
+    # first piece of the next, and the whole line was shown twice.
+    for order in ((0, 1), (1, 0)):
+        job = _jobs.Job(("long", "ru", "", "m"), {"language": "ru"})
+        job.regions, job.region_state = [(0.0, 20.4), (20.4, 50.0)], ["pending", "pending"]
+        raw = {
+            0: [_seg(3.0, 11.0, "Я помню."), _seg(12.0, 26.0, LONG)],
+            1: [_seg(20.4, 34.0, LONG), _seg(35.0, 40.0, "Шли годы.")],
+        }
+        for idx in order:
+            job.add_region(idx, raw[idx])
+        shown = sorted((s["start"], s["end"], s["text"]) for s in job.segments.values() if not s["hidden"])
+        assert len(shown) > 3, "the long line is cut into pieces"
+        assert " ".join(t for _s, _e, t in shown[1:-1]) == LONG, order  # once, whole
+        # Its pieces now span both regions' share of it, one after the other
+        assert shown[1][0] == 12.0 and shown[-2][1] == 34.0, order
+        assert all(a[1] == b[0] for a, b in zip(shown[1:-1], shown[2:-1])), order
+
+
+def test_library_export_shows_a_long_line_heard_by_both_regions_once(pipeline):
+    store = _state.store
+    store.put_video("long", "https://x", "t", 50.0, [[0.0, 20.4], [20.4, 50.0]])
+    store.put_transcript("long", "ru", "m", 0.0, 20.4, [_raw(12.0, 26.0, LONG)])
+    store.put_transcript("long", "ru", "m", 20.4, 50.0, [_raw(20.4, 34.0, LONG), _raw(35.0, 40.0, "Шли годы.")])
+    srt, n = _jobs.library_export("long", "ru", "m", None)
+    assert srt.count("Я помню чудное мгновенье") == 1, srt
+    assert "00:00:12,000 -->" in srt and "--> 00:00:34,000" in srt
+
+
+def test_a_long_line_is_kept_in_the_pieces_of_the_region_that_held_more_of_it(pipeline):
+    # Region 0 holds 2.5 s of the line: one 157-column piece. Region 1 holds
+    # 19.5 s and cuts it in two: those two are kept, over both regions' share.
+    for order in ((0, 1), (1, 0)):
+        job = _jobs.Job(("more", "ru", "", "m"), {"language": "ru"})
+        job.regions, job.region_state = [(0.0, 14.5), (14.5, 50.0)], ["pending", "pending"]
+        raw = {
+            0: [_seg(3.0, 11.0, "Я помню."), _seg(12.0, 26.0, LONG)],
+            1: [_seg(14.5, 34.0, LONG), _seg(35.0, 40.0, "Шли годы.")],
+        }
+        for idx in order:
+            job.add_region(idx, raw[idx])
+        shown = sorted((s["start"], s["end"], s["text"], s["region"]) for s in job.segments.values() if not s["hidden"])
+        pieces = shown[1:-1]
+        assert len(pieces) == 2 and {p[3] for p in pieces} == {(14.5, 50.0)}, order
+        assert " ".join(p[2] for p in pieces) == LONG, order
+        assert pieces[0][0] == 12.0 and pieces[0][1] == pieces[1][0] and pieces[1][1] == 34.0, order
+
+
+TAIL_LEFT = [
+    _seg(16.76, 19.18, "싱가포르에 있는 국내 프랜차이즈 빵집"),
+    _seg(19.48, 23.82, "매장입니다. 제품 안내판에 한글로 된 로고가 보입니다."),  # stamped past the cut at 20.7
+]
+TAIL_RIGHT = [
+    _seg(20.7, 23.7, "제품 안내판에 한글로 된 로고가 보입니다."),
+    _seg(24.0, 29.5, "지난 2월 판매를 시작했습니다."),
+]
+
+
+def test_the_end_of_a_line_heard_again_after_the_cut_is_shown_once(pipeline):
+    # SBS Korean news: region 0 wrote its last line on past the cut, region 1
+    # wrote what it heard after the cut; both were shown
+    for order in ((0, 1), (1, 0)):
+        job = _jobs.Job(("tail", "ko", "", "m"), {"language": "ko"})
+        job.regions, job.region_state = [(0.0, 20.7), (20.7, 45.0)], ["pending", "pending"]
+        for idx in order:
+            job.add_region(idx, (TAIL_LEFT, TAIL_RIGHT)[idx])
+        shown = sorted((s["start"], s["end"], s["text"]) for s in job.segments.values() if not s["hidden"])
+        assert shown[1] == (19.48, 23.7, TAIL_LEFT[1]["text"]), order
+        assert len(shown) == 3, order
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        (
+            _seg(19.48, 20.5, "매장입니다. 제품 안내판에 한글로 된 로고가 보입니다."),
+            TAIL_RIGHT[0],
+        ),  # ends before the cut
+        (_seg(17.0, 22.0, "너를 사랑해 사랑해"), _seg(20.7, 22.0, "사랑해")),  # a short end is sung again
+    ],
+)
+def test_a_line_that_only_ends_like_the_next_one_is_kept(pipeline, left, right):
+    job = _jobs.Job(("tail", "ko", "", "m"), {"language": "ko"})
+    job.regions, job.region_state = [(0.0, 20.7), (20.7, 45.0)], ["pending", "pending"]
+    job.add_region(0, [left])
+    job.add_region(1, [right])
+    assert not any(s["hidden"] for s in job.segments.values())
+
+
+def test_library_export_shows_the_end_of_a_line_heard_again_once(pipeline):
+    store = _state.store
+    store.put_video("tail", "https://x", "t", 45.0, [[0.0, 20.7], [20.7, 45.0]])
+    store.put_transcript("tail", "ko", "m", 0.0, 20.7, [_raw(s["start"], s["end"], s["text"]) for s in TAIL_LEFT])
+    store.put_transcript("tail", "ko", "m", 20.7, 45.0, [_raw(s["start"], s["end"], s["text"]) for s in TAIL_RIGHT])
+    srt, n = _jobs.library_export("tail", "ko", "m", None)
+    assert n == 3 and srt.count("로고가 보입니다") == 1
+    assert "00:00:19,480 --> 00:00:23,700" in srt
 
 
 def test_library_export_shows_a_line_heard_by_both_regions_once(pipeline):

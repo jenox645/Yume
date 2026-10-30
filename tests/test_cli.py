@@ -43,14 +43,19 @@ def test_aliases_and_help_flags(capsys):
         assert "Usage:" in capsys.readouterr().out
 
 
-def test_unknown_command(capsys):
-    cli.run_command("nonsense", [])
+def test_unknown_command_fails(capsys):
+    # A typo in a script (`pocket_yume.py stauts && …`) exited 0, as if it had worked
+    with pytest.raises(SystemExit) as e:
+        cli.run_command("nonsense", [])
+    assert e.value.code == 2
     assert "Unknown: nonsense" in capsys.readouterr().out
 
 
 def test_import_without_a_path_shows_its_usage():
     with patch.object(cli, "config_import") as imp, patch.object(cli, "error") as err:
-        cli.COMMANDS["import"].run({}, [])
+        with pytest.raises(SystemExit) as e:
+            cli.COMMANDS["import"].run({}, [])
+    assert e.value.code == 2
     imp.assert_not_called()
     assert "import <path>" in err.call_args[0][0]
 

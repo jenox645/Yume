@@ -119,8 +119,18 @@ def preload():
 
 # A number followed by a counter whose reading MeCab gets wrong after Arabic
 # digits: 3月 "3 tsuki" (sangatsu), 25日 "25ka", 1人 "1nin" (hitori), 第3話 "hanashi" (wa),
-# 3つ "3tsu" (mittsu).
-_JA_COUNTER = re.compile(r"(\d+)(日間|日|月|人|話|つ)")
+# 3つ "3tsu" (mittsu); and counters whose sound changes with the number, which
+# MeCab reads one way whatever the number: 3本 "3 pon" (sanbon), 10分 "10 fun"
+# (juppun), 1杯 "1 bai" (ippai), 3匹 "3 hiki" (sanbiki), 3軒 "3 ken" (sangen),
+# 1歩 "1 ho" (ippo), 3足 "3 ashi" (sanzoku: pairs of shoes). 3分の1 is a third
+# (sanbun); 1足す1 is "1 tasu 1", 1軒家 a house (ikkenya) and 1歩く not a counter.
+_JA_COUNTER = re.compile(
+    r"(\d+)(日間|日|月|人|話|つ|本|分間|分(?!の)|杯|匹|軒(?!家)|歩(?![かきくけこいっ])|足(?![さしすせそらりるれろっ]))"
+)
+# counter: (as read after most numbers, after 1/6/8/10 (doubled consonant), after 3)
+_JA_SOUND = {"本": ("hon", "pon", "bon"), "杯": ("hai", "pai", "bai"), "匹": ("hiki", "piki", "biki"),
+             "分": ("fun", "pun", "pun"), "分間": ("funkan", "punkan", "punkan"), "軒": ("ken", "ken", "gen"),
+             "歩": ("ho", "po", "po"), "足": ("soku", "soku", "zoku")}  # fmt: skip
 _JA_TSU = {1: "hitotsu", 2: "futatsu", 3: "mittsu", 4: "yottsu", 5: "itsutsu", 6: "muttsu", 7: "nanatsu",
            8: "yattsu", 9: "kokonotsu", 10: "too"}  # fmt: skip
 _JA_DAYS = {1: "tsuitachi", 2: "futsuka", 3: "mikka", 4: "yokka", 5: "itsuka", 6: "muika", 7: "nanoka",
@@ -136,8 +146,25 @@ _JA_NAMES = {
 _JA_NAME_RE = re.compile("|".join(map(re.escape, _JA_NAMES)))
 
 
+def _sound_counter(n, counter):
+    """3本 "3 bon": the counter as it sounds after n, or None past 99 (hyappon,
+    sanbyakuhon: the hundreds have rules of their own)."""
+    if n > 99:
+        return None
+    plain, doubled, after_3 = _JA_SOUND[counter]
+    last = n % 10
+    if last in (0, 1, 6, 8):  # ippon, roppon, happon, juppon; ippun, juppun
+        return f"{n} {doubled}"
+    if last == 3 or (last == 4 and counter.startswith("分")):  # sanbon, sanpun, yonpun
+        return f"{n} {after_3}"
+    return f"{n} {plain}"
+
+
 def _counter_reading(m, after_month):
+    """The reading of a number + counter, or None to leave it to MeCab."""
     n, counter = int(m.group(1)), m.group(2)
+    if counter in _JA_SOUND:
+        return _sound_counter(n, counter)
     if counter in ("月", "話"):
         return f"{m.group(1)} {'gatsu' if counter == '月' else 'wa'}"
     if counter == "つ":  # past 10 the native counter is not used: "11 tsu" stays as it was
@@ -152,6 +179,11 @@ def _counter_reading(m, after_month):
     return day or f"{m.group(1)} nichi"
 
 
+def _hold_counter(m, hold):
+    reading = _counter_reading(m, m.string[: m.start()].endswith("月"))
+    return m.group(0) if reading is None else hold(reading)
+
+
 def romanize_japanese(text):
     """Japanese text (kanji/kana) to romaji: cutlet, else pykakasi. ~1 ms."""
     readings = []
@@ -162,7 +194,7 @@ def romanize_japanese(text):
 
     # ・ separates words (ジョン・レノン); cutlet wrote it as "/": "Jon/Renon"
     held = _JA_NAME_RE.sub(lambda m: hold(_JA_NAMES[m.group(0)]), text.replace("・", " "))
-    held = _JA_COUNTER.sub(lambda m: hold(_counter_reading(m, m.string[: m.start()].endswith("月"))), held)
+    held = _JA_COUNTER.sub(lambda m: _hold_counter(m, hold), held)
     roma = _romanize_japanese_words(held)
     if roma is None:
         return None
@@ -257,14 +289,54 @@ _ZH_PHRASES = {
     "不好好": "bù hǎo hǎo", "没好好": "méi hǎo hǎo", "沒好好": "méi hǎo hǎo",
     **{f"{a}{b}": f"{pa} cháng" for a, pa in (("很", "hěn"), ("太", "tài"), ("好", "hǎo"), ("多", "duō"))
        for b in "长長"},
+    # 重重地 "heavily" (pypinyin: "chóng chóng dì", layers upon layers of earth)
+    "重重地": "zhòng zhòng de", "静悄悄地": "jìng qiāo qiāo de", "靜悄悄地": "jìng qiāo qiāo de",
+    "数着": "shǔ zhe", "数一数": "shǔ yī shǔ", "數一數": "shǔ yī shǔ",  # counting, not 数 "number" (shù)
+    # 还/還 "give back" (huán), not "still" (hái); 一行行 "line after line" (háng)
+    "还给": "huán gěi", "還給": "huán gěi", "一行行": "yī háng háng", "一行一行": "yī háng yī háng",
+    # 樂 "music" (yuè) in traditional text: 音樂 was "yīn lè"
+    **{w: p for w, p in (("音樂", "yīn yuè"), ("樂隊", "yuè duì"), ("樂器", "yuè qì"), ("樂團", "yuè tuán"),
+       ("樂曲", "yuè qǔ"), ("樂章", "yuè zhāng"))},
+    "睡不着觉": "shuì bù zháo jiào", "睡不著覺": "shuì bù zháo jiào", "长相思": "cháng xiāng sī",
+    "長相思": "cháng xiāng sī", "切开": "qiē kāi", "切開": "qiē kāi",
+    # 舍不得 "can't bear to part" (de), not 不得 "must not" (dé)
+    **{f"{a}不得": f"{p} bù de" for a, p in (("舍", "shě"), ("捨", "shě"), ("怪", "guài"), ("恨", "hèn"),
+       ("巴", "bā"), ("记", "jì"), ("記", "jì"), ("顾", "gù"), ("顧", "gù"), ("由", "yóu"))},
 }  # fmt: skip
+# Verb + 得 + how: 唱得很好 "chàng de" (pypinyin: dé, "to obtain")
+_ZH_DE_VERBS = {
+    "唱": "chàng", "跑": "pǎo", "变": "biàn", "變": "biàn", "走": "zǒu", "说": "shuō", "說": "shuō",
+    "过": "guò", "過": "guò", "哭": "kū", "笑": "xiào", "活": "huó", "爱": "ài", "愛": "ài", "飞": "fēi",
+    "飛": "fēi", "睡": "shuì", "做": "zuò", "写": "xiě", "寫": "xiě", "听": "tīng", "聽": "tīng", "看": "kàn",
+    "想": "xiǎng", "吃": "chī", "玩": "wán", "跳": "tiào", "讲": "jiǎng", "講": "jiǎng", "醉": "zuì",
+    "疼": "téng", "痛": "tòng", "等": "děng", "来": "lái", "來": "lái",
+}  # fmt: skip
+# Verb + 不着/得着: can('t) manage to (zháo): 睡不着 "can't fall asleep", was "shuì bù zhe"
+_ZH_ZHAO_VERBS = {"睡": "shuì", "找": "zhǎo", "摸": "mō", "猜": "cāi", "够": "gòu", "夠": "gòu", "用": "yòng",
+                  "犯": "fàn", "见": "jiàn", "見": "jiàn", "碰": "pèng"}  # fmt: skip
+# AA地 is the adverb "-ly" (de), which pypinyin read as 地 "earth" (dì): 慢慢地
+# "màn màn dì". Not 大大/小小/高高: 小小地方 is "a small place" (dì fāng).
+_ZH_AA_DE = {
+    "慢": "màn", "轻": "qīng", "輕": "qīng", "静": "jìng", "靜": "jìng", "默": "mò", "深": "shēn", "远": "yuǎn",
+    "遠": "yuǎn", "悄": "qiāo", "渐": "jiàn", "漸": "jiàn", "紧": "jǐn", "緊": "jǐn", "偷": "tōu", "好": "hǎo",
+    "狠": "hěn", "久": "jiǔ", "暗": "àn", "缓": "huǎn", "緩": "huǎn", "淡": "dàn", "傻": "shǎ", "呆": "dāi",
+    "早": "zǎo", "乖": "guāi", "稳": "wěn", "穩": "wěn", "牢": "láo", "匆": "cōng", "悠": "yōu", "痴": "chī",
+    "癡": "chī", "甜": "tián", "细": "xì", "細": "xì", "白": "bái", "暖": "nuǎn", "柔": "róu", "冷": "lěng",
+}  # fmt: skip
+# A number before 只 counts animals (两只老虎 liǎng zhī), not 只 "only" (zhǐ)
+_ZH_NUMBERS = {"两": "liǎng", "兩": "liǎng", "三": "sān", "四": "sì", "五": "wǔ", "六": "liù", "七": "qī",
+               "八": "bā", "九": "jiǔ", "十": "shí", "几": "jǐ", "幾": "jǐ"}  # fmt: skip
+# 重 before these verbs is "again" (chóng: 重来, 重回), not "heavy" (zhòng)
+_ZH_CHONG = {"来": "lái", "來": "lái", "回": "huí", "拾": "shí", "遇": "yù", "见": "jiàn", "見": "jiàn",
+             "燃": "rán", "写": "xiě", "寫": "xiě", "游": "yóu", "遊": "yóu", "走": "zǒu", "做": "zuò",
+             "归": "guī", "歸": "guī"}  # fmt: skip
 # Verbs 著 follows as "-ing" (看著 kàn zhe), where pypinyin reads zhù
 _ZH_ZHE_VERBS = {
     "看": "kàn", "想": "xiǎng", "等": "děng", "聽": "tīng", "唱": "chàng", "走": "zǒu", "笑": "xiào",
     "哭": "kū", "坐": "zuò", "站": "zhàn", "躺": "tǎng", "睡": "shuì", "拿": "ná", "帶": "dài",
     "抱": "bào", "牽": "qiān", "望": "wàng", "亮": "liàng", "活": "huó", "忙": "máng", "記": "jì",
     "陪": "péi", "守": "shǒu", "吃": "chī", "喝": "hē", "寫": "xiě", "念": "niàn", "讀": "dú",
-    "找": "zhǎo", "追": "zhuī", "愛": "ài", "等待": "děng dài", "看見": "kàn jiàn",
+    "找": "zhǎo", "追": "zhuī", "愛": "ài", "等待": "děng dài", "看見": "kàn jiàn", "數": "shǔ",
 }  # fmt: skip
 _zh_loaded = False
 
@@ -278,7 +350,20 @@ def _load_zh_phrases():
         from pypinyin import load_phrases_dict
     except ImportError:  # a pypinyin without it still romanizes, only less well
         return
-    phrases = {**_ZH_PHRASES, **{f"{v}著": f"{p} zhe" for v, p in _ZH_ZHE_VERBS.items()}}
+    phrases = {
+        **{f"{c}{c}地": f"{p} {p} de" for c, p in _ZH_AA_DE.items()},
+        **{f"{n}只": f"{p} zhī" for n, p in _ZH_NUMBERS.items()},
+        **{f"重{v}": f"chóng {p}" for v, p in _ZH_CHONG.items()},
+        **{f"{v}得": f"{p} de" for v, p in _ZH_DE_VERBS.items()},
+        **{
+            f"{v}{m}{z}": f"{p} {mp} zháo"
+            for v, p in _ZH_ZHAO_VERBS.items()
+            for m, mp in (("不", "bù"), ("得", "de"))
+            for z in "着著"
+        },
+        **_ZH_PHRASES,
+        **{f"{v}著": f"{p} zhe" for v, p in _ZH_ZHE_VERBS.items()},
+    }
     load_phrases_dict({k: [[s] for s in v.split()] for k, v in phrases.items()})
 
 

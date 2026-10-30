@@ -12,6 +12,8 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # Project root on path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -689,3 +691,67 @@ class TestVocalIsolationCli:
         assert vocals.health_row({"vocal_isolation": False})[2].startswith("off")
         monkeypatch.setattr(vocals, "status", lambda: (True, "htdemucs, PyTorch 2.11.0+cu128"))
         assert vocals.health_row({})[2].startswith("on")
+
+    def test_install_when_the_driver_does_not_report_cuda(self, monkeypatch, capsys):
+        # nvidia-smi found a GPU but no "CUDA Version": the advice used to crash (None[0])
+        from yume import llama_server, vocals
+
+        monkeypatch.setattr("yume.hardware.detect_gpu", lambda: {"has_nvidia": True})
+        monkeypatch.setattr(llama_server, "driver_cuda_version", lambda: None)
+        monkeypatch.setattr(vocals, "_run", lambda *a, **k: pytest.fail("must not install"))
+        assert vocals.install() is False
+        out = capsys.readouterr().out
+        assert "could not be read" in out and "nvidia.com" in out
+
+    def test_install_names_an_old_driver_version(self, monkeypatch, capsys):
+        from yume import llama_server, vocals
+
+        monkeypatch.setattr("yume.hardware.detect_gpu", lambda: {"has_nvidia": True})
+        monkeypatch.setattr(llama_server, "driver_cuda_version", lambda: (12, 4))
+        assert vocals.install() is False
+        assert "CUDA 12.4" in capsys.readouterr().out
+
+    def _cli(self, monkeypatch, args, cfg=None, usable=(False, "not installed")):
+        from yume import vocals
+
+        saved = []
+        monkeypatch.setattr(vocals, "status", lambda: usable)
+        monkeypatch.setattr("config.save_config", lambda c: saved.append(dict(c)))
+        cfg = {"vocal_isolation": True} if cfg is None else cfg
+        vocals.cli(cfg, args)
+        return cfg, saved
+
+    def test_command_status(self, monkeypatch, capsys):
+        self._cli(monkeypatch, [])
+        out = capsys.readouterr().out
+        assert "not installed" in out and "on" in out and "vocals install" in out
+        self._cli(monkeypatch, ["status"], cfg={"vocal_isolation": False}, usable=(True, "htdemucs, PyTorch 2.11"))
+        out = capsys.readouterr().out
+        assert "htdemucs, PyTorch 2.11" in out and "off" in out and "vocals install" not in out
+
+    def test_command_on_off_saves_the_setting(self, monkeypatch):
+        cfg, saved = self._cli(monkeypatch, ["off"])
+        assert cfg["vocal_isolation"] is False and saved[-1]["vocal_isolation"] is False
+        cfg, saved = self._cli(monkeypatch, ["ON"], cfg={"vocal_isolation": False})
+        assert cfg["vocal_isolation"] is True and saved[-1]["vocal_isolation"] is True
+
+    def test_command_install_exit_code(self, monkeypatch):
+        from yume import vocals
+
+        monkeypatch.setattr(vocals, "install", lambda: False)
+        with pytest.raises(SystemExit) as e:
+            self._cli(monkeypatch, ["install"])
+        assert e.value.code == 1
+        monkeypatch.setattr(vocals, "install", lambda: True)
+        self._cli(monkeypatch, ["install"])  # no exit: success
+
+    def test_command_unknown_subcommand(self, monkeypatch, capsys):
+        with pytest.raises(SystemExit) as e:
+            self._cli(monkeypatch, ["maybe"])
+        assert e.value.code == 2 and "vocals status | on | off | install" in capsys.readouterr().out
+
+    def test_command_is_in_the_cli(self):
+        from yume import cli
+
+        assert "vocals" in cli.COMMANDS
+        assert any(usage.startswith("vocals") for usage, _ in cli.COMMANDS["vocals"].help)

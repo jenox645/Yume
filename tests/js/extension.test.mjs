@@ -428,3 +428,82 @@ test('popup: exports are named after the video', () => {
   assert.equal(ctx.exportName('a/b: c?', 'vtt'), 'yume-a_b_c.vtt');
   assert.match(ctx.exportName('', 'srt'), /^yume-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.srt$/);  // no title: the date
 });
+
+test('popup: a History/blacklist row action that fails says so', async () => {
+  const { ctx } = loadPopup();
+  const toasts = [];
+  ctx.showToast = (message, type) => toasts.push([message, type]);
+  ctx.chrome.runtime.sendMessage = (_msg, cb) => cb({ ok: false, status: 0, data: { error: 'Yume server not reachable' } });
+  assert.equal(await ctx.serverAction({ method: 'POST', path: '/library/delete', body: {} }, 'Could not delete'), false);
+  assert.deepEqual(toasts, [['Yume server not reachable', 'error']]);
+});
+
+test('popup: "Set & Enable" sets the stream URL and (re)starts the subtitles', async () => {
+  for (const [active, expected] of [[false, ['GET_STATUS', 'start']], [true, ['GET_STATUS', 'TOGGLE_SUBTITLES', 'start']]]) {
+    const { ctx } = loadPopup();
+    const sent = [];
+    ctx.sendToTab = async (m) => { sent.push(m.action); return { success: true, active }; };
+    ctx.toggleSubtitles = async () => { sent.push('start'); };
+    ctx.document.getElementById('customStreamUrl').value = ' https://cdn.example/a.m3u8 ';
+    await ctx.setCustomStreamUrl();
+    assert.deepEqual(sent, expected);
+  }
+});
+
+test('popup: Switch Model stays disabled until the switch answers', async () => {
+  const { ctx, controls } = loadPopup();
+  let answer;
+  ctx.chrome.runtime.sendMessage = (_msg, cb) => { answer = cb; };
+  ctx.document.getElementById('whisperModelSelect').value = 'small';
+  const pending = ctx.switchWhisperModel();
+  assert.equal(controls.switchWhisperModel.disabled, true);  // a second click sent a second switch
+  answer({ ok: true, status: 200, data: { status: 'switched', model: 'small' } });
+  await pending;
+  assert.equal(controls.switchWhisperModel.disabled, false);
+});
+
+test('popup: export on a tab without Yume says to reload it', async () => {
+  const { ctx, controls } = loadPopup();
+  ctx.sendToTab = async () => { throw new Error('Could not establish connection. Receiving end does not exist.'); };
+  await ctx.exportSubtitles('srt');
+  assert.match(controls.exportStatus.textContent, /reload the page/);
+});
+
+test('a session stopped while it reads its settings leaves no storage listener behind', async () => {
+  const { ctx } = load('session.js');
+  const live = new Set();
+  ctx.chrome.storage.onChanged = { addListener: (f) => live.add(f), removeListener: (f) => live.delete(f) };
+  let release;
+  ctx.chrome.storage.local.get = () => new Promise((r) => { release = () => r({}); });
+  const s = new ctx.SubtitleSession();
+  const started = s.start({ duration: 60, currentTime: 0, addEventListener: noop, removeEventListener: noop });
+  s.stop();  // Disable (or a navigation) while start() still waits for storage
+  release();
+  assert.equal(await started, false);
+  assert.equal(live.size, 0);  // it was added after stop() removed it, and never removed again
+});
+
+test('a finished run fading its badge does not hide the next run\'s badge', () => {
+  const { ctx } = load('subtitle-window.js');
+  const timers = [];
+  ctx.setTimeout = (fn) => timers.push(fn);
+  const els = {};
+  const el = (sel) => (els[sel] ??= {
+    style: {}, textContent: '', className: '',
+    classList: {
+      contains: (c) => el(sel).className.split(' ').includes(c),
+      add: (c) => { el(sel).className += ` ${c}`; },
+      remove: noop,
+    },
+  });
+  const w = Object.assign(Object.create(ctx.SubtitleWindow.prototype), {
+    settings: {}, isPlaying: false, element: { style: {}, querySelector: el },
+  });
+  const badge = el('.chunk-badge');
+  w.updateChunkProgress({ complete: true });
+  timers.shift()();  // 3 s later: starts fading
+  w.resetProgress();  // a new run starts (next video) before the fade ends
+  timers.shift()();  // the fade's end
+  assert.equal(badge.style.display, '');
+  assert.equal(badge.className, 'chunk-badge active');
+});

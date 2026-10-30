@@ -34,9 +34,10 @@ Yume fetches the audio of the video you are watching (via [yt-dlp](https://githu
 
 ### What's new in 0.2
 
-- **Vocal isolation** — on an NVIDIA GPU, Yume separates the singer from the music before Whisper listens (Demucs). Fewer misheard lyrics; install it from **Tools → Vocal Isolation** or the setup wizard.
+- **Vocal isolation** — on an NVIDIA GPU, Yume separates the singer from the music before Whisper listens (Demucs). Fewer misheard lyrics; install it from **Tools & Fonts → Vocal Isolation** or the setup wizard.
 - **One-click start** — press Enable in the extension and Yume starts by itself in the background, and stops when you stop watching.
 - **GPU translation without compiling anything** — llama.cpp's prebuilt `llama-server`, matched to your driver: a whole song is translated in seconds.
+- **Cleaner subtitles** — tested by reading every line of real songs and news in all five languages: lines Whisper writes twice or cuts off are shown once, a line too long to read is cut into timed pieces, names are translated from their reading (21/21 right instead of 1/7), and Yume tells you when the video sounds like another language than the one you picked.
 - **The server does the work** — download once, ~25 s sections cut at quiet points, the part you are watching first, everything cached in SQLite: reopening a video is instant, in any browser.
 - **Made for songs in five languages** — hallucinations Whisper invents over music ("subtitles by …", "see you in the next video") are hidden in Japanese, Chinese, Korean, Russian and Arabic; Korean romanization follows pronunciation; `large-v3-turbo` is the default (as accurate as `large-v3` on songs, twice as fast).
 
@@ -94,7 +95,7 @@ graph LR
         RG --> WH["Whisper<br/>region under the playhead first"]
         WH --> FL["Hallucination filter<br/>+ your blacklist"]
         FL --> TR["Translate in batches<br/>(local LLM, JSON output)"]
-        FL --> RO["Romanize<br/>pykakasi / pypinyin / built-in"]
+        FL --> RO["Romanize<br/>cutlet / pypinyin / built-in"]
         TR --> DB[("SQLite cache<br/>transcripts, translations")]
     end
     TR -- "OpenAI-compatible API" --> LLM["llama.cpp / Ollama /<br/>LM Studio (port 5000)"]
@@ -149,13 +150,13 @@ Smaller models are faster at the cost of accuracy — a 3B translation model, or
 
 Note: large models (12B+) take 10–20 seconds per section on consumer GPUs. Use a 3B or 7B model if subtitle delay is a concern. The Whisper model and the translation model share your GPU's VRAM.
 
-Download via CLI: **Tools → Download Translation Model**
+Download via CLI: **Tools & Fonts → Download Translation Model**
 
 ### Translation Backends
 
 | Backend | Setup | Notes |
 |---------|-------|-------|
-| **llama.cpp** (default) | Auto-installed by wizard | Runs GGUF models directly with llama.cpp's prebuilt server — CUDA, Vulkan, Metal or CPU build picked for your hardware (**Tools → Translation Engine** to update) |
+| **llama.cpp** (default) | Auto-installed by wizard | Runs GGUF models directly with llama.cpp's prebuilt server — CUDA, Vulkan, Metal or CPU build picked for your hardware (**Tools & Fonts → Translation Engine** to update) |
 | **Ollama** | [ollama.com](https://ollama.com) | One-click install, model management (0.5+ for structured output) |
 | **LM Studio** | [lmstudio.ai](https://lmstudio.ai) | GUI with model browser |
 | **Custom** | Your endpoint | Any OpenAI-compatible API |
@@ -196,6 +197,12 @@ python pocket_yume.py recommend      # Suggest best model for your GPU
 python pocket_yume.py fonts          # Detect installed subtitle fonts
 python pocket_yume.py setup          # Re-run setup wizard
 python pocket_yume.py settings       # Settings menu
+python pocket_yume.py guide          # Step-by-step how-to guides
+python pocket_yume.py stats          # Live server statistics (GPU, session)
+python pocket_yume.py ports          # Port availability
+python pocket_yume.py model list     # Whisper models (model switch <name> hot-swaps it)
+python pocket_yume.py blacklist list # Blocked phrases (add / remove / clear)
+python pocket_yume.py export [path]  # Back up the config (import <path> restores it)
 python pocket_yume.py help           # All commands
 ```
 
@@ -260,6 +267,10 @@ See [docs/SECURITY.md](docs/SECURITY.md) for the threat model.
 
 ### v0.2.0
 
+- **Live audits (October 2026):** real news, interviews and songs in Japanese, Korean, Chinese, Russian and Arabic were run through the server and every line read. Fixed: cut-off copies of the next line and lines written twice are shown once, also across a region cut and in History exports; a line too long to read (a 384-character rap verse on screen for 21 s) is cut into timed pieces at sentence, clause or word ends; loops of long phrases are caught, while sung stutters ("大大大大大嫌い") stay; "谢谢观看" is hidden; Japanese, Chinese and Korean lines are sent to the translator with their reading, so names come out right (21/21 instead of 1/7 in an A/B), and a reading copied back as the "translation" is rejected; one translation pasted onto several lines and English lines padded with the next line's words are retried; the LLM worker survives any error (every job used to stay at "translating"); a notice above the subtitles says when the video sounds like another language than the one picked; romaji for dates and counters (3月 "3 gatsu", 7月1日 "7 gatsu tsuitachi", 3つ mittsu), 菅義偉 Suga, ・ as a space; pinyin heteronyms (弹着 tán, 好好 hǎo hǎo, 亮著 zhe, 很长 cháng).
+- **Extension:** the page sends a clean title (no "(2) … - YouTube") for the translation prompt, History and file names, also after YouTube's in-page navigation; "Clear blacklist" asks for a second click; exports are named after the video; downloads work in Firefox (the link was revoked too early); a tab opened before Yume was installed says to reload the page.
+- **Server and CLI:** History progress no longer counts regions of an older plan (13 of 12, 108%); `/translation/test` answers JSON on any error; `status`, `health` and `fonts` no longer wait for Enter when run as commands; Windows font detection finds Microsoft YaHei (`msyh.ttc`); AMD VRAM on Linux was read as the memory in use.
+- **Code health:** one server-process core for the launcher and the one-click supervisor (`yume/servers.py`), the server entry split into `_api`, `_settings`, `_model` and `_startup`, one constants module and a command table for the CLI; the most tangled functions (complexity up to 80) were split (none is above cyclomatic complexity 17 now), each checked against the old code on the same inputs, and CI fails on anything above grade C (20). A browser test (`npm run e2e`) drives the real extension against the real server code. 749 Python, 24 JavaScript and 14 browser tests.
 - **Vocal isolation:** with PyTorch (CUDA) + demucs installed (Tools → Vocal Isolation, or the setup wizard on NVIDIA machines), each song's vocals are separated from the music before transcription (~8 s per 4-minute song). Measured against lyrics: 14.0% → 11.7% and 8.1% → 7.9% of characters wrong. Videos over 15 minutes and machines without CUDA transcribe the mix as before.
 - **Multilingual live tests (Korean, Chinese, Russian, Arabic music videos, a 75-minute talk, a live stream, Bilibili):** lines Whisper invents for a stretch it hears no words in (one line stamped across its whole 30 s window — "字幕志愿者 李宗盛", "Субтитры сделал DimaTorzok", "한글자막 by …") are hidden in any language; a phrase said twice (きらきら, もっともっと) is no longer hidden as spam; the first section ends at a quiet point instead of splitting the first sung line at 30 s; lines no longer run past the end of the video; Korean romanization follows pronunciation (좋은 joeun, 감사합니다 gamsahamnida); live streams get a clear message instead of an ffmpeg error; a video resumed at 40:00 starts there without transcribing its first 30 s; Shorts, embeds and youtu.be links share the cache with watch?v= links.
 - **Japanese romaji by word:** romanization now comes from a real morphological analysis (cutlet on MeCab + UniDic) instead of character-by-character readings: 囁いて is "sasayaite" (was "shou ite"), 掠れた "kasureta" (was "ryaku reta"), and words are no longer split mid-verb ("somaru", not "soma ru"). pykakasi remains the fallback.

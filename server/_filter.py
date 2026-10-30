@@ -303,14 +303,21 @@ def is_fragment(seg, nxt):
     return len(os.path.commonprefix([a, b])) >= FRAGMENT_SHARED * len(a)
 
 
-def boundary_drop(last, first):
-    """A region's last line and the next region's first: the one to hide, or
-    None. Regions are transcribed apart, so a line sung across their cut can
-    come out twice: then `last` is stretched over both and `first` is hidden."""
-    if is_repeat(last, first):
-        last["end"] = first["end"]
-        return first
-    return last if is_fragment(last, first) else None
+TAIL_MIN = 4  # letters: a shorter end of a line ("사랑해") is sung again too often
+
+
+def is_tail(seg, nxt):
+    """`nxt` is the end of `seg` heard again across a region cut: the left
+    region wrote its last line on past the cut ("매장입니다. 제품 안내판에 한글로
+    된 로고가 보입니다." stamped 19.5-23.8 s, cut at 20.7) and the right region
+    wrote what it heard after the cut ("제품 안내판에 한글로 된 로고가 보입니다.")."""
+    a, b = _compact(seg["text"]), _compact(nxt["text"])
+    return (
+        bool(seg.get("past_cut"))
+        and len(a) > len(b) >= TAIL_MIN
+        and a.endswith(b)
+        and nxt["start"] - seg["end"] < FRAGMENT_GAP_S
+    )
 
 
 SPLIT_WIDTH = 84  # wider than two subtitle lines (CJK characters count double)...

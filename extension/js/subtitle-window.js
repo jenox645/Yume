@@ -161,7 +161,7 @@ class SubtitleWindow {
 
     this.element.innerHTML = `
       <div class="subtitle-header">
-        <div class="subtitle-title"></div>
+        <div class="subtitle-title">Yume</div>
         <div class="subtitle-controls">
           <div class="chunk-badge" style="display:none" title="Progress"></div>
           <button class="control-btn minimize-btn" title="Minimize">\u2212</button>
@@ -179,10 +179,7 @@ class SubtitleWindow {
       <div class="resize-handle"></div>
     `;
 
-    // Set title via textContent (not innerHTML) to prevent XSS
-    this.element.querySelector('.subtitle-title').textContent =
-      this.settings.windowTitle || 'Yume';
-
+    // The title is set via textContent (not innerHTML) by applyCustomStyles()
     root.appendChild(this.element);
     // documentElement, not body: some pages replace <body> on navigation
     document.documentElement.appendChild(this.host);
@@ -214,6 +211,10 @@ class SubtitleWindow {
     if (!this.element) return;
     const s = this.settings;
     Object.assign(this.element.style, windowStyle(s));
+    // Here, not only on a settings change: create() runs before the settings
+    // are read, so a custom title used to show only after the next change
+    const titleEl = this.element.querySelector('.subtitle-title');
+    if (titleEl) titleEl.textContent = s.windowTitle || 'Yume';
     // Per line: size, colour and font from the settings named after it
     for (const [selector, name, size, color] of LINE_STYLES) {
       const el = this.element.querySelector(selector);
@@ -248,8 +249,6 @@ class SubtitleWindow {
       if (changes.settings) {
         this.settings = changes.settings.newValue || {};
         this.applyCustomStyles();
-        const titleEl = this.element?.querySelector('.subtitle-title');
-        if (titleEl) titleEl.textContent = this.settings.windowTitle || 'Yume';
 
         // Badge visibility follows the counter setting immediately
         if (this._lastProgress) this.updateChunkProgress(this._lastProgress);
@@ -288,7 +287,8 @@ class SubtitleWindow {
       setTimeout(() => {
         if (badge.classList.contains('complete')) {
           badge.classList.add('fade-out');
-          setTimeout(() => { badge.style.display = 'none'; }, 600);
+          // Still the finished run's badge: a new run (resetProgress) may have taken it over
+          setTimeout(() => { if (badge.classList.contains('complete')) badge.style.display = 'none'; }, 600);
         }
       }, 3000);
       return;

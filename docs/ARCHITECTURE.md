@@ -59,8 +59,8 @@ from a content script and an MV3 service worker; see "Why server-side" below.)
      the mix. (Separating Yume's 16 kHz mono instead made transcription worse.)
    - **Plan regions** (`_regions.plan_regions`): region 0 ends at the quietest
      point in [20, 30] s (the stream preview covers it; its lines after the cut
-     are left to region 1), then a cut every ~26 s at the quietest point in a
-     ±5 s window. Regions are exclusive — no overlap, nothing to de-duplicate.
+     are left to region 1), then a cut every ~26 s at the quietest point from
+     6 s before to 4 s after it. Regions are exclusive — no overlap.
      Lines are kept inside their region (Whisper stamps lines up to the end of
      its 30 s window, past the audio it was given).
    - **Transcription worker** (one thread, the model is not thread-safe): takes
@@ -71,12 +71,23 @@ from a content script and an MV3 service worker; see "Why server-side" below.)
      retroactively). Region-level too: a line alone in its region stamped across
      Whisper's whole 30 s window is what Whisper writes when it hears no words
      (in every language), and "thank you" in a region's last seconds.
+     Whisper loops are cut or hidden, a line written twice in a row is shown
+     once, and a cut-off copy of the next line is hidden — also across a
+     region cut, where a line sung over the cut can come out of both regions.
+     A line wider than two subtitle lines is cut into pieces timed by their
+     share of the text (`_filter.split_long`).
+   - **Language check**: the first regions also go through Whisper's language
+     detection; when two sound clearly like another language than the one
+     picked, the overlay shows a notice above the subtitles.
    - **Romanize** deterministically (JA by word with cutlet on MeCab + UniDic,
      pykakasi as the fallback; ZH pypinyin; KO Revised Romanization with its
      sound changes; RU BGN/PCGN); Arabic, and JA/ZH without the libraries, go to
      the LLM when the user enabled romanization.
    - **LLM worker** (one thread): batches of ≤10 untranslated lines, playhead
-     first, with the video title and the previous 3 line pairs as context.
+     first (lines due in the next 20 s, and a job's very first lines, in
+     batches of 3 so they are ready in seconds), with the video title and the
+     previous 3 line pairs as context. Japanese, Chinese and Korean lines go
+     with their romanization as a reading hint, which gets names right.
 4. `session.js` polls `GET /jobs/<id>?since=<rev>&t=<playhead>` every second
    (4 s once done, 5 s in a background tab). Every segment change bumps the
    job's revision; a poll returns only segments changed since `since`. Hidden
