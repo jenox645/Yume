@@ -92,6 +92,14 @@ def _health(cfg, args):
     health_check(cfg)
 
 
+def _health_command(cfg, args):
+    """The command, unlike the menu entry, says how it went in its exit code."""
+    from yume.health import health_check
+
+    if not health_check(cfg):
+        sys.exit(1)
+
+
 def _stats(cfg, args):
     from yume.menus import cli_server_stats
 
@@ -166,7 +174,7 @@ COMMANDS: dict[str, Command] = {
     ),
     "guide": Command(_guide, "Run", (("guide", "Step-by-step how-to guides (cookbook)"),)),
     "status": Command(_status, "Inspect", (("status", "Check components"),)),
-    "health": Command(_health, "Inspect", (("health", "Run full health check"),)),
+    "health": Command(_health_command, "Inspect", (("health", "Run full health check"),)),
     "stats": Command(_stats, "Inspect", (("stats", "Live server statistics (GPU, session)"),)),
     "ports": Command(_ports, "Inspect", (("ports", "Show port availability"),)),
     "recommend": Command(_recommend, "Inspect", (("recommend", "Suggest best Whisper model for your hardware"),)),

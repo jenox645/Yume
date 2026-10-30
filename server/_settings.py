@@ -4,9 +4,13 @@ the switched Whisper model written back to it, and the user blacklist.
 
 import json
 import os
+import threading
 from pathlib import Path
 
 import _state
+
+MAX_PORT = 65535
+_blacklist_lock = threading.Lock()
 
 LIVE_KEYS = {
     "translation_host": "translation_host",
@@ -19,11 +23,41 @@ LIVE_KEYS = {
 }
 
 
+def _port_or(value, fallback):
+    """A usable port from a hand-edited config value, or the fallback."""
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        port = 0
+    if 1 <= port <= MAX_PORT:
+        return port
+    print(f"[Yume] Config: port {value!r} is not valid, using {fallback}")
+    return fallback
+
+
 def load_live_config(cfg):
     """Copy the translation keys of a config dict into _state."""
     for key, attr in LIVE_KEYS.items():
         if key in cfg:
-            setattr(_state, attr, cfg[key] if cfg[key] is not None else "")
+            value = cfg[key] if cfg[key] is not None else ""
+            if key == "translation_port":
+                value = _port_or(value, _state.translation_port)
+            setattr(_state, attr, value)
+
+
+def _read_config(path):
+    """The config file as a dict. A broken one is the same as an empty one: the
+    CLI has already said so and carried on with defaults, so the server must too."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError) as e:
+        print(f"[Yume] Config file ignored, using defaults: {e}")
+        return {}
+    if isinstance(cfg, dict):
+        return cfg
+    print("[Yume] Config file ignored, using defaults: it is not a JSON object")
+    return {}
 
 
 def reload_config():
@@ -41,6 +75,8 @@ def reload_config():
         _state.config_mtime = mtime
     except (OSError, ValueError):
         return  # missing or mid-write: keep the current settings
+    if not isinstance(cfg, dict):
+        return
     before = translation_settings(reload=False)
     load_live_config(cfg)
     if translation_settings(reload=False) != before:
@@ -68,14 +104,13 @@ def apply_config(args):
     _state.compute_type = args.compute_type
 
     if args.config and os.path.exists(args.config):
-        with open(args.config, encoding="utf-8") as f:
-            cfg = json.load(f)
+        cfg = _read_config(args.config)
         _state.model_name = cfg.get("whisper_model", _state.model_name)
         _state.model_display_name = cfg.get("whisper_model_name", "")
         # NOTE: whisper_device / whisper_compute_type are intentionally NOT loaded
         # from config here.  The CLI resolves "auto" → "cuda"/"cpu" before launching
         # the server and passes the resolved value via --device / --compute-type.
-        args.port = cfg.get("whisper_port", args.port)
+        args.port = _port_or(cfg.get("whisper_port", args.port), args.port)
         _state.youtube_auth_method = cfg.get("youtube_auth_method", _state.youtube_auth_method)
         _state.cookies_browser = cfg.get("cookies_browser", _state.cookies_browser)
         load_live_config(cfg)
@@ -137,6 +172,13 @@ def persist_whisper_model(model):
         print(f"[Yume] Could not save the model choice to the config: {e}")
 
 
+def change_blacklist(change):
+    """Save change(current list), one change at a time: two lines reported at
+    the same moment must both stay. Returns the clean list."""
+    with _blacklist_lock:
+        return save_blacklist(change(_state.user_blacklist))
+
+
 def save_blacklist(items):
     """Replace, persist and re-apply the user blacklist — the single source of
     truth for both the CLI and the extension popup. Returns the clean list."""
@@ -150,8 +192,10 @@ def save_blacklist(items):
     _state.user_blacklist = clean
     try:
         if _state.blacklist_file:
-            with open(_state.blacklist_file, "w", encoding="utf-8") as f:
+            tmp = f"{_state.blacklist_file}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(clean, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, _state.blacklist_file)
     except OSError as e:
         print(f"[Yume] Blacklist save failed: {e}")
     if _state.jobs:

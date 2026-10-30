@@ -434,8 +434,8 @@ def library_delete():
     return jsonify({"success": True})
 
 
-def _set_blacklist(items):
-    clean = _settings.save_blacklist(items)
+def _change_blacklist(change):
+    clean = _settings.change_blacklist(change)
     return jsonify({"success": True, "count": len(clean), "blacklist": clean})
 
 
@@ -449,7 +449,7 @@ def update_blacklist():
     incoming = (request.get_json(silent=True) or {}).get("blacklist", [])
     if not isinstance(incoming, list):
         return jsonify({"error": "blacklist must be a list"}), 400
-    return _set_blacklist(incoming)
+    return _change_blacklist(lambda _current: incoming)
 
 
 @app.route("/blacklist/add", methods=["POST"])
@@ -457,13 +457,13 @@ def blacklist_add():
     text = str((request.get_json(silent=True) or {}).get("text") or "").strip()
     if not text:
         return jsonify({"error": "text is required"}), 400
-    return _set_blacklist([*_state.user_blacklist, text])
+    return _change_blacklist(lambda current: [*current, text])
 
 
 @app.route("/blacklist/remove", methods=["POST"])
 def blacklist_remove():
     text = str((request.get_json(silent=True) or {}).get("text") or "").strip().lower()
-    return _set_blacklist([b for b in _state.user_blacklist if b.lower() != text])
+    return _change_blacklist(lambda current: [b for b in current if b.lower() != text])
 
 
 @app.route("/translation/health", methods=["GET"])
