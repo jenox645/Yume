@@ -220,6 +220,76 @@ def test_unreachable_server_raises_without_trying_other_formats():
             tr.translate_batch(["あ"], "ja", "English")
 
 
+@pytest.mark.parametrize(
+    "reply",
+    [
+        '<think>\nThe user wants {"x": 1}. 1. first\n</think>\n{"translations": ["a", "b"]}',  # Qwen3, R1
+        '{"translations": ["a", "b"]}\nNote: I kept {names} as they are.',  # text after the JSON
+        '{"lines": ["a", "b"]}',  # json_object mode: another key
+        '["a", "b"]',  # a bare list
+        '{"translations": [{"text": "a"}, {"translation": "b"}]}',  # objects for strings
+    ],
+)
+def test_json_replies_small_models_really_give_are_parsed(reply):
+    assert _translate.parse_json_list(reply, "translations", 2) == ["a", "b"]  # each was an error or "{'text': 'a'}"
+
+
+def test_numbered_replies_in_other_styles_are_parsed():
+    assert _translate.parse_numbered("**1.** a\n**2.** b", 2) == ["a", "b"]  # was "**1.** a"
+    assert _translate.parse_numbered("1: a\n2: b", 2) == ["a", "b"]
+    assert _translate.parse_numbered("<think>\n1. hmm\n2. hmm\n</think>\n1. a\n2. b", 2) == ["a", "b"]
+    assert _translate.parse_numbered("3:30 at the station\nsee you", 2) == ["3:30 at the station", "see you"]
+
+
+@pytest.mark.parametrize(
+    ("raw", "clean"),
+    [
+        ("'Cause I love you", "'Cause I love you"),  # was "Cause I love you"
+        ("I keep on dreamin'", "I keep on dreamin'"),  # was "dreamin"
+        ("「君の名は」という映画", "「君の名は」という映画"),  # was "君の名は」という映画"
+        ('"Hello" he said', '"Hello" he said'),
+        ('"Hello there"', "Hello there"),
+        ("'Hello there'", "Hello there"),
+        ("「こんにちは」", "こんにちは"),
+        ('"Hello there', "Hello there"),  # a lone quote at an end
+        ("Rock 'n' roll", "Rock 'n' roll"),
+    ],
+)
+def test_only_quotes_around_the_whole_translation_are_removed(raw, clean):
+    assert _translate.clean_translation(raw) == clean
+
+
+def test_a_cut_off_reply_does_not_downgrade_the_format_for_good():
+    tr = _translator()
+    calls = []
+
+    def chat(messages, max_tokens, response_format=None, temperature=0.1):
+        calls.append(response_format["type"] if response_format else "plain")
+        if len(calls) == 2:
+            return '{"translations": ["a", "b'  # cut off at max_tokens
+        return json.dumps({"translations": ["a", "b"]})
+
+    tr._chat = chat
+    assert tr.translate_batch(["一", "二"], "zh", "French") == ["a", "b"]
+    assert tr.translate_batch(["三", "四"], "zh", "French") == ["a", "b"]  # json_object took over once
+    calls.clear()
+    tr.translate_batch(["五", "六"], "zh", "French")
+    assert calls == ["json_schema"]  # was json_object from then on
+
+
+def test_lines_without_words_are_not_sent():
+    tr = _translator()
+    sent = []
+
+    def chat(messages, max_tokens, response_format=None, temperature=0.1):
+        sent.append(messages[-1]["content"])
+        return json.dumps({"translations": ["I love you"]})
+
+    tr._chat = chat
+    assert tr.translate_batch(["…", "♪", "愛してる", "  "], "ja", "French") == ["", "", "I love you", ""]
+    assert len(sent) == 1 and "♪" not in sent[0]
+
+
 # ── romanization ──────────────────────────────────────────────────────────────
 
 
@@ -1676,3 +1746,59 @@ def test_a_japanese_middle_dot_is_a_space_in_romaji():
     if _romanize.get_cutlet() is None:
         pytest.skip("cutlet (fugashi + unidic-lite) not installed")
     assert _romanize.romanize("ja", "ジョン・レノン") == "Jon Renon"  # was "Jon/Renon"
+
+
+# ── live run 2026-10-30: raw JSON shown as subtitles (14 of 75 Arabic lines) ───
+
+JSON_REPLY = '{"translations": ["[1] It targeted reinforcements",\n"[2] And the children",\n"[3] and the hospital"]'
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [JSON_REPLY, JSON_REPLY + "}", "```json\n" + JSON_REPLY + "}\n```"],
+    ids=["no closing brace", "complete", "fenced"],
+)
+def test_a_numbered_reply_that_is_really_json_is_read_as_json(reply):
+    out = _translate.parse_numbered(reply, 3)
+    assert out == ["It targeted reinforcements", "And the children", "and the hospital"]
+
+
+def test_json_cut_off_in_a_numbered_reply_never_becomes_a_subtitle():
+    out = _translate.parse_numbered('{"translations": ["[1] One", "[2] Tw', 3)
+    assert out == ["One", None, None]  # the rest is retried line by line
+    assert _translate.parse_numbered("[1] One\n[2] Two", 2) == ["One", "Two"]  # plain lists still work
+    assert _translate.parse_numbered("One\nTwo", 2) == ["One", "Two"]
+
+
+def test_a_garbled_first_reply_does_not_leave_the_endpoint_on_plain():
+    """The first batch after a start, cut off at max_tokens, walked down to "plain"
+    and remembered it: every later batch was asked for lines, and answered in JSON."""
+    tr = _translator()
+    replies = iter(['{"translations": ["cut', '{"translations": ["cut'])
+    seen = []
+
+    def chat(messages, max_tokens, response_format=None, temperature=0.1):
+        seen.append(response_format["type"] if response_format else "plain")
+        if response_format:
+            return next(replies, json.dumps({"translations": ["Later"]}))
+        return "[1] Plain"
+
+    with patch.object(tr, "_chat", side_effect=chat):
+        assert tr.translate_batch(["あ"], "ja", "English") == ["Plain"]
+        assert tr.translate_batch(["い"], "ja", "English") == ["Later"]
+    assert seen == ["json_schema", "json_object", "plain", "json_schema"]
+
+
+def test_plain_mode_does_not_ask_for_json():
+    tr = _translator()
+    prompts = []
+
+    def chat(messages, max_tokens, response_format=None, temperature=0.1):
+        if response_format:
+            raise _translate.TranslationError("HTTP 400: response_format not supported")
+        prompts.append(messages[0]["content"])
+        return "[1] One"
+
+    with patch.object(tr, "_chat", side_effect=chat):
+        tr.translate_batch(["あ"], "ja", "English")
+    assert "Return JSON" not in prompts[0] and "[1]" in prompts[0]
