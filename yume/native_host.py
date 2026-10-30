@@ -19,14 +19,18 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shlex
 import struct
 import sys
 from pathlib import Path
 
-from yume.constants import BASE_DIR, IS_WIN
-
-if __package__ in (None, ""):  # run as a script by the browser
+# The browser runs this file as a script (through the launcher): put Yume's
+# folder on the path before importing from it, or the host dies at once and
+# one-click start falls back to "start it with START_YUME".
+if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from yume.constants import BASE_DIR, IS_WIN  # noqa: E402
 
 
 _log = logging.getLogger("pocket_yume.native_host")
@@ -193,18 +197,30 @@ def _launcher_path() -> Path:
     return HOST_DIR / ("yume_host.bat" if IS_WIN else "yume_host.sh")
 
 
+def _bat_launcher(python: str, script: Path) -> bytes:
+    """The Windows launcher. cmd.exe decodes a .bat in the console code page
+    (cp932, cp850...), not UTF-8, so a path with a non-ASCII user name in it
+    (C:\\Users\\田中\\...) needs the code page switched to UTF-8 first."""
+    quoted = " ".join(f'"{p}"' for p in (python, str(script))).replace("%", "%%")
+    lines = ["@echo off", f"{quoted} %*"]
+    if not quoted.isascii():
+        lines.insert(1, "chcp 65001 >nul")
+    return ("\r\n".join(lines) + "\r\n").encode("utf-8")
+
+
 def _write_launcher() -> Path:
     """A launcher the browser can execute (manifests need a single path)."""
-    from yume.servers import console_python
+    from yume import servers
 
     HOST_DIR.mkdir(parents=True, exist_ok=True)
     path = _launcher_path()
     script = Path(__file__).resolve()
+    # python.exe, never pythonw: the browser talks to the host over stdin/stdout
+    python = servers.console_python()
     if IS_WIN:
-        # The browser starts it hidden; python.exe (not pythonw) keeps stdio working.
-        path.write_bytes(f'@echo off\r\n"{console_python()}" "{script}" %*\r\n'.encode())
+        path.write_bytes(_bat_launcher(python, script))
     else:
-        path.write_bytes(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n'.encode())
+        path.write_bytes(f'#!/bin/sh\nexec {shlex.quote(python)} {shlex.quote(str(script))} "$@"\n'.encode())
         path.chmod(0o755)
     return path
 

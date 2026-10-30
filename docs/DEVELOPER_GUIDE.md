@@ -81,7 +81,7 @@ All endpoints except `/health` need the `X-API-Token` header.
 | GET | `/blacklist` · POST `/blacklist/add` `/blacklist/remove` `/blacklist/update` | User blacklist |
 | GET | `/translation/health` · `/translation/models` · POST `/translation/test` | LLM backend |
 | POST | `/model/switch` | Hot-swap the Whisper model (drops jobs; clients recreate them) |
-| GET | `/stats` · `/config` · POST `/cache/clear` | Dashboard, config, wipe cache |
+| GET | `/stats` · POST `/cache/clear` | Dashboard (GPU, counters, active jobs), wipe the cache |
 
 A segment in a poll: `{id, start, end, text, translation, romaji, confidence, hidden}`.
 `hidden: true` means "remove it" (hallucination or blacklisted).
@@ -104,7 +104,7 @@ A segment in a poll: `{id, start, end, text, translation, romaji, confidence, hi
 - **Device/precision:** the CLI resolves `auto` and passes `--device` /
   `--compute-type`; the server does not re-read them from the config.
 - **Whisper models:** add or change models only in `yume/hardware.WHISPER_MODELS`,
-  `valid_models` in `switch_model()` and the popup's `<select>`. Multilingual
+  `_VALID_MODELS` in `server/_api.py` and the popup's `<select>`. Multilingual
   models only (`*.en` and `distil-*` cannot transcribe Yume's languages).
 - **Temp files:** downloads live in `yume_*` temp dirs; `_audio.remove_temp()`
   deletes them, and server startup removes leftovers older than an hour.
@@ -120,10 +120,12 @@ The version lives in three places, checked by the tests and CI:
 ## Testing
 
 ```bash
-pytest tests/ -v          # Python: config, server modules, pipeline, CLI modules, integration
-npm test                  # JS: session merge/render, video ids, proxy allowlist
-npx eslint extension/     # JS lint
-ruff check .              # Python lint
+pytest tests/ -v                              # Python: config, server modules, pipeline, CLI, integration
+npm test                                      # JS: session merge/render, video ids, proxy allowlist
+npm run e2e                                   # the real extension in a browser (Playwright, see below)
+npx eslint extension/ tests/js/ tests/e2e/    # JS lint
+ruff check . && ruff format --check .         # Python lint + formatting (CI checks both)
+xenon --max-absolute C --exclude "server/_vendor/*" server yume config.py pocket_yume.py  # CI complexity gate
 ```
 
 - `tests/test_pipeline.py` runs real jobs with a fake Whisper model and a fake
@@ -140,6 +142,12 @@ ruff check .              # Python lint
   the host's job object.
 - `tests/js/` evaluates the plain extension scripts in a Node VM with
   minimal browser stubs.
+- `tests/e2e/` (`npm run e2e`) loads `extension/` into a real browser with
+  Playwright against `fake_server.py`: the real server code with Whisper, the
+  LLM and the download faked. Once: `npx playwright install chromium`. It
+  uses Edge on Windows (Playwright's Chromium can fail there with "side-by-side
+  configuration is incorrect"); `BROWSER=chromium|msedge|chrome` picks one,
+  `HEADED=1` shows it. It needs the server's Python packages (not faster-whisper).
 
 The extension's fixed ID comes from the `key` in `extension/manifest.json`;
 `tests/test_service.py` checks it matches `CHROMIUM_EXTENSION_IDS` in

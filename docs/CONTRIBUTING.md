@@ -48,6 +48,8 @@ The extension, popup UI, subtitle overlay, and translation pipeline all work ide
 pytest tests/ -v                           # all tests
 pytest tests/test_integration.py -v        # integration tests only
 pytest tests/test_config.py -v             # config unit tests only
+npm test                                   # extension scripts in a Node VM
+npm run e2e                                # the real extension in a browser (once: npx playwright install chromium)
 ```
 
 The integration tests (`test_integration.py`) exist to prevent silent no-op bugs — they verify that config options actually affect behavior. If you add a new config key, add a test that proves it does something.
@@ -58,7 +60,6 @@ Check [Issues](https://github.com/jenox645/Yume/issues) for open tasks. Look for
 
 **Concrete starter tasks:**
 - Add a progress indicator for llama-cpp-python download (currently shows elapsed time, could show download size)
-- Romanize Japanese with context-aware readings (e.g. `cutlet`/`fugashi` instead of pykakasi)
 - Add `--version` flag output to `python pocket_yume.py status` (currently only in `--version`)
 - Write a test that verifies popup.js and config.py use the same default Whisper port
 - Improve error messages when the server can't bind to a port (show which process is using it)
@@ -79,8 +80,8 @@ Check [Issues](https://github.com/jenox645/Yume/issues) for open tasks. Look for
 
 1. Create a feature branch from `main`
 2. Keep PRs focused — one feature or fix per PR
-3. Run the full test suite: `pytest tests/ -v` and `npm test`
-4. Run the linters: `ruff check .` and `npx eslint extension/`
+3. Run the full test suite: `pytest tests/ -v`, `npm test` and `npm run e2e`
+4. Run the linters: `ruff check .`, `ruff format --check .` and `npx eslint extension/ tests/js/ tests/e2e/` (CI also fails on a function above complexity grade C: `xenon --max-absolute C`)
 5. When releasing, bump the version in `yume/constants.py`, `server/_state.py` (`SERVER_VERSION`), `extension/manifest.json` and the README badge
 6. Describe what you changed and why in the PR description
 

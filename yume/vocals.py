@@ -67,7 +67,10 @@ def install() -> bool:
     cuda = llama_server.driver_cuda_version()
     index = torch_index(cuda)
     if not index:
-        error(f"Your NVIDIA driver supports CUDA {cuda[0]}.{cuda[1] if cuda else '?'}; PyTorch needs 12.6 or newer.")
+        if cuda:
+            error(f"Your NVIDIA driver supports CUDA {cuda[0]}.{cuda[1]}; PyTorch needs 12.6 or newer.")
+        else:
+            error("The CUDA version of your NVIDIA driver could not be read (nvidia-smi); PyTorch needs 12.6 or newer.")
         info("Update the driver from https://www.nvidia.com/Download/index.aspx and try again.")
         return False
     free_gb = shutil.disk_usage(BASE_DIR).free / 2**30
@@ -102,6 +105,31 @@ def _failed(r) -> bool:
     for line in (r.stderr or r.stdout or "").strip().splitlines()[-12:]:
         print(f"    {C.DIM}{line}{C.RESET}")
     return False
+
+
+def cli(cfg: dict, args: list[str]) -> None:
+    """`pocket_yume.py vocals [status|on|off|install]`."""
+    from config import save_config
+
+    sub = args[0].lower() if args else "status"
+    if sub == "status":
+        ok, detail = status()
+        info(f"Installed: {detail if ok else detail + ' (optional)'}")
+        info(f"Setting:   {'on' if cfg.get('vocal_isolation', True) else 'off'}")
+        if not ok:
+            info(
+                f"Install it (~{DOWNLOAD_GB:.0f} GB, NVIDIA GPU): {C.CYAN}python pocket_yume.py vocals install{C.RESET}"
+            )
+    elif sub in ("on", "off"):
+        cfg["vocal_isolation"] = sub == "on"
+        save_config(cfg)
+        success(f"Vocal isolation {sub} (takes effect for the next video).")
+    elif sub == "install":
+        if not install():
+            sys.exit(1)
+    else:
+        error(f"Unknown: vocals {sub}. Use: vocals status | on | off | install")
+        sys.exit(2)
 
 
 def menu(cfg: dict) -> None:
