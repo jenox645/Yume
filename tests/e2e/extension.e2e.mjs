@@ -10,6 +10,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
+import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
@@ -131,7 +132,14 @@ before(async () => {
   [serverPort, pagePort] = [await freePort(), await freePort()];
   await Promise.all([startServer(), startPages()]);
   userDir = mkdtempSync(path.join(os.tmpdir(), 'yume-e2e-'));
-  const ext = path.join(ROOT, 'extension');
+  // A copy without the manifest's "key": another extension id, which a native
+  // helper registered on this machine ("autostart on") refuses. With the real
+  // id, the "not running" test below reaches it and starts the real servers.
+  const ext = path.join(userDir, 'extension-copy');
+  fs.cpSync(path.join(ROOT, 'extension'), ext, { recursive: true });
+  const manifest = JSON.parse(fs.readFileSync(path.join(ext, 'manifest.json'), 'utf8'));
+  delete manifest.key;
+  fs.writeFileSync(path.join(ext, 'manifest.json'), JSON.stringify(manifest));
   context = await chromium.launchPersistentContext(userDir, {
     // Playwright's Chromium in the new headless mode, which runs extensions. On
     // Windows it may not start ("side-by-side configuration is incorrect"), so
