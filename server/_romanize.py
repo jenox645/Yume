@@ -381,7 +381,9 @@ _KO_FINALS = [
 
 # Initial (choseong) indexes
 _G, _N, _D, _R, _M, _S, _SS, _O, _J, _CH, _K, _T, _P, _H = 0, 2, 3, 5, 6, 9, 10, 11, 12, 14, 15, 16, 17, 18
-_VOWEL_I = 20
+_VOWEL_I, _VOWEL_YEO = 20, 6
+_KO_BALB = [7, 0, 11]  # 밟: its ㄼ is said ㅂ before a consonant (밟다 bapda, 밟는 bamneun; 넓다 is neolda)
+_KO_IP = [11, 20, 26]  # 잎 after a final takes an ㄴ: 꽃잎 kkonnip, 깻잎 kkaennip, 솔잎 sollip
 # Final (jongseong) index → the initial it becomes before a vowel (liaison)
 _KO_LIAISON = {1: 0, 2: 1, 4: 2, 7: 3, 8: 5, 16: 6, 17: 7, 19: 9, 20: 10, 22: 12, 23: 14, 24: 15, 25: 16, 26: 17}
 # Double finals: (stays, moves)
@@ -410,16 +412,15 @@ def _ko_liaison(f, v):
     return f, i
 
 
-def _ko_aspirate(f):
+def _ko_aspirate(f, v):
     """ㄱㄷㅂㅈ + ㅎ → aspirated: 축하 chuka, 못해 motae; None when f does not change."""
+    if f in (7, 25) and v in (_VOWEL_I, _VOWEL_YEO):  # ㄷ/ㅌ + 히 palatalized: 굳히다 guchida, 닫혀 dachyeo
+        return 0, _CH
     for finals, new in (({1, 2, 24}, _K), ({7, 19, 20, 25}, _T), ({17, 26}, _P), ({22, 23}, _CH)):
         if f in finals:
             return 0, new
-    if f == 9:  # ㄺ: 밝히다 balkida
-        return 8, _K
-    if f == 11:  # ㄼ
-        return 8, _P
-    return None
+    # ㄺ: 밝히다 balkida; ㄼ: 넓히다 neolpida; ㄵ: 앉히다 anchida
+    return {9: (8, _K), 11: (8, _P), 5: (4, _CH)}.get(f)
 
 
 def _ko_nasalize(f, i):
@@ -447,15 +448,32 @@ def _ko_assimilate(f, i, v):
     if i == _O and f not in (0, 21):
         return _ko_liaison(f, v)
     if i == _H:
-        return _ko_aspirate(f) or (f, i)
-    if f in _KO_H_FINAL:  # a final ㅎ (ㄶ ㅀ): 좋다 jota, 좋습니다 josseumnida, 놓는 nonneun
-        if i in _KO_ASPIRATE:
-            return _KO_H_FINAL[f], _KO_ASPIRATE[i]
-        if i == _S:
-            return _KO_H_FINAL[f], _SS
-        if i == _N:
-            f = 4 if f in (27, 6) else 8  # ㅀ falls through to ㄹ + ㄴ
+        return _ko_aspirate(f, v) or (f, i)
+    if f == 9 and i == _G:  # ㄺ before ㄱ is ㄹ: 읽고 ilgo, 맑게 malge
+        return 8, i
+    if f in _KO_H_FINAL:
+        return _ko_h_final(f, i)
     return _ko_nasalize(f, i) or (f, i)
+
+
+def _ko_h_final(f, i):
+    """A final ㅎ (ㄶ ㅀ) before a consonant: 좋다 jota, 좋습니다 josseumnida, 놓는 nonneun."""
+    if i in _KO_ASPIRATE:
+        return _KO_H_FINAL[f], _KO_ASPIRATE[i]
+    if i == _S:
+        return _KO_H_FINAL[f], _SS
+    if i == _N:
+        f = 4 if f in (27, 6) else 8  # ㅀ falls through to ㄹ + ㄴ
+    return _ko_nasalize(f, i) or (f, i)
+
+
+def _ko_word_exceptions(items):
+    """Syllables whose sound the general rules get wrong (in place): 밟 and 잎."""
+    for a, b in zip(items, [*items[1:], " "]):
+        if a == _KO_BALB and not (isinstance(b, list) and b[0] == _O):
+            a[2] = 17
+        elif b == _KO_IP and isinstance(a, list) and a[2]:
+            b[0] = _N
 
 
 def romanize_korean(text):
@@ -464,6 +482,7 @@ def romanize_korean(text):
     for ch in text:
         code = ord(ch) - 0xAC00
         items.append([code // 588, (code % 588) // 28, code % 28] if 0 <= code <= 0xD7A3 - 0xAC00 else ch)
+    _ko_word_exceptions(items)
     # Sound changes within a word (between adjacent syllables)
     for a, b in zip(items, items[1:]):
         if isinstance(a, list) and isinstance(b, list):
@@ -495,16 +514,23 @@ _RU_VOWELS = set("аеёиоуыэюяъь")
 def romanize_russian(text):
     out = []
     prev = ""
-    for ch in text:
+    for ch, nxt in zip(text, [*text[1:], ""]):
         low = ch.lower()
         if low in _RU:
             # BGN/PCGN: е is "ye" word-initially and after a vowel or ъ/ь, else "e"
             r = "ye" if low == "е" and (not prev.isalpha() or prev.lower() in _RU_VOWELS) else _RU[low]
-            out.append(r.capitalize() if ch.isupper() else r)
+            out.append(_ru_case(r, ch, prev, nxt))
         else:
             out.append(ch)
         prev = ch
     return "".join(out)
+
+
+def _ru_case(r, ch, prev, nxt):
+    """Ю is "Yu" in "Юля" but "YU" in "ЮЛЯ" (a word in capitals)."""
+    if not ch.isupper():
+        return r
+    return r.upper() if prev.isupper() or nxt.isupper() else r.capitalize()
 
 
 _DETERMINISTIC = {
