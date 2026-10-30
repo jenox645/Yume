@@ -251,16 +251,17 @@ class Job:
         """Whisper forced into the wrong language writes garbage: an English
         news video set to Arabic came out as English lines, "ترجمة نانسي قنقر"
         and loops. Tell the user once two regions clearly sound like another
-        language; stop at the first region that clearly matches."""
+        language; stop at the first region that clearly matches, which also
+        takes the hint back: a song that opens with an English chorus."""
         if self.lang_checks >= LANG_CHECKS or heard is None or prob < LANG_SURE:
             return
         self.lang_checks += 1
         if heard == self.language:
             self.lang_checks = LANG_CHECKS
+            self.notice = ""
             return
         self.lang_misses[heard] += 1
-        if self.lang_misses[heard] >= LANG_MISSES:
-            self.lang_checks = LANG_CHECKS
+        if self.lang_misses[heard] >= LANG_MISSES and not self.notice:
             self.notice = (
                 f"This video sounds like {src_name(heard)}, but Yume is set to {src_name(self.language)}. "
                 f"If the subtitles look wrong, change the source language in the Yume popup."
