@@ -295,9 +295,9 @@ class SubtitleWindow {
     }
     // Say what is being counted: it switches from audio sections to translated
     // lines once Whisper is done, and translations arrive a batch at a time
-    if (!total) {
-      const phase = { downloading: ['Downloading\u2026', 'Downloading audio'],
-        separating: ['Separating\u2026', 'Separating the vocals from the music'] }[status];
+    const phase = { downloading: ['Downloading\u2026', 'Downloading audio'],
+      separating: ['Separating\u2026', 'Separating the vocals from the music'] }[status];
+    if (phase || !total) {  // the stream preview's single region must not read "Listening 1/1" here
       badge.textContent = phase ? phase[0] : '\u2026';
       badge.title = phase ? phase[1] : 'Starting';
     } else if (status === 'translating') {

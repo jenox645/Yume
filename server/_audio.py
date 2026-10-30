@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 from urllib.parse import urlparse
 
 import _state
@@ -285,6 +286,9 @@ def download_audio_segment(url, start_time, duration):
                 shutil.rmtree(tmp_dir, ignore_errors=True)
             return result
 
+        if start_time == 0 and _fetch_stream_start(stream_url, duration, output_path):
+            return output_path
+
         print(f"[Yume] Extracting {duration}s from {start_time}s via ffmpeg...")
 
         ffmpeg_result = subprocess.run(
@@ -320,8 +324,10 @@ def download_audio_segment(url, start_time, duration):
             print(f"[Yume] ffmpeg failed: {err_msg.decode('utf-8', errors='ignore')}")
             with _state.cache_lock:
                 _state.stream_url_cache.pop(url, None)
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-            return None
+            result = _download_audio_segment_fallback(url, start_time, duration, output_path)
+            if result is None:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            return result
 
     except subprocess.TimeoutExpired:
         print("[Yume] Download timed out")
@@ -331,6 +337,57 @@ def download_audio_segment(url, start_time, duration):
         print(f"[Yume] Download error: {e}")
         shutil.rmtree(tmp_dir, ignore_errors=True)
         return None
+
+
+# 200 kbps: more than audio-only YouTube streams use (251 is ~110-160). YouTube
+# answers 403 to a range above roughly 800-950 KB, so 30 s must stay under that.
+_STREAM_BYTES_PER_S = 25_000
+
+
+def _fetch_stream_start(stream_url, duration, output_path):
+    """The first `duration` seconds of a YouTube stream, as yt-dlp's own
+    downloader fetches it: by byte range. ffmpeg asking for the whole URL gets
+    403 Forbidden, and so does yt-dlp's --download-sections, which runs ffmpeg:
+    the preview failed on 3 videos out of 5 and subtitles waited 33-70 s for the
+    full download. False: use another way."""
+    if not (urlparse(stream_url).hostname or "").endswith(".googlevideo.com"):
+        return False
+    size = int(duration * _STREAM_BYTES_PER_S)
+    part = output_path + ".part"
+    try:
+        req = urllib.request.Request(f"{stream_url}&range=0-{size}", headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=20) as resp:  # nosec B310 — https, checked by validate_url
+            data = resp.read(size + 1)
+        with open(part, "wb") as f:
+            f.write(data)
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-loglevel",
+                "error",
+                "-i",
+                part,
+                "-t",
+                str(duration),
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-f",
+                "wav",
+                output_path,
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:  # urllib's errors are OSErrors
+        print(f"[Yume] Could not fetch the start of the stream: {e}")
+        return False
+    finally:
+        if os.path.exists(part):
+            os.remove(part)
+    return result.returncode == 0 and os.path.exists(output_path)
 
 
 def _download_audio_segment_fallback(url, start_time, duration, output_path, _retry=True):

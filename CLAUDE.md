@@ -73,7 +73,7 @@ pre-commit run --all-files
 See `docs/ARCHITECTURE.md`. In short:
 1. `content.js` finds the main video and starts a `SubtitleSession` (`session.js`).
 2. The session `POST /jobs` (url, video id, language, target, romanize, duration, playhead `t`) via `background.js` (authenticated proxy with a path allowlist), then polls `GET /jobs/<id>?since=<rev>&t=<playhead>`.
-3. `_jobs.JobManager`: cache check → full download (+ a stream preview of the first 30 s) → optional vocal isolation (`_separate`, Demucs on CUDA, songs ≤ 15 min) → `_regions.plan_regions` (exclusive ~25 s regions cut at quiet points; no overlap) → one transcription worker (playhead region first) → hallucination filter/blacklist (`hidden` flag; raw text kept) → deterministic romanization → one LLM worker (batches of ≤10 lines).
+3. `_jobs.JobManager`: cache check → full download (+ a stream preview of the first 30 s) → optional vocal isolation (`_separate`, Demucs on CUDA, songs ≤ 10 min) → `_regions.plan_regions` (exclusive ~25 s regions cut at quiet points; no overlap) → one transcription worker (playhead region first) → hallucination filter/blacklist (`hidden` flag; raw text kept) → deterministic romanization → one LLM worker (batches of ≤10 lines).
 4. Every segment change bumps the job `rev`; polls return only changed segments. 404 on poll → the session recreates its job (reloads from cache).
 
 **Translation:** `_translate.Translator` uses structured output (JSON schema with exactly N strings), falling back to `json_object`, then numbered lines; the working mode is remembered per endpoint. The model name is sent for every backend except llama.cpp. One single-line retry for missing lines / CJK leaks.

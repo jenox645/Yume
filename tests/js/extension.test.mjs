@@ -398,6 +398,21 @@ test('the notice stays on screen while lines play (a status is hidden then)', ()
 
 // ── subtitle-window.js ─────────────────────────────────────────────────────
 
+test('the badge says what is happening, not "Listening 1/1", while the preview waits for the rest', () => {
+  const { ctx } = load('subtitle-window.js');
+  const badge = { style: {}, textContent: '', title: '', className: '', classList: { contains: () => false } };
+  const w = Object.assign(Object.create(ctx.SubtitleWindow.prototype), {
+    settings: {}, element: { querySelector: () => badge },
+  });
+  // The stream preview installs one provisional region before the plan exists
+  w.updateChunkProgress({ done: 1, total: 1, status: 'separating' });
+  assert.equal(badge.textContent, 'Separating…');
+  w.updateChunkProgress({ done: 1, total: 1, status: 'downloading' });
+  assert.equal(badge.textContent, 'Downloading…');
+  w.updateChunkProgress({ done: 2, total: 8, status: 'transcribing' });
+  assert.equal(badge.textContent, 'Listening 2/8');
+});
+
 test('window colours keep a 00 channel (pure black was drawn as #08080c)', () => {
   const { ctx } = load('subtitle-window.js');
   assert.equal(ctx.windowStyle({ windowBgColor: '#000000', windowOpacity: 100 }).background, 'rgba(0, 0, 0, 1)');

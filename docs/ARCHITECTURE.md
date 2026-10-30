@@ -52,7 +52,7 @@ from a content script and an MV3 service worker; see "Why server-side" below.)
      straight from the stream so subtitles start before the download ends.
      The request carries the playhead (`t`): a video resumed later skips it.
    - **Separate the vocals** (`_separate`, optional): with PyTorch (CUDA) +
-     demucs installed and `vocal_isolation` on, a video up to 15 min is
+     demucs installed and `vocal_isolation` on, a video up to 10 min is
      downloaded as 44.1 kHz stereo and htdemucs separates the whole song on the
      GPU (~8 s for 4 min); everything below then uses the vocals, and the
      transcripts are cached under `<model>+htdemucs`. Any failure falls back to
