@@ -179,9 +179,10 @@ def read_state() -> dict:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {"state": "stopped"}
-    if not isinstance(data, dict):
+    if not isinstance(data, dict) or "state" not in data:
         return {"state": "stopped"}
-    if not pid_alive(data.get("pid")):
+    pid = data.get("pid")
+    if not (isinstance(pid, int) and pid_alive(pid)):
         if data.get("state") == "error":
             return {"state": "stopped", "last_error": data.get("message", "")}
         return {"state": "stopped"}
