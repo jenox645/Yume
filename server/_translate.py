@@ -162,9 +162,32 @@ def _drop_copied(texts, out):
     return [("" if tr and len(sources[tr.strip().lower()]) > 1 else tr) for tr in out]
 
 
-def parse_numbered(raw, n):
-    """Parse '[1] text' / '1. text' lines; positional fallback when unnumbered."""
-    lines = [ln.strip() for ln in _THINK_RE.sub("", raw or "").splitlines()]
+_JSON_REPLY_RE = re.compile(r'^\s*(?:```\w*\s*)?[{\[]\s*["{\[]')
+_JSON_STRING_RE = re.compile(r'"((?:[^"\\]|\\.)*)"\s*(?=[,\]}]|$)')
+
+
+def _json_like_list(raw, key, n):
+    """The strings of a reply that looks like JSON but may not parse (no closing
+    brace, cut off), or None if it does not look like JSON. The subtitles showed
+    `{"translations": ["[1] It targeted...` line by line."""
+    if not _JSON_REPLY_RE.match(raw):
+        return None
+    try:
+        return parse_json_list(raw, key, n)
+    except (ValueError, json.JSONDecodeError):
+        pass
+    found = [json.loads(f'"{m}"') for m in _JSON_STRING_RE.findall(raw) if m != key]
+    return ([clean_translation(x) or None for x in found[:n]] + [None] * n)[:n]
+
+
+def parse_numbered(raw, n, key="translations"):
+    """Parse '[1] text' / '1. text' lines; positional fallback when unnumbered.
+    A model told to number its lines can still answer in JSON."""
+    raw = _THINK_RE.sub("", raw or "")
+    as_json = _json_like_list(raw, key, n)
+    if as_json is not None:
+        return as_json
+    lines = [ln.strip() for ln in raw.splitlines()]
     lines = [ln for ln in lines if ln and not _MARKER_ONLY_RE.match(ln)]
     out = [None] * n
     hits = 0
@@ -309,8 +332,9 @@ class Translator:
         if known:
             order = order[order.index(known) :]
         last_err = None
-        # A reply in the known format that does not parse (cut off at max_tokens)
-        # is this batch's problem: the format still works, so it stays the one to try
+        # A reply that does not parse (cut off at max_tokens) is this batch's problem:
+        # the backend accepted the format, so nothing lower is remembered for it. The
+        # first batch after a start used to leave the endpoint on "plain" for good
         garbled = False
         for mode in order:
             try:
@@ -318,11 +342,12 @@ class Translator:
                     numbered_hint = (
                         f"\nReply with exactly {n} lines, each starting with its number in brackets: [1] ..."
                     )
+                    # Not the "Return JSON" line: told both, a small model obeys that one
+                    prompt = system.split("\nReturn JSON", 1)[0] + numbered_hint
                     raw = self._chat(
-                        [{"role": "system", "content": system + numbered_hint}, {"role": "user", "content": user}],
-                        max_tokens,
+                        [{"role": "system", "content": prompt}, {"role": "user", "content": user}], max_tokens
                     )
-                    result = parse_numbered(raw, n)
+                    result = parse_numbered(raw, n, key)
                 else:
                     raw = self._chat(
                         [{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -345,7 +370,7 @@ class Translator:
                     raise
             except (ValueError, json.JSONDecodeError) as e:
                 last_err = TranslationError(f"unparseable {mode} output: {e}")
-                garbled = garbled or mode == known
+                garbled = True
         raise last_err or TranslationError("translation failed")
 
     # ── Public API ────────────────────────────────────────────────────────────
