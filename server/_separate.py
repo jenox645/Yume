@@ -22,7 +22,7 @@ import numpy as np
 import _state
 
 MODEL = "htdemucs"
-MAX_S = 15 * 60
+MAX_S = 10 * 60  # 15 min made 8-14 min news wait 19-39 s for vocals it does not need
 MODEL_SUFFIX = "+" + MODEL  # transcripts of separated vocals are cached apart
 
 _lock = threading.Lock()

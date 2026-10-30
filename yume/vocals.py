@@ -139,7 +139,7 @@ def menu(cfg: dict) -> None:
         header("Vocal Isolation")
         info("Separates the singer from the music before Whisper listens (Demucs).")
         info("Measured on a song against its lyrics: 14.0% -> 11.7% of characters wrong.")
-        info(f"{C.DIM}~8 s per 4-minute song on an NVIDIA GPU; videos over 15 min are not separated.{C.RESET}")
+        info(f"{C.DIM}~8 s per 4-minute song on an NVIDIA GPU; videos over 10 min are not separated.{C.RESET}")
         ok, detail = status()
         on = cfg.get("vocal_isolation", True)
         print()
