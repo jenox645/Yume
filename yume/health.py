@@ -249,52 +249,95 @@ def _run_checks(cfg: dict) -> list:
     return results
 
 
-def _fix_advice(name: str, detail: str) -> list[str]:
-    """How to fix one failed check (empty when there is nothing to suggest)."""
+def _tools_menu() -> str:
+    return f"{C.CYAN}python pocket_yume.py{C.RESET} → Tools & Fonts"
+
+
+def _advice_tool(name: str, detail: str) -> list[str]:
+    url = "https://github.com/yt-dlp/yt-dlp/releases" if "yt-dlp" in name else "https://ffmpeg.org/download.html"
+    return [f"Run: {C.CYAN}python pocket_yume.py setup{C.RESET}", f"  Or download manually: {C.CYAN}{url}{C.RESET}"]
+
+
+def _advice_packages(name: str, detail: str) -> list[str]:
+    return [
+        detail,
+        f"  Install: {C.CYAN}{sys.executable} -m pip install -r server/requirements.txt{C.RESET}",
+        "  Or: Main Menu → Tools & Fonts → Python Dependencies",
+    ]
+
+
+def _advice_port(name: str, detail: str) -> list[str]:
+    port = re.search(r"\d+", name)
+    return [
+        detail,
+        f"  Free port {port.group() if port else '?'} or change it in: {C.CYAN}python pocket_yume.py{C.RESET}"
+        " → Settings → Server addresses",
+    ]
+
+
+def _advice_config(name: str, detail: str) -> list[str]:
     from config import CONFIG_FILE
 
-    head = f"{C.BOLD}{name}{C.RESET} -> "
-    run_setup = f"Run: {C.CYAN}python pocket_yume.py setup{C.RESET}"
-    if "yt-dlp" in name or "ffmpeg" in name or "ffprobe" in name:
-        url = "https://github.com/yt-dlp/yt-dlp/releases" if "yt-dlp" in name else "https://ffmpeg.org/download.html"
-        return [head + run_setup, f"  Or download manually: {C.CYAN}{url}{C.RESET}"]
-    if name == "Server packages":
-        return [
-            head + detail,
-            f"  Install: {C.CYAN}{sys.executable} -m pip install -r server/requirements.txt{C.RESET}",
-            "  Or: Main Menu → Tools & Fonts → Python Dependencies",
-        ]
-    if "faster-whisper" in name or "Flask" in name or "llama-cpp" in name:
-        return [head + run_setup]
-    if " port " in name:
-        port = re.search(r"\d+", name)
-        return [
-            head + detail,
-            f"  Free port {port.group() if port else '?'} or change it in: {C.CYAN}python pocket_yume.py{C.RESET}"
-            " → Settings → Server addresses",
-        ]
-    if "end-to-end" in name:
-        return [
-            head + "The Whisper server could not translate through your LLM:",
-            f"  {detail}",
+    return [f"Delete {C.CYAN}{CONFIG_FILE}{C.RESET} and re-run setup."]
+
+
+# (does it apply to this check name?, advice lines; the first follows "<name> -> ")
+_ADVICE = [
+    (lambda n: "yt-dlp" in n or "ffmpeg" in n or "ffprobe" in n, _advice_tool),
+    (lambda n: n == "Server packages", _advice_packages),
+    (
+        lambda n: n == "llama-cpp CUDA support",
+        lambda n, d: [
+            "Translation will run on the CPU (slow).",
+            f"  Install the GPU translation engine: {_tools_menu()} → Translation Engine",
+        ],
+    ),
+    (lambda n: "faster-whisper" in n or "Flask" in n or "llama-cpp" in n,
+     lambda n, d: [f"Run: {C.CYAN}python pocket_yume.py setup{C.RESET}"]),
+    (lambda n: " port " in n, _advice_port),
+    (
+        lambda n: "end-to-end" in n,
+        lambda n, d: [
+            "The Whisper server could not translate through your LLM:",
+            f"  {d}",
             "  Check Settings → Translation settings (backend, address, model name).",
-        ]
-    if "Whisper server responding" in name:
-        return [
-            head + f"Restart: {C.CYAN}python pocket_yume.py launch{C.RESET}",
+        ],
+    ),
+    (
+        lambda n: "Whisper server responding" in n,
+        lambda n, d: [
+            f"Restart: {C.CYAN}python pocket_yume.py launch{C.RESET}",
             f"  Or check logs: {C.CYAN}logs/whisper_server.log{C.RESET}",
-        ]
-    if "Whisper server script" in name:
-        return [head + f"Re-extract Yume or run: {C.CYAN}python pocket_yume.py setup{C.RESET}"]
-    if "Config" in name:
-        return [head + f"Delete {C.CYAN}{CONFIG_FILE}{C.RESET} and re-run setup."]
-    if "RAM" in name:
-        return [
-            head + "Close other applications to free up memory.",
+        ],
+    ),
+    (lambda n: "Whisper server script" in n,
+     lambda n, d: [f"Re-extract Yume or run: {C.CYAN}python pocket_yume.py setup{C.RESET}"]),
+    (
+        lambda n: n == "GGUF model present",
+        lambda n, d: [
+            "llama.cpp needs a translation model (a .gguf file).",
+            f"  Download one: {_tools_menu()} → Download Translation Model",
+            "  Or put a .gguf file in models/translation/",
+        ],
+    ),
+    (lambda n: "Config" in n, _advice_config),
+    (
+        lambda n: "RAM" in n,
+        lambda n, d: [
+            "Close other applications to free up memory.",
             f"  Or use a smaller Whisper model: {C.CYAN}python pocket_yume.py settings{C.RESET}",
-        ]
-    if "Disk" in name:
-        return [head + "Free up disk space. Yume needs ~5-10 GB for models and tools."]
+        ],
+    ),
+    (lambda n: "Disk" in n, lambda n, d: ["Free up disk space. Yume needs ~5-10 GB for models and tools."]),
+]  # fmt: skip
+
+
+def _fix_advice(name: str, detail: str) -> list[str]:
+    """How to fix one failed check (empty when there is nothing to suggest)."""
+    for applies, advice in _ADVICE:
+        if applies(name):
+            first, *rest = advice(name, detail)
+            return [f"{C.BOLD}{name}{C.RESET} -> {first}", *rest]
     return []
 
 
@@ -449,6 +492,8 @@ def _status_models(cfg: dict) -> None:
             bullet(f"{f.name} ({f.stat().st_size / GiB:.2f} GB)")
     else:
         info(f"Translation:  {C.DIM}no GGUF models found{C.RESET}")
+        if cfg.get("translation_backend", "llamacpp") == "llamacpp":
+            info(f"              Download one: {_tools_menu()} → Download Translation Model")
 
 
 def _status_ports(cfg: dict) -> None:

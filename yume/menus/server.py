@@ -29,13 +29,18 @@ _log = logging.getLogger("pocket_yume")
 # ── CLI server interaction ─────────────────────────────────────────────────────
 
 
-def cli_server_stats(cfg: dict) -> None:
-    """Print server stats."""
+def _server_down(h: str, p: int) -> None:
+    error(f"Whisper server not reachable at {h}:{p}")
+    info(f"Start Yume first: {C.CYAN}python pocket_yume.py launch{C.RESET}  (or Start Yume in the extension popup)")
+
+
+def cli_server_stats(cfg: dict) -> bool:
+    """Print server stats; False when the server is not running."""
     h, p = cfg["whisper_host"], cfg["whisper_port"]
     data = _server_get(h, p, "/stats")
     if not data:
-        error(f"Whisper server not reachable at {h}:{p}")
-        return
+        _server_down(h, p)
+        return False
 
     header("Server Statistics")
     gpu = data.get("gpu")
@@ -67,6 +72,7 @@ def cli_server_stats(cfg: dict) -> None:
     info(f"Saved videos:            {data.get('library_size', 0)}")
     info(f"Active jobs:             {data.get('active', 0)} of {data.get('jobs', 0)}")
     info(f"Blacklist size:          {data.get('blacklist_size', 0)} items")
+    return True
 
 
 def cli_blacklist(cfg: dict, args: list) -> None:
@@ -113,7 +119,7 @@ def _model_status(cfg: dict) -> None:
     h, p = cfg["whisper_host"], cfg["whisper_port"]
     data = _server_get(h, p, "/stats")
     if not data:
-        error(f"Server not reachable at {h}:{p}")
+        _server_down(h, p)
         info(f"Config model: {cfg.get('whisper_model', '?')}")
         return
     info(f"Active model: {C.BOLD}{data.get('model', '?')}{C.RESET}")
