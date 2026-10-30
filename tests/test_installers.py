@@ -267,3 +267,44 @@ def test_deno_install_stops_or_goes_on_without_the_token_server(tmp_path):
 def test_a_broken_deno_archive_fails(tmp_path):
     ok, _t, ran, said = deno(tmp_path, broken=True)
     assert not ok and ran == [] and any(s.startswith("Failed:") for s in said)
+
+
+def test_ollama_installed_in_this_session_is_found_off_path(tmp_path, monkeypatch):
+    """The Windows installer puts Ollama on the user PATH of NEW processes only:
+    the setup wizard's next step, `ollama pull`, failed with "Failed (code 127)"."""
+    import yume.utils as utils
+
+    exe = tmp_path / "Programs" / "Ollama" / "ollama.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"")
+    monkeypatch.setattr(utils, "find_tool", lambda name: None)
+    monkeypatch.setattr(utils, "IS_WIN", True)
+    monkeypatch.setattr(utils, "IS_MAC", False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    assert utils.find_ollama() == str(exe)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "elsewhere"))
+    assert utils.find_ollama() is None
+    monkeypatch.setattr(utils, "find_tool", lambda name: "/usr/bin/ollama")
+    assert utils.find_ollama() == "/usr/bin/ollama"  # on PATH: that one
+
+
+def test_pull_runs_the_ollama_that_was_found(monkeypatch):
+    exe = "C:/Users/u/AppData/Local/Programs/Ollama/ollama.exe"
+    ran = []
+    monkeypatch.setattr(inst, "find_ollama", lambda: exe)
+    monkeypatch.setattr("yume.network.check_server", lambda *a: {"up": True})
+    monkeypatch.setattr(inst, "_run", lambda cmd, **kw: ran.append(cmd) or types.SimpleNamespace(returncode=0))
+    for name in ("info", "success"):
+        monkeypatch.setattr(inst, name, lambda *a: None)
+    assert inst.pull_ollama_model("qwen2.5:7b")
+    assert ran == [[exe, "pull", "qwen2.5:7b"]]
+
+
+def test_pull_without_ollama_says_where_to_get_it(monkeypatch):
+    said = []
+    monkeypatch.setattr(inst, "find_ollama", lambda: None)
+    monkeypatch.setattr(inst, "_run", lambda *a, **k: pytest.fail("nothing to run"))
+    monkeypatch.setattr(inst.subprocess, "Popen", lambda *a, **k: pytest.fail("nothing to start"))
+    monkeypatch.setattr(inst, "error", lambda msg: said.append(msg))
+    assert inst.pull_ollama_model("qwen2.5:7b") is False
+    assert any("ollama.com/download" in s for s in said)

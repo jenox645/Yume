@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from yume.constants import BASE_DIR, TOOLS_DIR, GGUF_DIR, EXE
+from yume.constants import BASE_DIR, TOOLS_DIR, GGUF_DIR, EXE, IS_MAC, IS_WIN
 
 _log = logging.getLogger("pocket_yume")
 
@@ -53,6 +53,23 @@ def find_tool(name: str) -> str | None:
         if b2.exists():
             return str(b2)
     return shutil.which(name)
+
+
+def find_ollama() -> str | None:
+    """The ollama program. Also looks where the official installers put it: an
+    install made from this session (the Windows installer) only reaches the
+    PATH of processes started after it, not this one."""
+    found = find_tool("ollama")
+    if found:
+        return found
+    if IS_WIN:
+        local = os.environ.get("LOCALAPPDATA")
+        places = [Path(local) / "Programs" / "Ollama" / "ollama.exe"] if local else []
+    elif IS_MAC:
+        places = [Path("/Applications/Ollama.app/Contents/Resources/ollama"), Path("/usr/local/bin/ollama")]
+    else:
+        places = [Path("/usr/local/bin/ollama"), Path("/usr/bin/ollama")]
+    return next((str(p) for p in places if p.is_file()), None)
 
 
 def _try_import(module_name: str) -> bool:

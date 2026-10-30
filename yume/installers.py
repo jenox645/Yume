@@ -15,7 +15,7 @@ from pathlib import Path
 
 from yume.constants import BASE_DIR, TOOLS_DIR, IS_WIN, IS_MAC, IS_LIN, EXE, HEALTH_PATH_OLLAMA, DOWNLOAD_URLS
 from yume.ui import C, error, info, success, warn
-from yume.utils import _run, find_tool
+from yume.utils import _run, find_ollama, find_tool
 
 _log = logging.getLogger("pocket_yume")
 
@@ -356,7 +356,7 @@ def install_ollama() -> bool:
             info("Waiting for Ollama...")
             for _ in range(90):
                 time.sleep(2)
-                if shutil.which("ollama") or check_server("127.0.0.1", 11434, "/api/tags")["up"]:
+                if find_ollama() or check_server("127.0.0.1", 11434, "/api/tags")["up"]:
                     success("Ollama installed!")
                     inst.unlink(missing_ok=True)
                     return True
@@ -596,7 +596,7 @@ def install_llamacpp_python() -> bool:
     return True
 
 
-def _ensure_ollama_serving() -> bool:
+def _ensure_ollama_serving(ollama: str) -> bool:
     """`ollama pull` talks to the Ollama server: start one (detached) when none answers."""
     from config import DEFAULT_OLLAMA_PORT
     from yume.network import check_server
@@ -605,7 +605,7 @@ def _ensure_ollama_serving() -> bool:
         return True
     info("Starting Ollama...")
     try:
-        subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # nosec B603 B607
+        subprocess.Popen([ollama, "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # nosec B603
     except OSError as e:
         error(f"Could not start Ollama: {e}")
         return False
@@ -614,18 +614,17 @@ def _ensure_ollama_serving() -> bool:
 
 
 def pull_ollama_model(name: str) -> bool:
-    if not _ensure_ollama_serving():
+    ollama = find_ollama()
+    if not ollama:
+        error("Ollama is not installed — get it from https://ollama.com/download, then try again.")
+        return False
+    if not _ensure_ollama_serving(ollama):
         return False
     info(f"Pulling {name} (several GB on first download)...\n")
-    try:
-        # Not captured: the user needs ollama's progress bar for a multi-GB pull
-        p = _run(["ollama", "pull", name], timeout=3600, capture_output=False)
-        if p.returncode == 0:
-            success(f"{name} ready!")
-            return True
-        error(f"Failed (code {p.returncode})")
-    except FileNotFoundError:
-        error("ollama not found")
-    except subprocess.TimeoutExpired:
-        error("Timed out")
+    # Not captured: the user needs ollama's progress bar for a multi-GB pull
+    p = _run([ollama, "pull", name], timeout=3600, capture_output=False)
+    if p.returncode == 0:
+        success(f"{name} ready!")
+        return True
+    error("Timed out" if p.returncode == 124 else f"Failed (code {p.returncode})")
     return False

@@ -231,6 +231,7 @@ def test_pulling_an_ollama_model_starts_ollama_when_it_is_down():
     for up in (False, True):
         with (
             patch.object(yume.network, "check_server", return_value={"up": up}),
+            patch.object(inst, "find_ollama", return_value="ollama"),
             patch.object(inst.subprocess, "Popen") as popen,
             patch.object(inst, "_run", lambda cmd, **kw: ran.append(cmd) or types.SimpleNamespace(returncode=0)),
             patch.object(inst.time, "sleep"),
