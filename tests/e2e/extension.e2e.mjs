@@ -323,6 +323,30 @@ test('the popup clears the blacklist only on a second click', async () => {
   await until('line 3 back', async () => (await overlay()).english === 'Line 3');
 });
 
+test('popup: server lists render as markup, and their text stays text', async () => {
+  const popup = await context.newPage();
+  await popup.goto(`chrome-extension://${new URL(worker.url()).host}/popup.html`);
+  const evil = '<img src=x onerror=alert(1)>"quoted"';
+  await popup.evaluate((text) => new Promise((res) => chrome.runtime.sendMessage(
+    { type: 'API', request: { method: 'POST', path: '/blacklist/add', body: { text } } }, res)), evil);
+  await popup.evaluate(() => {
+    for (const s of ['hallucination', 'stats', 'model']) document.querySelector(`[data-section="${s}"] .section-toggle`).click();
+    document.getElementById('toggleBlacklistView').click();
+  });
+  await popup.waitForSelector('#blacklistContainer .blacklist-remove');
+  assert.equal(await popup.textContent('#blacklistContainer .blacklist-text'), evil);
+  assert.equal(await popup.locator('#blacklistContainer img').count(), 0);
+  await popup.waitForFunction(() => /Whisper:/.test(document.getElementById('statsContent').textContent));
+  await popup.waitForFunction(() => /Backend:/.test(document.getElementById('modelInfo').textContent));
+  await popup.evaluate(() => document.querySelector('#blacklistContainer .blacklist-remove').click());
+  await popup.waitForFunction(() => /No items yet/.test(document.getElementById('blacklistContainer').textContent));
+  await popup.evaluate(() => {
+    for (const s of ['hallucination', 'stats', 'model']) document.querySelector(`[data-section="${s}"] .section-toggle`).click();
+  });
+  await sleep(200);  // the collapsed state is saved for the next popups
+  await popup.close();
+});
+
 test('the wrong-language notice stays on screen while lines play', async () => {
   const before = jobsCreated().length;
   await setSettings({ sourceLanguage: 'ko' });  // the fake Whisper hears Japanese

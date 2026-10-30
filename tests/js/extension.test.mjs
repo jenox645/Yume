@@ -320,7 +320,7 @@ function loadPopup() {
       storage: { local: { get: async () => ({ settings: stored }), set: async (o) => { stored = o.settings; } } },
     },
     document: { addEventListener: noop, getElementById: (id) => control(id), querySelectorAll: () => [] },
-    setInterval: noop, clearInterval: noop, setTimeout, clearTimeout,
+    setInterval: noop, clearInterval: noop, setTimeout, clearTimeout, URL,
   });
   vm.runInContext(readFileSync(new URL('../popup.js', ROOT), 'utf8'), ctx);
   control('glassBlur', { min: '0', max: '40' });
@@ -533,4 +533,42 @@ test('a finished run fading its badge does not hide the next run\'s badge', () =
   timers.shift()();  // the fade's end
   assert.equal(badge.style.display, '');
   assert.equal(badge.className, 'chunk-badge active');
+});
+
+test('popup: add-on store pages are not offered (no browser runs content scripts there)', () => {
+  const { ctx } = loadPopup();
+  for (const url of ['https://chromewebstore.google.com/detail/x', 'https://chrome.google.com/webstore/detail/x',
+    'https://addons.mozilla.org/en-US/firefox/addon/x/', 'https://microsoftedge.microsoft.com/addons/detail/x',
+    'chrome://extensions', 'about:addons', '']) {
+    assert.equal(ctx._isScriptablePage(url), false, url);
+  }
+  for (const url of ['https://www.youtube.com/watch?v=x', 'http://127.0.0.1:8000/', 'https://addons.mozilla.org.example.com/']) {
+    assert.equal(ctx._isScriptablePage(url), true, url);
+  }
+});
+
+test('popup: a site Yume may not run on asks for access instead of "reload the page"', async () => {
+  for (const [granted, expected] of [[false, /access to this site/], [true, /Reload this page/]]) {
+    const { ctx } = loadPopup();
+    const asked = [];
+    ctx.chrome.tabs = {
+      query: async () => [{ id: 1, url: 'https://video.example.com/watch/1' }],
+      sendMessage: async () => { throw new Error('Could not establish connection. Receiving end does not exist.'); },
+    };
+    ctx.chrome.permissions = { contains: async (p) => { asked.push(...p.origins); return granted; } };
+    await ctx.checkSubtitleStatus();
+    assert.deepEqual(asked, ['https://video.example.com/*']);
+    assert.match(ctx.document.getElementById('statusMessage').textContent, expected);
+    assert.equal(ctx.document.getElementById('grantAccess').style.display, granted ? undefined : '');
+  }
+});
+
+test('popup: the shortcut hint names the browser\'s own shortcuts page', () => {
+  for (const [base, page] of [['moz-extension://abc/', /about:addons/], ['chrome-extension://abc/', /chrome:\/\/extensions\/shortcuts/]]) {
+    const { ctx } = loadPopup();
+    ctx.chrome.runtime.getURL = (p) => base + p;
+    ctx.chrome.commands = { getAll: (cb) => cb([{ name: 'toggle-subtitles', shortcut: '' }]) };
+    ctx.showShortcutHint();
+    assert.match(ctx.document.getElementById('shortcutHint').textContent, page);
+  }
 });
