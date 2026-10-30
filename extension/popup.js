@@ -49,6 +49,14 @@ async function serverAction(request, failMessage) {
   return r.ok;
 }
 
+// Markup built here, every dynamic value through _escapeHtml(): parsed into an
+// inert document (no scripts run, no images load) and moved in. Same result as
+// innerHTML, which addons.mozilla.org's linter flags on every dynamic assignment.
+function setHtml(el, html) {
+  const doc = new window.DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
+  el.replaceChildren(...doc.body.childNodes);
+}
+
 // Escapes quotes too — results are also interpolated into attribute values.
 function _escapeHtml(text) {
   return String(text ?? '').replace(/[&<>"']/g, (c) => (
@@ -198,9 +206,12 @@ function showShortcutHint() {
   if (!el || !chrome.commands?.getAll) return;
   chrome.commands.getAll((cmds) => {
     const cmd = (cmds || []).find(c => c.name === 'toggle-subtitles');
+    // Firefox has no chrome://extensions page: its shortcuts live in the add-ons manager
+    const where = chrome.runtime.getURL('').startsWith('moz-extension:')
+      ? 'about:addons (⚙ → Manage Extension Shortcuts)' : 'chrome://extensions/shortcuts';
     el.textContent = cmd?.shortcut
       ? `Keyboard shortcut: ${cmd.shortcut} (works on the video page)`
-      : 'Tip: set a toggle shortcut at chrome://extensions/shortcuts';
+      : `Tip: set a toggle shortcut at ${where}`;
   });
 }
 
@@ -304,8 +315,29 @@ function populateFontDropdowns() {
 // TOGGLE SUBTITLES
 // ============================================================================
 
+// Add-on stores: no browser runs extension content scripts there
+const STORE_PAGES = /^https:\/\/(chromewebstore\.google\.com|chrome\.google\.com\/webstore|microsoftedge\.microsoft\.com\/addons|addons\.mozilla\.org)(\/|$)/;
+
 function _isScriptablePage(url) {
-  return /^https?:/.test(url || '') && !(url || '').startsWith('https://chromewebstore.google.com');
+  return /^https?:/.test(url || '') && !STORE_PAGES.test(url || '');
+}
+
+// May Yume's content script run on this page's site? Firefox before 127 grants
+// site access only on request, and Chrome lets users set it to "on click".
+async function hasSiteAccess(url) {
+  try {
+    return await chrome.permissions.contains({ origins: [`${new URL(url).origin}/*`] });
+  } catch (_e) { return true; }  // can't tell: assume yes (the old message)
+}
+
+// The click must call permissions.request() before any await (user gesture)
+function requestSiteAccess() {
+  const statusMsg = document.getElementById('statusMessage');
+  return chrome.permissions.request({ origins: ['http://*/*', 'https://*/*'] }).then((granted) => {
+    if (granted) $('grantAccess').style.display = 'none';
+    flash(statusMsg, granted ? 'Access granted — reload the page (F5), then press Enable.' : 'Access not granted.',
+      granted ? 'success' : 'error', 0);
+  });
 }
 
 async function toggleSubtitles() {
@@ -352,7 +384,13 @@ async function checkSubtitleStatus() {
   try {
     response = await chrome.tabs.sendMessage(tab.id, { action: 'GET_STATUS' });
   } catch (_e) {
-    // The page was open before Yume was installed or updated: no content script yet
+    // No content script: Yume may not run on this site, or the page was open
+    // before Yume was installed or updated
+    if (!await hasSiteAccess(tab.url)) {
+      flash(statusMsg, 'Yume has no access to this site yet — allow it below.', '', 0);
+      $('grantAccess').style.display = '';
+      return;
+    }
     flash(statusMsg, 'Reload this page (F5) to use Yume on it.', '', 0);
     return;
   }
@@ -561,7 +599,7 @@ async function loadModels() {
   infoEl.innerHTML = '<span class="model-label">Loading...</span>';
   const r = await api({ path: '/translation/models', timeout: 10000 });
   if (!r.ok) {
-    infoEl.innerHTML = `<span class="model-label" style="color:var(--text-dim)">${_escapeHtml(r.data?.error || 'Server not running')}</span>`;
+    setHtml(infoEl, `<span class="model-label" style="color:var(--text-dim)">${_escapeHtml(r.data?.error || 'Server not running')}</span>`);
     return;
   }
   const d = r.data;
@@ -575,7 +613,7 @@ async function loadModels() {
     for (const g of d.local_ggufs) html += `<div style="font-size:12px;color:var(--text-primary);padding:2px 0">• ${_escapeHtml(g.name)} <span style="color:var(--text-dim)">(${_escapeHtml(g.size_mb)} MB)</span></div>`;
   }
   if (d.note) html += `<div style="margin-top:6px;font-size:10px;color:var(--border-gold);font-style:italic">${_escapeHtml(d.note)}</div>`;
-  infoEl.innerHTML = html;
+  setHtml(infoEl, html);
 }
 
 // ============================================================================
@@ -600,12 +638,13 @@ async function fetchDiagnostics() {
     `lines ${p.lines || 0}`, p.translated !== undefined ? `translated ${p.translated}` : '', d.error,
   ].filter(Boolean).join(' | ');
   if (!d.events.length) { logEl.innerHTML = '<div style="color:var(--text-dim);font-style:italic">No entries yet</div>'; return; }
-  logEl.innerHTML = d.events.map((e) => {
+  const rows = d.events.map((e) => {
     const time = new Date(e.t * 1000).toLocaleTimeString('en-GB', { hour12: false });
     return `<div class="diag-entry"><span class="diag-time">${_escapeHtml(time)}</span>` +
       `<span class="diag-badge ${_escapeHtml(e.level)}">${_escapeHtml(e.level)}</span>` +
       `<span class="diag-detail">${_escapeHtml(e.msg)}</span></div>`;
   }).join('');
+  setHtml(logEl, rows);
   logEl.scrollTop = logEl.scrollHeight;
 }
 
@@ -632,11 +671,12 @@ async function loadBlacklist() {
   $('blacklistCount').textContent = r.ok ? `${list.length} item${list.length !== 1 ? 's' : ''}` : 'server offline';
   const container = $('blacklistContainer');
   if (!list.length) { container.innerHTML = '<div class="blacklist-empty">No items yet</div>'; return; }
-  container.innerHTML = list.map((item, i) => `
+  const rows = list.map((item, i) => `
     <div class="blacklist-item">
       <span class="blacklist-text">${_escapeHtml(item)}</span>
       <button class="blacklist-remove" data-index="${i}" title="Remove">×</button>
     </div>`).join('');
+  setHtml(container, rows);
   container.querySelectorAll('.blacklist-remove').forEach(btn => btn.addEventListener('click', async () => {
     await serverAction({ method: 'POST', path: '/blacklist/remove', body: { text: list[+btn.dataset.index] } }, 'Could not remove it');
     refreshTab();
@@ -654,13 +694,13 @@ async function reportHallucination() {
   const text = (response?.subtitle?.original || '').trim();
   if (!text) { flash(statusEl, 'No subtitle currently displayed', 'error', 3000); return; }
   previewEl.style.display = 'block';
-  previewEl.innerHTML = `
+  setHtml(previewEl, `
     <div class="preview-label">Captured:</div>
     <div class="preview-text">${_escapeHtml(text)}</div>
     <div style="display:flex;gap:6px;margin-top:6px">
       <button class="yume-button primary preview-confirm" style="flex:1;padding:4px 8px;font-size:11px">Add to Blacklist</button>
       <button class="yume-button secondary preview-cancel" style="flex:1;padding:4px 8px;font-size:11px">Cancel</button>
-    </div>`;
+    </div>`);
   previewEl.querySelector('.preview-confirm').addEventListener('click', async () => {
     previewEl.style.display = 'none';
     const r = await api({ method: 'POST', path: '/blacklist/add', body: { text } });
@@ -714,7 +754,7 @@ async function fetchStats() {
   html += `Audio processed: <b>${n(Math.round(s.total_audio_seconds))}s</b> &nbsp;|&nbsp; Lines translated: ${n(s.lines_translated)}<br>`;
   html += `Hallucinations blocked: <b>${n(s.hallucinations_filtered)}</b> &nbsp;|&nbsp; Blacklist: ${n(s.blacklist_size)}<br>`;
   html += `Uptime: ${_escapeHtml(s.uptime_human)} &nbsp;|&nbsp; Saved videos: ${n(s.library_size)} &nbsp;|&nbsp; Active jobs: ${n(s.active)}`;
-  el.innerHTML = html;
+  setHtml(el, html);
 
   const isCustomPath = /[/\\]/.test(s.model || '');
   $('currentWhisperModel').textContent = s.model_display_name || (isCustomPath ? s.model.split(/[/\\]/).pop() : s.model);
@@ -779,14 +819,14 @@ async function exportSubtitles(format) {
 async function loadHistory() {
   const listEl = $('historyList');
   const r = await api({ path: '/library' });
-  if (!r.ok) { listEl.innerHTML = `<div class="blacklist-empty">${_escapeHtml(r.data?.error || 'Server offline')}</div>`; return; }
+  if (!r.ok) { setHtml(listEl, `<div class="blacklist-empty">${_escapeHtml(r.data?.error || 'Server offline')}</div>`); return; }
   const entries = r.data.videos || [];
   if (!entries.length) {
     listEl.innerHTML = '<div class="blacklist-empty">No saved videos yet — transcribed videos appear here.</div>';
     return;
   }
   const { settings = {} } = await chrome.storage.local.get(['settings']);
-  listEl.innerHTML = entries.map((e, i) => {
+  const rows = entries.map((e, i) => {
     const date = e.last_used ? new Date(e.last_used * 1000).toLocaleDateString() : '';
     const label = (e.title || e.video_key).slice(0, 60);
     const pct = e.regions_total ? Math.round((e.regions_done / e.regions_total) * 100) : 0;
@@ -799,6 +839,7 @@ async function loadHistory() {
         <button class="blacklist-remove hist-del" data-i="${i}" title="Remove">×</button>
       </div>`;
   }).join('');
+  setHtml(listEl, rows);
   listEl.querySelectorAll('.hist-srt').forEach(btn => btn.addEventListener('click', async () => {
     const e = entries[+btn.dataset.i];
     const target = settings.showEnglish === false ? '' : (settings.targetLanguage || 'English');
@@ -830,6 +871,7 @@ function setupEventListeners() {
   });
 
   on('toggleSubtitles', 'click', toggleSubtitles);
+  on('grantAccess', 'click', requestSiteAccess);
   on('refreshStatus', 'click', checkServers);
   on('serviceStart', 'click', () => serviceCommand('start'));
   on('serviceStop', 'click', () => serviceCommand('stop'));
