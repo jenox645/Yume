@@ -390,7 +390,8 @@ test('popup: appearance settings restyle the window live', async () => {
   const font = await popup.evaluate(() => [...document.getElementById('translationFont').options].map((o) => o.value).find(Boolean));
   if (font) {
     await setControl(popup, 'translationFont', font, 'change');
-    await until(`the translation in ${font}`, async () => (await style('subtitle-english')).includes(`"${font}"`));
+    // includes the bare name: the browser drops the quotes around a one-word family
+    await until(`the translation in ${font}`, async () => (await style('subtitle-english')).includes(font));
   }
 
   await setControl(popup, 'windowTitle', 'Live Title', 'change');
