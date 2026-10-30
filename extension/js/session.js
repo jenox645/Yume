@@ -160,7 +160,7 @@ class SubtitleSession {
       const waited = Math.round((Date.now() - (started ? startedAt : t0)) / 1000);
       if (st === 'loading') {
         if (waited > (started ? START_WAIT_S : HEALTH_WAIT_S)) throw new Error('Model loading timed out — restart Yume');
-        this._status(`Loading Whisper model... (${waited}s)`, 'loading');
+        this._status(`Loading the speech model... (${waited}s)`, 'loading');
       } else if (r.status !== 0) {
         throw new Error(r.data?.error || `Server error ${r.status}`);
       } else if (!started) {

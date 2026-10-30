@@ -5,6 +5,7 @@ from __future__ import annotations  # Allows int | str type hint syntax
 import json
 import math
 import re
+import os
 import time
 import logging
 from pathlib import Path
@@ -181,8 +182,10 @@ def save_config(cfg: dict) -> None:
             if key in _loaded and value != _loaded[key] and cfg.get(key) == _loaded[key]:
                 cfg[key] = value  # changed elsewhere, untouched here
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+    tmp = CONFIG_FILE.with_name(f"{CONFIG_FILE.name}.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, CONFIG_FILE)  # killed mid-write, the old file is still whole
     _loaded.clear()
     _loaded.update(cfg)
 

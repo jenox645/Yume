@@ -341,8 +341,9 @@ def _fix_advice(name: str, detail: str) -> list[str]:
     return []
 
 
-def health_check(cfg: dict) -> None:
-    """Comprehensive health check — all checks run in parallel for speed."""
+def health_check(cfg: dict) -> bool:
+    """Comprehensive health check — all checks run in parallel for speed.
+    True when every check passed."""
     header("Health Check")
     info(f"{C.DIM}Running checks in parallel...{C.RESET}")
     print()
@@ -379,6 +380,7 @@ def health_check(cfg: dict) -> None:
         title="Performance Estimate",
         style=C.CYAN,
     )
+    return ok == total
 
 
 def _hardware() -> dict:

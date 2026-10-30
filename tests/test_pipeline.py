@@ -1450,6 +1450,7 @@ def test_an_unexpected_translation_error_does_not_stop_the_worker(pipeline):
     [
         ([("en", 0.97), ("en", 0.95)], "sounds like English, but Yume is set to Arabic"),
         ([("ar", 0.99), ("en", 0.97), ("en", 0.97)], ""),  # a region clearly in Arabic settles it
+        ([("en", 0.97), ("en", 0.97), ("ar", 0.97)], ""),  # ...even after the hint: an English chorus first
         ([("en", 0.6), ("en", 0.7), ("en", 0.5)], ""),  # not sure enough
         ([("en", 0.97), ("fr", 0.95), ("en", 0.6), ("ja", 0.9)], ""),  # no language twice in 4 checks
     ],
@@ -1465,7 +1466,7 @@ def test_language_is_checked_while_transcribing_and_shown_in_the_snapshot(pipeli
     with patch.object(_jobs, "detect_language", return_value=("en", 0.97)) as det:
         snap = _run(pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "wrong-lang"}))
     assert "sounds like English, but Yume is set to Japanese" in snap["notice"]
-    assert det.call_count == _jobs.LANG_MISSES  # stops checking once decided
+    assert det.call_count <= _jobs.LANG_CHECKS
     with patch.object(_jobs, "detect_language", return_value=("ja", 0.99)) as det:
         snap = _run(pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "right-lang"}))
     assert snap["notice"] == "" and det.call_count == 1
