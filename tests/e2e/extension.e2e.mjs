@@ -9,7 +9,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
@@ -127,6 +127,60 @@ async function overlay() {
 
 const seek = (t) => page.evaluate((t) => { document.querySelector('video').currentTime = t; }, t);
 const jobsCreated = () => requests.filter((r) => r.req === '/jobs' && r.method === 'POST').map((r) => r.body);
+
+// Every element of the overlay by class: its attributes, own text and (boxes)
+// its border box in page pixels — what the mouse needs to drag it
+async function overlayParts(boxes = false) {
+  const cdp = await context.newCDPSession(page);
+  try {
+    const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true });
+    const parts = {};
+    const walk = (n) => {
+      const a = n.attributes || [];
+      const attrs = {};
+      for (let i = 0; i < a.length; i += 2) attrs[a[i]] = a[i + 1];
+      const text = (n.children || []).filter((c) => c.nodeType === 3).map((c) => c.nodeValue).join('');
+      for (const c of (attrs.class || '').split(' ').filter(Boolean)) parts[c] ??= { nodeId: n.nodeId, attrs, text };
+      for (const c of [...(n.children || []), ...(n.shadowRoots || [])]) walk(c);
+    };
+    walk(root);
+    if (boxes) {
+      for (const p of Object.values(parts)) {
+        try {
+          const q = (await cdp.send('DOM.getBoxModel', { nodeId: p.nodeId })).model.border;
+          p.box = { x: q[0], y: q[1], w: q[2] - q[0], h: q[5] - q[1] };
+        } catch { p.box = null; }  // not rendered (display: none)
+      }
+    }
+    return parts;
+  } finally { await cdp.detach(); }
+}
+
+const extensionId = () => new URL(worker.url()).host;
+
+// The popup in a tab of its own, with the video tab in front again: the
+// popup's "active tab" is then the video page, as when it opens from the toolbar
+async function openPopup() {
+  const popup = await context.newPage();
+  await popup.goto(`chrome-extension://${extensionId()}/popup.html`);
+  await page.bringToFront();
+  return popup;
+}
+
+// Change a popup control the way the user does: new value, then its event
+const setControl = (popup, id, value, event) => popup.evaluate(([id, value, event]) => {
+  const el = document.getElementById(id);
+  if (el.type === 'checkbox') el.checked = value; else el.value = value;
+  el.dispatchEvent(new el.ownerDocument.defaultView.Event(event, { bubbles: true }));
+}, [id, value, event]);
+
+// Expand a collapsed popup section (loads its data)
+const openSection = (popup, name) => popup.evaluate((name) => {
+  const s = document.querySelector(`[data-section="${name}"]`);
+  if (s.classList.contains('collapsed')) s.querySelector('.section-toggle').click();
+}, name);
+
+const clickIn = (popup, selector) => popup.evaluate((sel) => document.querySelector(sel).click(), selector);
 
 before(async () => {
   [serverPort, pagePort] = [await freePort(), await freePort()];
@@ -319,6 +373,32 @@ test('romaji switched off disappears from the line on screen', async () => {
   await setSettings({ showRomaji: true });
 });
 
+// Before the server restart below, which starts from an empty cache
+test('popup: History lists saved videos; SRT downloads one, × removes one', async () => {
+  const popup = await openPopup();
+  await openSection(popup, 'history');
+  const rows = () => popup.evaluate(() => [...document.querySelectorAll('#historyList .blacklist-item .blacklist-text')]
+    .map((el) => el.firstChild.textContent.trim()));
+  await until('the saved videos', async () => (await rows()).includes('Second Song'));
+  assert.ok((await rows()).includes('Test Song【MV】'));
+  const button = (label, cls) => popup.evaluate(([label, cls]) => {
+    const row = [...document.querySelectorAll('#historyList .blacklist-item')]
+      .find((r) => r.querySelector('.blacklist-text').firstChild.textContent.trim() === label);
+    row.querySelector(cls).click();
+  }, [label, cls]);
+
+  const [dl] = await Promise.all([popup.waitForEvent('download'), button('Test Song【MV】', '.hist-srt')]);
+  assert.equal(dl.suggestedFilename(), 'yume-Test_Song【MV】.srt');
+  assert.match(readFileSync(await dl.path(), 'utf8'), /第0行です\r?\nLine 0/);
+
+  const library = () => worker.evaluate(async () => (await globalThis.serverRequest({ path: '/library' })).data.videos.map((v) => v.title));
+  assert.ok((await library()).includes('Second Song'));
+  await button('Second Song', '.hist-del');
+  await until('the row gone', async () => !(await rows()).includes('Second Song'));
+  assert.ok(!(await library()).includes('Second Song'));  // removed on the server, not only in the list
+  await popup.close();
+});
+
 test('a restarted server (new token, jobs gone) is picked up again', async () => {
   server.kill();
   await new Promise((r) => server.once('exit', r));
@@ -327,6 +407,157 @@ test('a restarted server (new token, jobs gone) is picked up again', async () =>
   await until('the job created again', () => jobsCreated().length > before, 30000);
   await seek(29.5);  // line 7
   await until('line 7 from the new server', async () => (await overlay()).english === 'Line 7', 20000);
+});
+
+test('popup: appearance settings restyle the window live', async () => {
+  await seek(29.5);  // line 7
+  await until('line 7', async () => (await overlay()).english === 'Line 7');
+  const popup = await openPopup();
+  await openSection(popup, 'appearance');
+  const style = async (cls) => (await overlayParts())[cls]?.attrs.style || '';
+
+  await setControl(popup, 'windowBgColor', '#ff0000', 'input');
+  await setControl(popup, 'windowOpacity', '50', 'input');
+  await until('a red background at 50%', async () => /rgba\(255, 0, 0, 0\.5\)/.test(await style('subtitle-window')));
+  assert.equal(await popup.textContent('#opacityVal'), '50%');
+
+  await setControl(popup, 'originalColor', '#00ff00', 'input');
+  await setControl(popup, 'originalFontSize', '30', 'change');
+  await until('the original line restyled', async () => {
+    const s = await style('subtitle-original');
+    return /(^|;)\s*color: rgb\(0, 255, 0\)/.test(s) && /font-size: 30px/.test(s);
+  });
+
+  // A font the browser has (the list holds only detected ones; none on a bare Linux CI)
+  const font = await popup.evaluate(() => [...document.getElementById('translationFont').options].map((o) => o.value).find(Boolean));
+  if (font) {
+    await setControl(popup, 'translationFont', font, 'change');
+    // includes the bare name: the browser drops the quotes around a one-word family
+    await until(`the translation in ${font}`, async () => (await style('subtitle-english')).includes(font));
+  }
+
+  await setControl(popup, 'windowTitle', 'Live Title', 'change');
+  await until('the new title', async () => (await overlayParts())['subtitle-title']?.text === 'Live Title');
+
+  await setControl(popup, 'windowShadow', false, 'change');
+  await until('no shadow', async () => /box-shadow: none/.test(await style('subtitle-window')));
+
+  await setControl(popup, 'glassEnabled', true, 'change');
+  assert.equal(await popup.isVisible('#glassControls'), true);
+  await until('the glass blur', async () => /backdrop-filter: blur\(18px\)/.test(await style('subtitle-window')));
+  await setControl(popup, 'glassRadius', '0', 'input');  // a slider: input while dragging, change on release
+  await setControl(popup, 'glassRadius', '0', 'change');
+  await until('square corners', async () => !/border-radius/.test(await style('subtitle-window')));
+  assert.equal(await popup.textContent('#glassRadiusVal'), '0px');
+
+  await popup.close();
+  await setSettings({
+    windowBgColor: '#08080c', windowOpacity: 88, originalColor: '#ffffff', originalFontSize: 19, translationFont: '',
+    windowTitle: 'Yume', windowShadow: true, glassEnabled: false, glassRadius: 20,
+  });
+  await until('the default look back', async () => /rgba\(8, 8, 12, 0\.88\)/.test(await style('subtitle-window')));
+});
+
+test('the window can be dragged, resized, minimized and closed, and reopens where it was', async () => {
+  await page.bringToFront();
+  const parts = () => overlayParts(true);
+  const w0 = (await parts())['subtitle-window'].box;
+  const title = (await parts())['subtitle-title'].box;
+  await page.mouse.move(title.x + 5, title.y + 5);
+  await page.mouse.down();
+  await page.mouse.move(title.x + 105, title.y - 45, { steps: 5 });
+  await page.mouse.up();
+  const w1 = (await parts())['subtitle-window'].box;
+  assert.deepEqual([Math.round(w1.x - w0.x), Math.round(w1.y - w0.y)], [100, -50]);
+
+  const handle = (await parts())['resize-handle'].box;
+  await page.mouse.move(handle.x + handle.w / 2, handle.y + handle.h / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + handle.w / 2 + 80, handle.y + handle.h / 2 + 40, { steps: 5 });
+  await page.mouse.up();
+  const w2 = (await parts())['subtitle-window'].box;
+  assert.deepEqual([Math.round(w2.w - w1.w), Math.round(w2.h - w1.h)], [80, 40]);
+  const saved = await worker.evaluate(async () => (await chrome.storage.local.get('windowPosition')).windowPosition);
+  assert.deepEqual([parseFloat(saved.left), parseFloat(saved.top)], [w1.x, w1.y]);
+
+  const click = async (cls) => { const b = (await parts())[cls].box; await page.mouse.click(b.x + b.w / 2, b.y + b.h / 2); };
+  await click('minimize-btn');
+  let p = await parts();
+  assert.match(p['subtitle-window'].attrs.class, /\bminimized\b/);
+  assert.equal(p['subtitle-content'].box, null);  // only the header is left
+  await click('minimize-btn');
+  p = await parts();
+  assert.doesNotMatch(p['subtitle-window'].attrs.class, /\bminimized\b/);
+  assert.ok(p['subtitle-content'].box);
+
+  await click('close-btn');
+  assert.equal(await page.evaluate(() => !!document.querySelector('yume-subtitles')), false);
+  assert.equal((await toTab({ action: 'GET_STATUS' })).active, false);  // closing the window stops the session
+
+  await toTab({ action: 'TOGGLE_SUBTITLES' });
+  await until('the window again', async () => (await parts())['subtitle-window']?.box);
+  await sleep(500);  // its 0.25 s fade-in slides it up 8 px
+  const w3 = (await parts())['subtitle-window'].box;
+  assert.deepEqual([w3.x, w3.y, w3.w], [w1.x, w1.y, w2.w]);  // where it was left, as wide
+  await seek(33.5);  // line 8
+  await until('line 8 in the reopened window', async () => (await overlay()).english === 'Line 8');
+});
+
+test('the keyboard shortcut toggles the subtitles on the active tab', async () => {
+  await page.bringToFront();
+  await worker.evaluate(() => globalThis.onShortcut('toggle-subtitles'));  // what Alt+Y runs
+  assert.equal((await toTab({ action: 'GET_STATUS' })).active, false);
+  await worker.evaluate(() => globalThis.onShortcut('some-other-command'));  // ignored
+  assert.equal((await toTab({ action: 'GET_STATUS' })).active, false);
+  await worker.evaluate(() => globalThis.onShortcut('toggle-subtitles'));
+  assert.equal((await toTab({ action: 'GET_STATUS' })).active, true);
+  await seek(37.5);  // line 9
+  await until('line 9 after the shortcut', async () => (await overlay()).english === 'Line 9');
+});
+
+test('in fullscreen the window moves into the fullscreen element, and back after', async () => {
+  await page.bringToFront();
+  await page.evaluate(() => {
+    const b = document.createElement('button');
+    b.id = 'fs';
+    b.textContent = 'fullscreen';
+    b.onclick = () => document.body.requestFullscreen();
+    document.body.appendChild(b);
+  });
+  const parent = () => page.evaluate(() => document.querySelector('yume-subtitles')?.parentElement?.tagName);
+  assert.equal(await parent(), 'HTML');
+  await page.click('#fs');  // fullscreen needs a user gesture
+  await until('fullscreen', () => page.evaluate(() => document.fullscreenElement === document.body));
+  await until('the window inside the fullscreen element', async () => (await parent()) === 'BODY');
+  assert.equal((await overlay()).english, 'Line 9');  // still drawn
+  await page.evaluate(() => document.exitFullscreen());
+  await until('the window back on the page', async () => (await parent()) === 'HTML');
+  await page.evaluate(() => document.getElementById('fs').remove());
+});
+
+test('popup: Diagnostics shows the job and its log; Export and Download Log save files', async () => {
+  const popup = await openPopup();
+  await openSection(popup, 'diagnostics');
+  await until('the job status', async () => /^DONE \| regions \d+\/\d+ \| lines \d+/.test(await popup.textContent('#diagStatus')));
+  assert.ok(await popup.locator('#diagLog .diag-entry').count() > 0, 'log entries');
+
+  const save = async (button) => {
+    const [dl] = await Promise.all([popup.waitForEvent('download'), clickIn(popup, button)]);
+    return { name: dl.suggestedFilename(), body: readFileSync(await dl.path(), 'utf8') };
+  };
+  const srt = await save('#exportSrt');
+  assert.equal(srt.name, 'yume-Third_Song.srt');
+  assert.match(srt.body, /^1\r?\n00:00:01,000 --> 00:00:03,500\r?\n/);
+  assert.match(srt.body, /第0行です\r?\nLine 0/);
+  assert.match(await popup.textContent('#exportStatus'), /Exported \d+ subtitles/);
+  const vtt = await save('#exportVtt');
+  assert.match(vtt.body, /^WEBVTT/);
+  const log = await save('#downloadDiag');
+  assert.match(log.name, /^yume-diag-.*\.json$/);
+  const diag = JSON.parse(log.body);
+  assert.equal(diag.status, 'done');
+  assert.equal(diag.videoId, jobsCreated().at(-1).video_id);
+  await popup.close();
 });
 
 test('Disable stops the session', async () => {

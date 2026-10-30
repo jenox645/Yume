@@ -443,7 +443,14 @@ class SubtitleWindow {
   }
   stopDrag() { if (this.isDragging) { this.isDragging = false; this.element.style.cursor = 'default'; this._clampToViewport(); this.savePosition(); } }
 
-  startResize(e) { e.preventDefault(); this.isResizing = true; this.resizeStart = { x: e.clientX, y: e.clientY, width: this.element.offsetWidth, height: this.element.offsetHeight }; }
+  startResize(e) {
+    e.preventDefault();
+    this.isResizing = true;
+    // The CSS size, not offsetWidth/Height: those include the 1px border, so
+    // every resize (even a click on the handle) grew the window by 2px
+    const cs = window.getComputedStyle(this.element);
+    this.resizeStart = { x: e.clientX, y: e.clientY, width: parseFloat(cs.width), height: parseFloat(cs.height) };
+  }
   resize(e) {
     if (!this.isResizing) return; e.preventDefault();
     this.element.style.width  = Math.max(300, this.resizeStart.width  + (e.clientX - this.resizeStart.x)) + 'px';
