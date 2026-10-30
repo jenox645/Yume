@@ -871,6 +871,72 @@ def test_missing_server_requirements_are_reported(tmp_path, monkeypatch):
     assert utils.missing_requirements() == ["no-such-package-yume==1.0"]
 
 
+def test_region_0_waits_for_whisper_on_the_preview_not_for_its_download(pipeline):
+    job = _jobs.Job(("v", "ja", "", "m"), {"language": "ja"})
+    job.status, job.mode, job.audio = "transcribing", "stream", None
+    job.regions, job.region_state = [(0.0, 25.0), (25.0, 50.0)], ["pending", "pending"]
+    with pipeline.jobs.lock:
+        pipeline.jobs.jobs[job.id] = job
+
+    job.preview_started = job.preview_hearing = time.time()
+    assert pipeline.jobs._pick_region() == (job, 1)  # Whisper is on region 0 already
+
+    job.region_state[1] = "pending"
+    job.preview_hearing = 0.0  # a 403, then the slow fallback: still fetching
+    assert pipeline.jobs._pick_region() == (job, 0)
+
+
+def test_a_preview_fetched_after_the_worker_took_region_0_is_not_transcribed(pipeline):
+    job = _jobs.Job(("v", "ja", "", "m"), {"language": "ja"})
+    job.regions, job.region_state = [(0.0, 25.0)], ["running"]
+    job.preview_started = time.time()
+    with pipeline.jobs.lock:
+        pipeline.jobs.jobs[job.id] = job
+    with (
+        patch.object(_audio, "download_audio_segment", return_value="p.wav"),
+        patch.object(_jobs, "transcribe_audio") as heard,
+    ):
+        pipeline.jobs._preview(job)
+    heard.assert_not_called()
+    assert job.preview_started == 0.0
+
+
+def test_vocals_are_separated_after_the_preview_not_during_it(pipeline):
+    job = _jobs.Job(("v", "ja", "", "m+htdemucs"), {"language": "ja", "url": "https://x/a"})
+    job.preview_started = time.time()
+    with pipeline.jobs.lock:
+        pipeline.jobs.jobs[job.id] = job
+    threading.Timer(0.3, lambda: setattr(job, "preview_started", 0.0)).start()
+    seen = []
+    with patch.object(_separate, "read_stereo", side_effect=lambda _p: seen.append(job.preview_started)):
+        assert pipeline.jobs._isolate(job, "a.wav") is None
+    assert seen == [0.0]
+
+
+@pytest.mark.parametrize(
+    ("category", "separated"),
+    [("News & Politics", False), ("Education", False), ("Music", True), ("Entertainment", True), ("", True)],
+)
+def test_videos_filed_as_talk_are_not_separated(pipeline, category, separated):
+    job = _jobs.Job(("v", "ar", "", "m+htdemucs"), {"language": "ar", "url": "https://x/a"})
+    with (
+        patch.object(_audio, "stream_category", return_value=category),
+        patch.object(_separate, "read_stereo", return_value=None) as read,
+    ):
+        assert pipeline.jobs._isolate(job, "a.wav") is None
+    assert read.called is separated
+
+
+def test_stream_url_keeps_the_category(monkeypatch):
+    url = "https://www.youtube.com/watch?v=cat"
+    monkeypatch.setattr(_state, "stream_url_cache", {})
+    reply = types.SimpleNamespace(returncode=0, stdout="https://s/a\nNews & Politics\n", stderr="")
+    with patch.object(_audio.subprocess, "run", return_value=reply):
+        assert _audio.get_stream_url(url) == "https://s/a"
+    assert _audio.stream_category(url) == "News & Politics"
+    assert _audio.stream_category("https://elsewhere") == ""
+
+
 def test_stream_preview_retries_without_unreadable_cookies(monkeypatch):
     calls = []
 

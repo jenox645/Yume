@@ -11,7 +11,7 @@ Optional: needs PyTorch with CUDA and the demucs package (CLI: Tools → Vocal
 isolation). Without them, or on a CPU (~12 s per 25 s of audio), Yume
 transcribes the original mix as before. ~8 s and 0.6 GB VRAM for a 4-minute
 song on an RTX 3060. Videos longer than MAX_S are mostly talks, not songs:
-they are not separated.
+they are not separated, and neither are shorter ones YouTube files as talk.
 """
 
 import threading
@@ -24,6 +24,8 @@ import _state
 MODEL = "htdemucs"
 MAX_S = 15 * 60
 MODEL_SUFFIX = "+" + MODEL  # transcripts of separated vocals are cached apart
+# Not "Entertainment" or "Film & Animation": that is where anime openings are
+SPOKEN_CATEGORIES = {"News & Politics", "Education", "Science & Technology"}
 
 _lock = threading.Lock()
 _model = None

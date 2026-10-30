@@ -189,6 +189,11 @@ def build_auth_args(url):
 # ── Stream URL (single-chunk fallback) ───────────────────────────────────────
 
 
+def stream_category(url):
+    """The site's category for a video whose stream URL is known ("" otherwise)."""
+    return (_state.stream_url_cache.get(url) or {}).get("category", "")
+
+
 def get_stream_url(url):
     """Get the direct audio stream URL, caching to avoid repeated yt-dlp calls."""
     valid, err = validate_url(url)
@@ -215,7 +220,19 @@ def get_stream_url(url):
     for fmt_args in format_attempts:
         try:
             result = subprocess.run(
-                [*ytdlp_cmd(), "--get-url", *fmt_args, "--no-playlist", "--no-exec", *auth_args, "--", url],
+                [
+                    *ytdlp_cmd(),
+                    "--print",
+                    "urls",
+                    "--print",
+                    "%(categories.0)s",
+                    *fmt_args,
+                    "--no-playlist",
+                    "--no-exec",
+                    *auth_args,
+                    "--",
+                    url,
+                ],  # fmt: skip
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -226,7 +243,8 @@ def get_stream_url(url):
             print("[Yume] yt-dlp get-url timed out (30s)")
             return None
         if result.returncode == 0 and result.stdout.strip().startswith("http"):
-            stream_url = result.stdout.strip().split("\n")[0]
+            lines = result.stdout.strip().split("\n")
+            stream_url = lines[0]
             print("[Yume] Stream URL obtained and cached")
             with _state.cache_lock:
                 if len(_state.stream_url_cache) >= _state.STREAM_URL_CACHE_MAX:
@@ -235,7 +253,11 @@ def get_stream_url(url):
                         key=lambda k: _state.stream_url_cache[k].get("timestamp", 0),
                     )
                     _state.stream_url_cache.pop(oldest_key, None)
-                _state.stream_url_cache[url] = {"stream_url": stream_url, "timestamp": time.time()}
+                _state.stream_url_cache[url] = {
+                    "stream_url": stream_url,
+                    "category": lines[-1].strip(),
+                    "timestamp": time.time(),
+                }
             return stream_url
         last_stderr = result.stderr or ""
         if auth_args and _note_cookie_failure(last_stderr):

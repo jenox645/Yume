@@ -46,7 +46,8 @@ ACTIVE_S = 30  # a job polled within this window is being watched
 IDLE_DROP_S = 1800  # jobs idle this long are dropped (cache keeps the work)
 MAX_JOBS = 4  # audio is held in memory (~4 MB/min); bound how many tracks
 HORIZON_REGIONS = 10  # don't transcribe further than ~4-5 min ahead of the playhead
-PREVIEW_GRACE_S = 60  # region 0 waits this long for an in-flight stream preview
+PREVIEW_GRACE_S = 60  # region 0 waits this long for Whisper to finish the stream preview
+PREVIEW_FIRST_S = 10  # vocal separation waits this long for a stream preview in flight
 MAX_TRANSLATE_TRIES = 3
 NEAR_S = 20  # lines starting this soon after the playhead are translated first...
 NEAR_BATCH = 3  # ...in batches this small
@@ -170,6 +171,7 @@ class Job:
         self.regions = []  # [(start, end)]
         self.region_state = []  # pending|running|done|failed
         self.preview_started = 0.0  # stream preview of region 0 in flight since
+        self.preview_hearing = 0.0  # ...and in Whisper since
         self.preview_segments = None
 
         self.segments = {}  # id -> segment dict
@@ -575,6 +577,8 @@ class JobManager:
         # The preview is for a video watched from the start, not one resumed at 40:00
         preview = job.playhead < _regions.FIRST_REGION_S
         if preview and not job.stream_url and not any(r[0] == 0.0 for r in cached):
+            with job.lock:
+                job.preview_started = time.time()
             threading.Thread(target=self._preview, args=(job,), name=f"preview-{job.id[:6]}", daemon=True).start()
 
         if job.stream_url:
@@ -629,6 +633,11 @@ class JobManager:
 
     def _isolate(self, job, path):
         """The song's vocals (16 kHz mono), or None to transcribe the mix."""
+        self._wait_for_preview(job)
+        if _audio.stream_category(job.url) in _separate.SPOKEN_CATEGORIES:
+            with job.lock:
+                job.isolate = False
+            return None
         with job.lock:
             job.status = "separating"
             job.event("Separating the vocals from the music...")
@@ -648,16 +657,26 @@ class JobManager:
             job.event(f"Vocals separated in {time.time() - t0:.0f}s", "ok")
         return vocals
 
+    def _wait_for_preview(self, job):
+        """Whisper and Demucs slow each other down on one GPU: the preview's 30 s
+        took 31.6 s instead of 1-4 s, for a viewer with nothing on screen yet."""
+        deadline = time.time() + PREVIEW_FIRST_S
+        while job.preview_started and time.time() < deadline and self._alive(job):
+            time.sleep(0.1)
+
     def _preview(self, job):
         """Transcribe the first 30 s straight from the stream while the full
         download runs: first subtitles in ~max(download, whisper) instead of
         download + whisper."""
-        with job.lock:
-            job.preview_started = time.time()
         path = None
         try:
             path = _audio.download_audio_segment(job.url, 0, _regions.FIRST_REGION_S)
-            if path and self._alive(job):
+            with job.lock:
+                # After a 403 the fetch can outlast the full download: the worker took region 0
+                hear = path and self._alive(job) and (not job.region_state or job.region_state[0] == "pending")
+                if hear:
+                    job.preview_hearing = time.time()
+            if hear:
                 raw = transcribe_audio(_audio.load_audio(path), job.language, 0.0, is_first_region=True)
                 with job.lock:
                     if job.status == "error":  # the download failed meanwhile (a live stream)
@@ -677,7 +696,7 @@ class JobManager:
         finally:
             _audio.remove_temp(path)
             with job.lock:
-                job.preview_started = 0.0
+                job.preview_started = job.preview_hearing = 0.0
             self._notify()
 
     def _adopt_preview(self, job):
@@ -717,7 +736,7 @@ class JobManager:
                 for idx in order:
                     if job.region_state[idx] != "pending":
                         continue
-                    if idx == 0 and job.preview_started and now - job.preview_started < PREVIEW_GRACE_S:
+                    if idx == 0 and job.preview_hearing and now - job.preview_hearing < PREVIEW_GRACE_S:
                         continue  # the stream preview is producing this region
                     job.region_state[idx] = "running"
                     return job, idx
