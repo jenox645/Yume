@@ -444,6 +444,18 @@ test('popup: exports are named after the video', () => {
   assert.match(ctx.exportName('', 'srt'), /^yume-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.srt$/);  // no title: the date
 });
 
+test('overlay: the minimize button tells screen readers what it does', () => {
+  const { ctx } = load('subtitle-window.js');
+  const btn = { attrs: {}, title: '', setAttribute(k, v) { this.attrs[k] = v; } };
+  const classes = new Set();
+  const classList = { toggle: (c) => (classes.has(c) ? !classes.delete(c) : !!classes.add(c)) };
+  const w = Object.assign(Object.create(ctx.SubtitleWindow.prototype), { element: { classList, querySelector: () => btn } });
+  w.toggleMinimize();
+  assert.deepEqual([classes.has('minimized'), btn.attrs['aria-expanded'], btn.attrs['aria-label']], [true, 'false', 'Restore subtitles']);
+  w.toggleMinimize();
+  assert.deepEqual([classes.has('minimized'), btn.attrs['aria-expanded'], btn.attrs['aria-label']], [false, 'true', 'Minimize subtitles']);
+});
+
 test('popup: a History/blacklist row action that fails says so', async () => {
   const { ctx } = loadPopup();
   const toasts = [];

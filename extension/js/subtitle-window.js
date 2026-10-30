@@ -158,18 +158,20 @@ class SubtitleWindow {
 
     this.element = document.createElement('div');
     this.element.className = 'subtitle-window';
+    this.element.setAttribute('role', 'region');
+    this.element.setAttribute('aria-label', 'Yume subtitles');
 
     this.element.innerHTML = `
       <div class="subtitle-header">
         <div class="subtitle-title">Yume</div>
         <div class="subtitle-controls">
           <div class="chunk-badge" style="display:none" title="Progress"></div>
-          <button class="control-btn minimize-btn" title="Minimize">\u2212</button>
-          <button class="control-btn close-btn" title="Close">\u00d7</button>
+          <button class="control-btn minimize-btn" title="Minimize" aria-label="Minimize subtitles" aria-expanded="true">\u2212</button>
+          <button class="control-btn close-btn" title="Close" aria-label="Close subtitles">\u00d7</button>
         </div>
       </div>
       <div class="subtitle-content">
-        <div class="subtitle-notice" style="display:none"></div>
+        <div class="subtitle-notice" style="display:none" role="status"></div>
         <div class="subtitle-status">Initializing...</div>
         <div class="subtitle-original" style="display:none"></div>
         <div class="subtitle-romaji" style="display:none"></div>
@@ -455,7 +457,15 @@ class SubtitleWindow {
       width: this.element.style.width, height: this.element.style.height
     }});
   }
-  toggleMinimize() { this.element.classList.toggle('minimized'); }
+  toggleMinimize() {
+    const minimized = this.element.classList.toggle('minimized');
+    const btn = this.element.querySelector('.minimize-btn');
+    if (btn) {
+      btn.setAttribute('aria-expanded', String(!minimized));
+      btn.setAttribute('aria-label', minimized ? 'Restore subtitles' : 'Minimize subtitles');
+      btn.title = minimized ? 'Restore' : 'Minimize';
+    }
+  }
   close() {
     if (this._onMouseMove) document.removeEventListener('mousemove', this._onMouseMove);
     if (this._onMouseUp) document.removeEventListener('mouseup', this._onMouseUp);

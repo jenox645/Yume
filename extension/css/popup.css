@@ -15,7 +15,9 @@
   --border-gold-dim: #8b7a3d;
   --text-primary: #e8dcc4;
   --text-secondary: #a39677;
-  --text-dim: #6b6350;
+  /* 4.7:1 on the cards (was #6b6350, 2.7:1: hints and empty states were hard to read) */
+  --text-dim: #958b74;
+  --text-error: #e87070;  /* error text: --accent-red is 3.4:1 as text */
   --accent-blue: #4a90e2;
   --accent-green: #5da271;
   --accent-red: #c74848;
@@ -173,7 +175,7 @@ body {
 }
 
 .status-message.error {
-  color: var(--accent-red);
+  color: var(--text-error);
 }
 
 /* Cards */
@@ -925,4 +927,19 @@ body {
 .blacklist-remove:hover {
   background: rgba(255, 80, 80, 0.3);
   color: #fff;
+}
+
+/* Keyboard focus: visible on every control (the toggles hide their input,
+   the inputs and selects only changed their border colour) */
+.section-toggle:focus-visible,
+.yume-button:focus-visible,
+.yume-button-mini:focus-visible,
+.blacklist-remove:focus-visible,
+.yume-input:focus-visible,
+.yume-select:focus-visible,
+.yume-range:focus-visible,
+.yume-color:focus-visible,
+.yume-toggle input:focus-visible + .toggle-slider {
+  outline: 2px solid var(--border-gold);
+  outline-offset: 2px;
 }

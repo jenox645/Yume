@@ -13,6 +13,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
@@ -131,7 +132,14 @@ before(async () => {
   [serverPort, pagePort] = [await freePort(), await freePort()];
   await Promise.all([startServer(), startPages()]);
   userDir = mkdtempSync(path.join(os.tmpdir(), 'yume-e2e-'));
-  const ext = path.join(ROOT, 'extension');
+  // A copy without the manifest's "key": another extension id, which a native
+  // helper registered on this machine ("autostart on") refuses. With the real
+  // id, the "not running" test below reaches it and starts the real servers.
+  const ext = path.join(userDir, 'extension-copy');
+  fs.cpSync(path.join(ROOT, 'extension'), ext, { recursive: true });
+  const manifest = JSON.parse(fs.readFileSync(path.join(ext, 'manifest.json'), 'utf8'));
+  delete manifest.key;
+  fs.writeFileSync(path.join(ext, 'manifest.json'), JSON.stringify(manifest));
   context = await chromium.launchPersistentContext(userDir, {
     // Playwright's Chromium in the new headless mode, which runs extensions. On
     // Windows it may not start ("side-by-side configuration is incorrect"), so
@@ -208,6 +216,31 @@ test('the popup shows both servers up', async () => {
   assert.equal(await popup.textContent('#whisperInfo'), 'cpu | fake-whisper');
   await popup.waitForFunction(() => document.getElementById('translationStatus').className.includes('connected'));
   assert.equal(await popup.isVisible('#serverHint'), false);
+  await popup.close();
+});
+
+test('popup: every control has a name, and sections open from the keyboard', async () => {
+  const popup = await context.newPage();
+  await popup.goto(`chrome-extension://${new URL(worker.url()).host}/popup.html`);
+  // What a screen reader would announce: aria-label, a <label>, or a button's own text
+  const unnamed = await popup.evaluate(() => [...document.querySelectorAll('input, select, button, [role="button"]')]
+    .filter((el) => !(el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') ||
+      (el.id && document.querySelector(`label[for="${el.id}"]`)) ||
+      ((el.tagName === 'BUTTON' || el.getAttribute('role') === 'button') && /\w/.test(el.textContent))))
+    .map((el) => el.id || el.outerHTML.slice(0, 80)));
+  assert.deepEqual(unnamed, []);
+
+  const toggle = '[data-section="history"] .section-toggle';
+  const state = () => popup.evaluate((sel) => {
+    const t = document.querySelector(sel);
+    return { tabIndex: t.tabIndex, expanded: t.getAttribute('aria-expanded'), open: !t.closest('.yume-section').classList.contains('collapsed') };
+  }, toggle);
+  assert.deepEqual(await state(), { tabIndex: 0, expanded: 'false', open: false });
+  await popup.focus(toggle);
+  await popup.keyboard.press('Enter');
+  assert.deepEqual(await state(), { tabIndex: 0, expanded: 'true', open: true });
+  await popup.keyboard.press(' ');
+  assert.deepEqual(await state(), { tabIndex: 0, expanded: 'false', open: false });
   await popup.close();
 });
 

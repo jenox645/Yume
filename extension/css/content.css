@@ -54,7 +54,7 @@
   font-weight: 500;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.35);
+  color: rgba(255, 255, 255, 0.5);
 }
 
 .subtitle-controls {
@@ -67,7 +67,7 @@
   height: 24px;
   border: none;
   background: transparent;
-  color: rgba(255, 255, 255, 0.3);
+  color: rgba(255, 255, 255, 0.55);  /* 0.3 was 2.5:1, under the 3:1 a control needs */
   border-radius: 5px;
   cursor: pointer;
   font-size: 16px;
@@ -82,6 +82,12 @@
 .control-btn:hover {
   background: rgba(255, 255, 255, 0.08);
   color: rgba(255, 255, 255, 0.7);
+}
+
+.control-btn:focus-visible {
+  outline: 2px solid rgba(160, 180, 255, 0.9);
+  outline-offset: 1px;
+  color: rgba(255, 255, 255, 0.9);
 }
 
 .close-btn:hover {
@@ -141,7 +147,7 @@
 
 .subtitle-status {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.6);  /* 0.4 was 3.6:1 */
   font-style: italic;
   padding: 6px 0;
 }
