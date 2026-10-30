@@ -47,7 +47,12 @@ _CJK_RUN_RE = re.compile("[぀-ヿ㐀-鿿豈-﫿ｦ-ﾟ]+")
 
 _MARKER_ONLY_RE = re.compile(r"^(?:\[?\d+[\].)]+\s*)+$")
 _MARKER_PREFIX_RE = re.compile(r"^(?:\s*\[?\d+[\].)]+\s*)+")
-_NUMBERED_RE = re.compile(r"^\[?(\d+)[\].)]\s*(.+)$")
+# "[1] …", "1. …", "1) …", "1: …", "**1.** …" (not "3:30 …", a time)
+_NUMBERED_RE = re.compile(r"^\**\[?(\d+)(?:[\].)]|:(?=\s))\**\s*(.+)$")
+# The reasoning a thinking model (Qwen3, DeepSeek-R1) writes before its answer
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+# Quotes a model wraps a translation in: (opening, closing)
+_QUOTES = (('"', '"'), ("“", "”"), ("「", "」"), ("『", "』"), ("'", "'"))
 
 BATCH_SIZE = 10
 TIMEOUT_S = 120  # consumer GPUs can take >60 s before the first token of a batch
@@ -90,8 +95,20 @@ def clean_translation(text):
     c = re.sub(r"^translation:\s*", "", c, flags=re.I)
     c = re.sub(r"^line\s*\d+:\s*", "", c, flags=re.I)
     c = re.sub(r"^(Romanization|Romaji|English)\s*[:：]\s*", "", c, flags=re.I)
-    c = re.sub(r"^[\"'「」『』]+|[\"'「」『』]+$", "", c)
-    return c.strip()
+    return _unquote(c.strip())
+
+
+def _unquote(c):
+    """Quotes around the whole translation ("Hello" → Hello), or a lone one at
+    an end. An apostrophe that belongs to the words stays: 'Cause, dreamin',
+    and so does a quote inside the line: 「君の名は」という映画."""
+    for o, e in _QUOTES:
+        marks = sum(c.count(q) for q in {o, e})
+        if marks == 2 and len(c) >= 2 and c[0] == o and c[-1] == e:
+            return _unquote(c[1:-1].strip())
+        if marks == 1 and o != "'" and (c[:1] in (o, e) or c[-1:] in (o, e)):
+            return _unquote(c.strip(o + e).strip())
+    return c
 
 
 def _unshout(translation, source):
@@ -124,6 +141,10 @@ def _is_reading(translation, reading, text=""):
     return a == b or difflib.SequenceMatcher(None, a, b).ratio() > 0.7
 
 
+def _has_words(text):
+    return any(c.isalnum() for c in text)
+
+
 def _is_english(tgt):
     return (tgt or "").strip().lower() in ("english", "en")
 
@@ -143,7 +164,7 @@ def _drop_copied(texts, out):
 
 def parse_numbered(raw, n):
     """Parse '[1] text' / '1. text' lines; positional fallback when unnumbered."""
-    lines = [ln.strip() for ln in (raw or "").splitlines()]
+    lines = [ln.strip() for ln in _THINK_RE.sub("", raw or "").splitlines()]
     lines = [ln for ln in lines if ln and not _MARKER_ONLY_RE.match(ln)]
     out = [None] * n
     hits = 0
@@ -162,20 +183,37 @@ def parse_numbered(raw, n):
 
 
 def parse_json_list(raw, key, n):
-    """Parse {"<key>": [...]} — tolerant of code fences and surrounding text."""
-    text = (raw or "").strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
-    start, end = text.find("{"), text.rfind("}")
-    if start < 0 or end <= start:
-        raise ValueError("no JSON object in response")
-    obj = json.loads(text[start : end + 1])
-    items = obj.get(key)
-    if not isinstance(items, list):
-        raise ValueError(f"missing '{key}' list")
-    out = [clean_translation(str(x)) if x is not None else None for x in items[:n]]
+    """Parse {"<key>": [...]} — tolerant of code fences, a thinking model's
+    <think> block, text after the JSON, another key, a bare list and
+    {"text": …} items (what json_object mode gets from small models)."""
+    items = _json_list(_THINK_RE.sub("", raw or ""), key)
+    out = [_item_text(x) for x in items[:n]]
     out += [None] * (n - len(out))
     return [x or None for x in out]
+
+
+def _json_list(text, key):
+    """The list in a JSON reply: under `key`, the object's only list, or the reply itself."""
+    for opener in "{[":
+        start = text.find(opener)
+        if start < 0:
+            continue
+        try:
+            obj = json.JSONDecoder().raw_decode(text[start:])[0]
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            lists = [v for v in obj.values() if isinstance(v, list)]
+            obj = obj.get(key) if isinstance(obj.get(key), list) else lists[0] if len(lists) == 1 else None
+        if isinstance(obj, list):
+            return obj
+    raise ValueError(f"no '{key}' list in response")
+
+
+def _item_text(x):
+    if isinstance(x, dict):  # {"text": "…"} or {"translation": "…"}
+        x = next((v for v in x.values() if isinstance(v, str)), None)
+    return clean_translation(str(x)) if x is not None else None
 
 
 class Translator:
@@ -271,6 +309,9 @@ class Translator:
         if known:
             order = order[order.index(known) :]
         last_err = None
+        # A reply in the known format that does not parse (cut off at max_tokens)
+        # is this batch's problem: the format still works, so it stays the one to try
+        garbled = False
         for mode in order:
             try:
                 if mode == "plain":
@@ -289,8 +330,9 @@ class Translator:
                         response_format=formats[mode],
                     )
                     result = parse_json_list(raw, key, n)
-                with self._lock:
-                    self._mode[base] = mode
+                if not garbled:
+                    with self._lock:
+                        self._mode[base] = mode
                 return result
             except TranslationError as e:
                 last_err = e
@@ -303,6 +345,7 @@ class Translator:
                     raise
             except (ValueError, json.JSONDecodeError) as e:
                 last_err = TranslationError(f"unparseable {mode} output: {e}")
+                garbled = garbled or mode == known
         raise last_err or TranslationError("translation failed")
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -344,7 +387,9 @@ class Translator:
         # Chinese report, is already readable: sent to the model it came back
         # padded with the neighbouring line's words ("deeds you could do" got
         # the whole previous sentence)
-        keep = [i for i, t in enumerate(texts) if not (_is_english(tgt) and _latin_only(t))]
+        # A line with no words ("…", "♪") has nothing to translate: sent alone it
+        # cost a request and came back as whatever the model made of it
+        keep = [i for i, t in enumerate(texts) if _has_words(t) and not (_is_english(tgt) and _latin_only(t))]
         result = [""] * len(texts)
         if keep:
             done = self._translate_lines(
