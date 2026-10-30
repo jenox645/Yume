@@ -3,6 +3,7 @@
 from __future__ import annotations  # Allows int | str type hint syntax
 
 import json
+import math
 import re
 import time
 import logging
@@ -60,6 +61,69 @@ OBSOLETE_KEYS = ("chunk_duration", "word_timestamps", "pause_threshold", "langua
 # The config as last loaded/saved by this process (see save_config)
 _loaded: dict = {}
 
+# (key, value) pairs already reported as invalid by this process
+_warned: set = set()
+
+_PORT_KEYS = ("whisper_port", "translation_port")
+_HOST_KEYS = ("whisper_host", "translation_host")
+_LOOSE_HOST = re.compile(r"^[A-Za-z0-9._:\[\]-]+$")  # names, IPv4, IPv6
+
+
+def _number(value) -> float | None:
+    """A number, or numeric text ("5001"); None otherwise (true/false are not numbers)."""
+    if isinstance(value, bool):
+        return None
+    try:
+        n = float(value.strip() if isinstance(value, str) else value)
+    except (TypeError, ValueError):
+        return None
+    return n if math.isfinite(n) else None
+
+
+def _valid_port(value) -> int | None:
+    n = _number(value)
+    return int(n) if n is not None and n.is_integer() and 1 <= n <= MAX_PORT else None
+
+
+def _valid_minutes(value) -> float | None:
+    n = _number(value)
+    return None if n is None or n < 0 else int(n) if n.is_integer() else n
+
+
+def _valid_host(value) -> str | None:
+    return value.strip() if isinstance(value, str) and _LOOSE_HOST.match(value.strip()) else None
+
+
+_VALIDATORS = {
+    **dict.fromkeys(_PORT_KEYS, _valid_port),
+    **dict.fromkeys(_HOST_KEYS, _valid_host),
+    "auto_stop_minutes": _valid_minutes,
+}
+
+
+def _valid_value(key: str, value):
+    """The value to use for a key read from the file, or None if it cannot be used."""
+    if key in _VALIDATORS:
+        return _VALIDATORS[key](value)
+    default = DEFAULT_CONFIG[key]
+    return value if type(value) is type(default) else None
+
+
+def _checked(cfg: dict) -> dict:
+    """The config with each hand-edited value of the wrong kind (a port "abc",
+    a host null) replaced by its default, so no command trips over it later."""
+    out, bad = dict(cfg), []
+    for key in DEFAULT_CONFIG:
+        good = _valid_value(key, cfg[key])
+        out[key] = DEFAULT_CONFIG[key] if good is None else good
+        if good is None and (key, repr(cfg[key])) not in _warned:
+            _warned.add((key, repr(cfg[key])))
+            bad.append(f"  !  Config: {key} = {cfg[key]!r} is not valid — using {DEFAULT_CONFIG[key]!r}")
+    if bad:
+        print("\n".join(bad))
+        print(f"     Fix {'it' if len(bad) == 1 else 'them'} in Settings, or in {CONFIG_FILE}")
+    return out
+
 
 def load_config() -> dict:
     """Load config from disk, merged with defaults."""
@@ -74,8 +138,8 @@ def load_config() -> dict:
                 data.pop(key, None)
             cfg = {**DEFAULT_CONFIG, **data}
             _loaded.clear()
-            _loaded.update(cfg)
-            return cfg
+            _loaded.update(cfg)  # as on disk: a fixed value then counts as changed here
+            return _checked(cfg)
         except json.JSONDecodeError as e:
             # Common cause: user manually edited the file with unescaped backslashes
             # (e.g., C:\Users\... instead of C:\\Users\\... in JSON)
@@ -91,7 +155,7 @@ def load_config() -> dict:
                     print("     Auto-recovered by fixing backslash escapes.")
                     print("     Tip: Use forward slashes (/) or double backslashes (\\\\) in paths.\n")
                     save_config({**DEFAULT_CONFIG, **data})  # save the fixed version
-                    return {**DEFAULT_CONFIG, **data}
+                    return _checked({**DEFAULT_CONFIG, **data})
             except Exception:
                 pass
             print("     Using default settings. Your config file was not overwritten.")
