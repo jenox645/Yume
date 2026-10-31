@@ -90,7 +90,7 @@ def _try_import(module_name: str) -> bool:
     try:
         __import__(module_name)
         return True
-    except ImportError:
+    except Exception:  # a broken install raises more than ImportError (llama_cpp: RuntimeError)
         return False
 
 

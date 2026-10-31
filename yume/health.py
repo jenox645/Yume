@@ -13,7 +13,7 @@ from yume.hardware import detect_gpu, detect_ram_gb, disk_free_gb, recommend_whi
 from yume.network import check_server, check_translation_server
 from yume.ports import get_port_process, is_port_free
 from yume.ui import C, bullet, header, info, panel, section, success, table, warn
-from yume.utils import find_gguf_models, find_tool
+from yume.utils import _try_import, find_gguf_models, find_tool
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
@@ -65,6 +65,8 @@ def _chk_pkg(pkg, name):
         return (name, True, "installed")
     except ImportError:
         return (name, False, "not installed")
+    except Exception as e:  # llama_cpp raises RuntimeError when its library will not load
+        return (name, False, f"fails to load: {e}"[:90])
 
 
 def _chk_requirements():
@@ -96,11 +98,9 @@ def _chk_llama_cuda():
 
 def _chk_roma(pkg, desc):
     # Optional lib: always PASS, but the detail must not read like a failure
-    try:
-        __import__(pkg)
+    if _try_import(pkg):
         return (pkg, True, f"installed — {desc}")
-    except ImportError:
-        return (pkg, True, f"optional, not installed — {desc} will use the LLM (slower)")
+    return (pkg, True, f"optional, not installed — {desc} will use the LLM (slower)")
 
 
 def _chk_cutlet():

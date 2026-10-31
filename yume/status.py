@@ -10,7 +10,7 @@ from yume.health import tools_menu_path
 from yume.network import check_server
 from yume.ports import port_owners
 from yume.ui import C, bullet, header, info, section, table, warn
-from yume.utils import find_gguf_models, find_tool
+from yume.utils import _try_import, find_gguf_models, find_tool
 
 
 def _status_hardware() -> None:
@@ -55,13 +55,10 @@ def _status_packages(cfg: dict) -> None:
     # llama-cpp-python only matters when llama.cpp translates without llama-server
     if cfg.get("translation_backend", "llamacpp") == "llamacpp" and not llama_server.server_path():
         packages.append(("llama_cpp", "llama-cpp-python"))
-    rows = []
-    for pkg, display in packages:
-        try:
-            __import__(pkg)
-            rows.append([display, f"{C.GREEN}✓{C.RESET}"])
-        except ImportError:
-            rows.append([display, f"{C.RED}✗  not installed{C.RESET}"])
+    rows = [
+        [display, f"{C.GREEN}✓{C.RESET}" if _try_import(pkg) else f"{C.RED}✗  not installed{C.RESET}"]
+        for pkg, display in packages
+    ]
     table(["Package", "Status"], rows, col_styles=[C.CYAN, C.RESET], title="Python Packages")
 
 

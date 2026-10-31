@@ -221,3 +221,25 @@ def test_reports_run_as_commands_do_not_wait_for_enter(monkeypatch):
         assert menu[label].__closure__[0].cell_contents is command  # the menu waits...
     assert cli.COMMANDS["status"].run is cli._status  # ...the command does not
     assert "pause" in tools._fonts.__code__.co_names
+
+
+def _broken_package(tmp_path, monkeypatch):
+    """What llama_cpp does when its library will not load (a CUDA DLL missing)."""
+    (tmp_path / "broken_pkg_xyz.py").write_text('raise RuntimeError("Failed to load shared library")\n')
+    monkeypatch.syspath_prepend(tmp_path)
+    return "broken_pkg_xyz"
+
+
+def test_a_package_that_fails_to_load_is_a_failed_check_not_a_crash(tmp_path, monkeypatch):
+    pkg = _broken_package(tmp_path, monkeypatch)
+    assert health._chk_pkg(pkg, "Broken") == ("Broken", False, "fails to load: Failed to load shared library")
+    assert health._chk_roma(pkg, "x")[1:] == (True, "optional, not installed — x will use the LLM (slower)")
+
+
+def test_status_survives_a_package_that_fails_to_load(tmp_path, monkeypatch):
+    import yume.status
+    import yume.utils
+
+    pkg = _broken_package(tmp_path, monkeypatch)
+    assert yume.utils._try_import(pkg) is False
+    assert yume.status._try_import is yume.utils._try_import
