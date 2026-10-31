@@ -112,6 +112,17 @@ def _pick_file(repo: str, entries: list[dict], vram_gb: float) -> dict | None:
     return entries[ch] if 0 <= ch < len(entries) else None
 
 
+def _fetch_parts(repo: str, sel: dict) -> bool:
+    parts = sel["parts"]
+    for i, part in enumerate(parts, 1):
+        if len(parts) > 1:
+            info(f"Part {i}/{len(parts)}")
+        if not hf_download(repo, part, sel["sha256"].get(part)):
+            error(f"Download failed: {part}")
+            return False
+    return True
+
+
 def _download_model(cfg: dict, repo: str, sel: dict, vram_gb: float) -> None:
     """Download every part, then make it the translation model."""
     from config import save_config
@@ -124,22 +135,17 @@ def _download_model(cfg: dict, repo: str, sel: dict, vram_gb: float) -> None:
     if _fit(sel["bytes"], vram_gb) == "no":
         warn("Larger than your VRAM — it will run partly on CPU (much slower).")
     print()
-    if not ask_yn(f"Download {sel['name']}?"):
+    if not ask_yn(f"Download {sel['name']}?") or not _fetch_parts(repo, sel):
         return
-    for i, part in enumerate(parts, 1):
-        if len(parts) > 1:
-            info(f"Part {i}/{len(parts)}")
-        if not hf_download(repo, part, sel["sha256"].get(part)):
-            error(f"Download failed: {part}")
-            return
     # llama.cpp loads a split model from its first part
     cfg["gguf_model_path"] = str(GGUF_DIR / parts[0])
-    cfg["translation_model"] = sel["name"]
-    save_config(cfg)
     success(f"Saved to {GGUF_DIR / parts[0]}")
     if cfg["translation_backend"] != "llamacpp" and ask_yn("Switch backend to llama.cpp to use this model?"):
         use_backend(cfg, "llamacpp")
-        save_config(cfg)
+    # Other backends send translation_model with every request: it must stay theirs
+    if cfg["translation_backend"] == "llamacpp":
+        cfg["translation_model"] = sel["name"]
+    save_config(cfg)
 
 
 def browse_hf(cfg: dict) -> None:

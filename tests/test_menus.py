@@ -592,3 +592,11 @@ def test_the_prompt_editor_saves_new_text():
     saved = prompt_menu(prompts._menu_translation_prompt, 0, "Translate {src} to {tgt}.", cfg)
     saved.assert_called_once()
     assert cfg["translation_prompt"] == "Translate {src} to {tgt}."
+
+
+def test_hf_declining_llamacpp_keeps_the_other_backends_model():
+    # That backend gets translation_model as its model name; a .gguf name made every request fail
+    cfg = {"translation_backend": "ollama", "translation_model": "qwen2.5:7b"}
+    browse([0, 1], cfg, yns=[True, False])
+    assert cfg["translation_model"] == "qwen2.5:7b" and cfg["translation_backend"] == "ollama"
+    assert cfg["gguf_model_path"].endswith("qwen-q4_k_m.gguf")
