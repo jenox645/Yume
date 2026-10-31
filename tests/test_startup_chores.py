@@ -156,6 +156,14 @@ def test_with_deno_the_bgutil_server_starts_and_stops_at_exit(monkeypatch, deno_
     assert "Deno:             deno 2.1.4\n" in capsys.readouterr().out
 
 
+def test_a_bgutil_that_timed_out_is_still_stopped_at_exit(monkeypatch, deno_mode):
+    """It may yet come up, so it keeps running; nothing used to stop it when the server exits."""
+    monkeypatch.setattr(_startup.subprocess, "run", lambda cmd, **kw: _reply(0, stdout="deno 2.1.4\n"))
+    monkeypatch.setattr(_bgutil, "start_bgutil_server", lambda: False)
+    _startup.setup_deno_auth(None)
+    assert _bgutil.stop_bgutil_server in deno_mode
+
+
 def test_missing_deno_packages_are_named(monkeypatch, deno_mode, capsys):
     monkeypatch.setattr(_startup.subprocess, "run", lambda cmd, **kw: _reply(0, stdout="deno 2.1.4\n"))
     monkeypatch.setattr(_bgutil, "start_bgutil_server", lambda: True)

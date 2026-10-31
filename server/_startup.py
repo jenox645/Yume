@@ -282,9 +282,8 @@ def setup_deno_auth(args):
     if missing:
         print(f"  WARNING: Deno auth needs {', '.join(missing)} — run: python pocket_yume.py (Tools -> Deno)")
 
-    if _bgutil.start_bgutil_server():
-        atexit.register(_bgutil.stop_bgutil_server)
-    else:
+    atexit.register(_bgutil.stop_bgutil_server)  # after a timeout too: deno is still running
+    if not _bgutil.start_bgutil_server():
         print("  bgutil server:    not running — YouTube downloads will fall back to cookies")
 
 
