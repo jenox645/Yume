@@ -121,6 +121,13 @@ def test_an_external_llm_that_is_down_fails():
     assert not any(r[0] == "GGUF model present" for r in c.rows)
 
 
+def test_a_translation_server_on_another_machine_passes():
+    # Its port is free HERE, which read as "nothing listening" although it answered
+    cfg = {"translation_backend": "custom", "translation_host": "192.168.1.5"}
+    c = Check(cfg=cfg, free_ports={5000}).go()
+    assert c.row("Translation port 5000")[1:] == (True, "in use by the running server")
+
+
 def test_a_missing_tool_fails_with_a_download_link():
     c = Check(tools={"ffmpeg", "ffprobe", "deno"}).go()
     assert c.row("yt-dlp installed")[1:] == (False, "not found")

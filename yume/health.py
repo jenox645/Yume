@@ -117,11 +117,11 @@ def _chk_cutlet():
 def _port_row(label, port, responding, launched_by_yume):
     """A busy port is only a problem when something OTHER than the expected
     server holds it (the old check failed whenever Yume was running)."""
+    if responding:  # first: a server on another machine leaves this port free
+        return (f"{label} port {port}", True, "in use by the running server")
     if is_port_free(port):
         ok = launched_by_yume  # free is fine if Yume will start it; an external LLM should be up
         return (f"{label} port {port}", ok, "free — starts on Launch" if ok else "nothing listening")
-    if responding:
-        return (f"{label} port {port}", True, "in use by the running server")
     pid, name = get_port_process(port)
     return (f"{label} port {port}", False, f"held by {name or 'unknown'} (PID {pid or '?'}), not by the server")
 
