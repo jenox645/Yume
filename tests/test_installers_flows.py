@@ -1,4 +1,4 @@
-"""yume/installers.py: checksums, archive extraction and what each installer does
+"""yume/installers.py and llama_python.py: checksums, archive extraction and what each installer does
 when a step fails. Downloads and subprocesses are faked; tools go to a tmp folder."""
 
 from __future__ import annotations
@@ -16,7 +16,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import yume.network  # noqa: E402
+from yume.utils import safe_extractall  # noqa: E402
 import yume.installers as inst  # noqa: E402
+import yume.llama_python as llama_python  # noqa: E402
 
 
 def done(code=0, stdout="", stderr=""):
@@ -27,7 +29,8 @@ def done(code=0, stdout="", stderr=""):
 def said(monkeypatch):
     lines = []
     for name in ("info", "warn", "error", "success"):
-        monkeypatch.setattr(inst, name, lambda msg="", *a, name=name: lines.append(f"{name}: {msg}"))
+        for mod in (inst, llama_python):
+            monkeypatch.setattr(mod, name, lambda msg="", *a, name=name: lines.append(f"{name}: {msg}"))
     return lines
 
 
@@ -85,13 +88,13 @@ class TestArchives:
         target = tmp_path / "out"
         target.mkdir()
         with zipfile.ZipFile(z) as zf, pytest.raises(ValueError, match="Unsafe path"):
-            inst._safe_extractall(zf, target)
+            safe_extractall(zf, target)
         assert list(target.iterdir()) == [] and not (tmp_path / "evil.txt").exists()
 
     def test_a_safe_zip_is_extracted(self, tmp_path):
         z = self._zip(tmp_path / "a.zip", ["dir/ok.txt"])
         with zipfile.ZipFile(z) as zf:
-            inst._safe_extractall(zf, tmp_path / "out")
+            safe_extractall(zf, tmp_path / "out")
         assert (tmp_path / "out" / "dir" / "ok.txt").read_text() == "data"
 
     def test_ffmpeg_zip_is_flattened_and_nothing_else_is_kept(self, tools, monkeypatch):
@@ -167,7 +170,7 @@ class TestPipHelpers:
     def test_broken_pip_tells_how_to_install_it(self, said, monkeypatch):
         monkeypatch.setattr(inst, "_run", lambda cmd, **k: done(1))
         monkeypatch.setattr(inst, "IS_WIN", False)
-        monkeypatch.setattr(inst, "_detect_package_manager", lambda: "apt")
+        monkeypatch.setattr(inst, "detect_package_manager", lambda: "apt")
         assert inst._check_pip() is False
         assert any("sudo apt install python3-pip" in s for s in said)
 
@@ -179,8 +182,8 @@ class TestPipHelpers:
         assert sum("system Python" in s for s in said) == 1
 
     def test_build_tools_without_a_package_manager(self, said, monkeypatch):
-        monkeypatch.setattr(inst, "_detect_package_manager", lambda: None)
-        assert inst._install_build_tools() is False
+        monkeypatch.setattr(llama_python, "detect_package_manager", lambda: None)
+        assert llama_python._install_build_tools() is False
         assert any("install manually" in s for s in said)
 
     @pytest.mark.parametrize(
@@ -190,30 +193,31 @@ class TestPipHelpers:
     )  # fmt: skip
     def test_build_tools_use_the_machines_package_manager(self, said, monkeypatch, pm, first):
         ran = []
-        monkeypatch.setattr(inst, "_detect_package_manager", lambda: pm)
-        monkeypatch.setattr(inst, "_run", lambda cmd, **k: ran.append(cmd) or done())
-        assert inst._install_build_tools() is True
+        monkeypatch.setattr(llama_python, "detect_package_manager", lambda: pm)
+        monkeypatch.setattr(llama_python, "_run", lambda cmd, **k: ran.append(cmd) or done())
+        assert llama_python._install_build_tools() is True
         assert ran[0][:2] == first and len(ran) == 1
 
     def test_a_refused_system_install_falls_back_to_pip(self, said, monkeypatch):
         ran = []
-        monkeypatch.setattr(inst, "_detect_package_manager", lambda: "apt")
-        monkeypatch.setattr(inst, "_run", lambda cmd, **k: ran.append(cmd) or done(1))
-        assert inst._install_build_tools() is True
+        monkeypatch.setattr(llama_python, "detect_package_manager", lambda: "apt")
+        monkeypatch.setattr(llama_python, "_run", lambda cmd, **k: ran.append(cmd) or done(1))
+        assert llama_python._install_build_tools() is True
         assert ran[1][1:5] == ["-m", "pip", "install", "ninja"]
 
     def test_progress_shows_pips_last_lines_on_failure(self, said, monkeypatch, capsys):
         err = "\n".join(f"line {i}" for i in range(20))
-        monkeypatch.setattr(inst, "_run", lambda cmd, **k: done(1, stderr=err))
-        assert inst._pip_with_progress(["pip"], "Installing x") is False
+        monkeypatch.setattr(llama_python, "_run", lambda cmd, **k: done(1, stderr=err))
+        assert llama_python._pip_with_progress(["pip"], "Installing x") is False
         out = capsys.readouterr().out
         assert "line 19" in out and "line 9" not in out.replace("line 19", "")
         assert any("failed after" in s for s in said)
 
     def test_progress_passes_the_environment_only_when_given(self, said, monkeypatch, capsys):
         seen = []
-        monkeypatch.setattr(inst, "_run", lambda cmd, **k: seen.append(k) or done())
-        assert inst._pip_with_progress(["pip"], "x", env={"A": "1"}) and inst._pip_with_progress(["pip"], "x")
+        monkeypatch.setattr(llama_python, "_run", lambda cmd, **k: seen.append(k) or done())
+        assert llama_python._pip_with_progress(["pip"], "x", env={"A": "1"})
+        assert llama_python._pip_with_progress(["pip"], "x")
         assert seen[0]["env"] == {"A": "1"} and "env" not in seen[1]
 
 
@@ -225,7 +229,7 @@ class TestPythonDeps:
         monkeypatch.setattr(inst, "BASE_DIR", tmp_path)
         monkeypatch.setattr(inst, "_check_pip", lambda: True)
         monkeypatch.setattr(inst, "IS_WIN", win)
-        monkeypatch.setattr(inst, "_has_build_tools", lambda: True)
+        monkeypatch.setattr(inst, "has_build_tools", lambda: True)
         monkeypatch.setattr(inst, "_run", lambda cmd, **k: done(code, stderr=stderr))
         return inst.install_python_deps()
 
@@ -298,18 +302,18 @@ class TestInstallOllama:
 class TestLlamaServerDeps:
     def test_failing_extra_deps_only_warn(self, said, monkeypatch):
         monkeypatch.setattr(inst, "_check_pip", lambda: True)
-        monkeypatch.setattr(inst, "_ensure_build_tools", lambda: True)
-        monkeypatch.setattr(inst, "_install_llama_gpu", lambda gpu: True)
+        monkeypatch.setattr(inst, "ensure_build_tools", lambda: True)
+        monkeypatch.setattr(inst, "install_gpu_build", lambda gpu: True)
         monkeypatch.setattr("yume.hardware.detect_gpu", lambda: {"has_nvidia": True})
         monkeypatch.setattr(inst, "_run", lambda cmd, **k: done(1))
         assert inst.install_llamacpp_python() is True
         assert any("check manually" in s for s in said)
 
     def test_no_build_tools_says_what_to_install(self, said, monkeypatch, capsys):
-        monkeypatch.setattr(inst, "IS_WIN", False)
-        monkeypatch.setattr(inst, "IS_LIN", True)
-        monkeypatch.setattr(inst, "_has_build_tools", lambda: False)
-        monkeypatch.setattr(inst, "_install_build_tools", lambda: False)
-        monkeypatch.setattr(inst, "_detect_package_manager", lambda: "dnf")
-        assert inst._ensure_build_tools() is False
+        monkeypatch.setattr(llama_python, "IS_WIN", False)
+        monkeypatch.setattr(llama_python, "IS_LIN", True)
+        monkeypatch.setattr(llama_python, "has_build_tools", lambda: False)
+        monkeypatch.setattr(llama_python, "_install_build_tools", lambda: False)
+        monkeypatch.setattr(llama_python, "detect_package_manager", lambda: "dnf")
+        assert llama_python.ensure_build_tools() is False
         assert "sudo dnf install ninja-build" in capsys.readouterr().out

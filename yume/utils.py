@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 
 from yume.constants import BASE_DIR, TOOLS_DIR, GGUF_DIR, EXE, IS_MAC, IS_WIN
@@ -41,6 +42,18 @@ def _run(cmd: list, timeout: int = 30, **kw) -> subprocess.CompletedProcess:
         )
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(cmd, returncode=124, stdout="", stderr="Timed out")
+
+
+def safe_extractall(zf: zipfile.ZipFile, target_dir: os.PathLike[str]) -> None:
+    """Extract zip archive with zip-slip path-traversal protection."""
+    target_resolved = Path(target_dir).resolve()
+    for member in zf.namelist():
+        member_resolved = (target_resolved / member).resolve()
+        try:
+            member_resolved.relative_to(target_resolved)
+        except ValueError as exc:
+            raise ValueError(f"Unsafe path in archive member: {member!r}") from exc
+    zf.extractall(target_dir)  # nosec B202 — every member validated above
 
 
 def find_tool(name: str) -> str | None:

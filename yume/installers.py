@@ -2,28 +2,29 @@
 
 from __future__ import annotations
 
-import logging
 import os
 import shutil
 import subprocess
 import sys
 import tarfile
-import threading
 import time
 import zipfile
-from pathlib import Path
 
+from yume import po_token
 from yume.constants import BASE_DIR, TOOLS_DIR, IS_WIN, IS_MAC, IS_LIN, EXE, HEALTH_PATH_OLLAMA, DOWNLOAD_URLS
+from yume.llama_python import (
+    detect_package_manager,
+    ensure_build_tools,
+    has_build_tools,
+    install_cpu_build,
+    install_gpu_build,
+)
 from yume.ui import C, error, info, success, warn
-from yume.utils import _run, find_ollama, find_tool
-
-_log = logging.getLogger("pocket_yume")
+from yume.utils import _run, find_ollama, safe_extractall
 
 UNIX_EXEC_MODE = 0o750
 
 _pip_venv_warned = False
-
-# Download URLs are supplied by pocket_yume at runtime to avoid duplication
 
 # Published checksum files next to "latest" release assets. Verified when
 # available; a mismatch aborts the install. (Same origin as the binary, so this
@@ -61,20 +62,6 @@ def _download_verified(key: str, dest, label: str) -> bool:
     return download_file(url, dest, label, sha256=sha)
 
 
-def _safe_extractall(zf: zipfile.ZipFile, target_dir: "os.PathLike[str]") -> None:
-    """Extract zip archive with zip-slip path-traversal protection."""
-    from pathlib import Path as _Path
-
-    target_resolved = _Path(target_dir).resolve()
-    for member in zf.namelist():
-        member_resolved = (target_resolved / member).resolve()
-        try:
-            member_resolved.relative_to(target_resolved)
-        except ValueError as exc:
-            raise ValueError(f"Unsafe path in archive member: {member!r}") from exc
-    zf.extractall(target_dir)  # nosec B202 — every member validated above
-
-
 # ── Pip helpers ───────────────────────────────────────────────────────────────
 
 
@@ -91,7 +78,7 @@ def _check_pip() -> bool:
             info("Re-install Python from https://python.org and check 'Add to PATH'.")
         else:
             info("Install pip:")
-            pm = _detect_package_manager()
+            pm = detect_package_manager()
             if pm == "apt":
                 info("  sudo apt install python3-pip")
             elif pm == "dnf":
@@ -118,52 +105,6 @@ def _check_pip() -> bool:
                 info("  source yume-env/bin/activate")
         print()
     return True
-
-
-def _detect_package_manager() -> str | None:
-    for cmd, name in [("dnf", "dnf"), ("apt-get", "apt"), ("brew", "brew"), ("pacman", "pacman"), ("zypper", "zypper")]:
-        if shutil.which(cmd):
-            return name
-    return None
-
-
-def _has_build_tools() -> bool:
-    return bool(shutil.which("ninja") or shutil.which("ninja-build")) and bool(shutil.which("cmake"))
-
-
-def _install_build_tools() -> bool:
-    pm = _detect_package_manager()
-    if not pm:
-        warn("No package manager found. Please install manually: ninja cmake gcc (or g++)")
-        return False
-    info(f"Installing build tools via {pm}...")
-    cmds = {
-        "dnf": ["sudo", "dnf", "install", "-y", "ninja-build", "cmake", "gcc-c++", "gcc"],
-        "apt": ["sudo", "apt-get", "install", "-y", "ninja-build", "cmake", "g++", "gcc"],
-        "brew": ["brew", "install", "ninja", "cmake"],
-        "pacman": ["sudo", "pacman", "-S", "--noconfirm", "ninja", "cmake", "gcc"],
-        "zypper": ["sudo", "zypper", "install", "-y", "ninja", "cmake", "gcc-c++"],
-    }
-    cmd = cmds.get(pm)
-    if not cmd:
-        warn(f"Unknown package manager: {pm}")
-        return False
-    try:
-        r = _run(cmd, timeout=300)
-        if r.returncode == 0:
-            success("Build tools installed!")
-            return True
-        warn(f"Package manager returned code {r.returncode}")
-        info("Trying pip install ninja cmake as fallback...")
-        _run([sys.executable, "-m", "pip", "install", "ninja", "cmake", "-q"], timeout=120)
-        return True
-    except Exception as e:
-        warn(f"System install failed: {e}")
-        try:
-            _run([sys.executable, "-m", "pip", "install", "ninja", "cmake", "-q"], timeout=120)
-            return True
-        except Exception:
-            return False
 
 
 # ── Tool installers ────────────────────────────────────────────────────────────
@@ -236,17 +177,14 @@ def install_ffmpeg() -> bool:
     return _ffmpeg_runs()
 
 
-BGUTIL_VERSION = "1.3.1"
-
-
 def install_deno() -> bool:
     """Deno, the YouTube PO token plugin for yt-dlp, and the plugin's token
     server. Only Deno itself is required; the rest warns when it fails."""
     TOOLS_DIR.mkdir(parents=True, exist_ok=True)
     if not _install_deno_exe():
         return False
-    _install_pot_plugin()
-    _setup_bgutil_server()
+    po_token.install_plugin()
+    po_token.setup_server()
     return True
 
 
@@ -256,7 +194,7 @@ def _install_deno_exe() -> bool:
         return False
     try:
         with zipfile.ZipFile(zp) as zf:
-            _safe_extractall(zf, TOOLS_DIR)  # nosec B202 — zip-slip checked inside
+            safe_extractall(zf, TOOLS_DIR)  # nosec B202 — zip-slip checked inside
         zp.unlink(missing_ok=True)
         de = TOOLS_DIR / f"deno{EXE}"
         if de.exists() and not IS_WIN:
@@ -266,77 +204,6 @@ def _install_deno_exe() -> bool:
     except Exception as e:
         error(f"Failed: {e}")
         return False
-
-
-def _install_pot_plugin() -> None:
-    info("Installing YouTube PO token plugin (bgutil-ytdlp-pot-provider) + yt-dlp (pip)...")
-    info(f"{C.DIM}This plugin uses Deno to solve YouTube's bot-detection challenges.{C.RESET}")
-    info(f"{C.DIM}yt-dlp is left unpinned on purpose: YouTube changes break old versions within weeks.{C.RESET}")
-    try:
-        r = _run(
-            [
-                sys.executable, "-m", "pip", "install", "-q", "--no-warn-script-location", "-U",
-                "yt-dlp", f"bgutil-ytdlp-pot-provider=={BGUTIL_VERSION}",
-            ],
-            timeout=180,
-        )  # fmt: skip
-        if r.returncode == 0:
-            success("PO token plugin installed")
-        else:
-            warn("PO token plugin install failed — YouTube may require sign-in")
-    except Exception as e:
-        warn(f"PO token plugin install failed: {e}")
-
-
-def _setup_bgutil_server() -> None:
-    """The plugin's token server (run by Deno), from its release source."""
-    from yume.network import download_file
-
-    info("Setting up bgutil PO token server...")
-    bgutil_dir = TOOLS_DIR / "bgutil-ytdlp-pot-provider"
-    main_ts = bgutil_dir / "server" / "src" / "main.ts"
-    if main_ts.exists():
-        success("bgutil server already set up")
-        return
-    zip_url = f"https://github.com/Brainicism/bgutil-ytdlp-pot-provider/archive/refs/tags/{BGUTIL_VERSION}.zip"
-    zip_path = TOOLS_DIR / "bgutil.zip"
-    if not download_file(zip_url, zip_path, "bgutil server"):
-        warn("bgutil server download failed")
-        return
-    try:
-        with zipfile.ZipFile(zip_path) as zf:
-            _safe_extractall(zf, TOOLS_DIR)  # nosec B202 — zip-slip checked inside
-        zip_path.unlink(missing_ok=True)
-        extracted = TOOLS_DIR / f"bgutil-ytdlp-pot-provider-{BGUTIL_VERSION}"
-        if extracted.exists():
-            if bgutil_dir.exists():
-                shutil.rmtree(bgutil_dir)
-            extracted.rename(bgutil_dir)
-        success("bgutil server extracted")
-    except Exception as e:
-        error(f"Extract failed: {e}")
-        zip_path.unlink(missing_ok=True)
-        return
-    if main_ts.exists():
-        _deno_install_deps(bgutil_dir / "server")
-    else:
-        warn("main.ts not found after extraction")
-
-
-def _deno_install_deps(server_dir: Path) -> None:
-    deno = find_tool("deno") or "deno"
-    info("Installing bgutil server dependencies (deno install)...")
-    try:
-        # The lockfile first; without it if the lockfile no longer resolves
-        r = _run([deno, "install", "--allow-scripts=npm:canvas", "--frozen"], cwd=str(server_dir), timeout=180)
-        if r.returncode != 0:
-            r = _run([deno, "install", "--allow-scripts=npm:canvas"], cwd=str(server_dir), timeout=180)
-        if r.returncode == 0:
-            success("bgutil server dependencies installed")
-        else:
-            warn("deno install failed — server may not start")
-    except Exception as e:
-        warn(f"deno install failed: {e}")
 
 
 def install_ollama() -> bool:
@@ -404,7 +271,7 @@ def install_python_deps() -> bool:
         error(f"{req} is missing — re-extract Yume.")
         return False
 
-    if IS_WIN and not _has_build_tools():
+    if IS_WIN and not has_build_tools():
         warn("C++ build tools not detected.")
         info("If the install fails, you may need Visual Studio Build Tools:")
         info("  https://visualstudio.microsoft.com/visual-cpp-build-tools/")
@@ -435,152 +302,14 @@ def install_python_deps() -> bool:
         return False
 
 
-def _pip_with_progress(cmd: list, label: str, timeout: int = 600, env: dict | None = None) -> bool:
-    """Run a long pip command with an elapsed-time ticker; show pip's last lines on failure."""
-    info(f"{label}...")
-    info(f"{C.DIM}This may take several minutes for large downloads. Please wait.{C.RESET}")
-    t0 = time.time()
-    stop = threading.Event()
-
-    def _ticker():
-        while not stop.is_set():
-            m, s = divmod(int(time.time() - t0), 60)
-            sys.stdout.write(f"\r  {C.CYAN}...{C.RESET} {m}m{s:02d}s elapsed   ")
-            sys.stdout.flush()
-            stop.wait(5)
-
-    threading.Thread(target=_ticker, daemon=True).start()
-    try:
-        r = _run(cmd, timeout=timeout, **({"env": env} if env is not None else {}))
-    except subprocess.TimeoutExpired:
-        error(f"{label} — timed out after {timeout // 60} minutes")
-        return False
-    except Exception as e:
-        error(f"{label} — error: {e}")
-        return False
-    finally:
-        stop.set()
-    m, s = divmod(int(time.time() - t0), 60)
-    sys.stdout.write(f"\r{' ' * 40}\r")
-    sys.stdout.flush()
-    if r.returncode == 0:
-        success(f"{label} — done in {m}m{s:02d}s")
-        return True
-    error(f"{label} — failed after {m}m{s:02d}s")
-    for line in (r.stderr or "").strip().splitlines()[-10:]:
-        print(f"    {C.DIM}{line}{C.RESET}")
-    return False
-
-
-_LLAMA_WHEELS = "https://abetlen.github.io/llama-cpp-python/whl"
-
-
-def _pip_llama(label: str, *args: str, cmake: str | None = None, timeout: int = 600) -> bool:
-    """pip install llama-cpp-python [args]; with `cmake`, built from source with those CMAKE_ARGS."""
-    env = {**os.environ, "CMAKE_ARGS": cmake} if cmake else None
-    cmd = [sys.executable, "-m", "pip", "install", "llama-cpp-python", *args]
-    return _pip_with_progress(cmd, label, timeout=timeout, env=env)
-
-
-def _llama_cuda_works() -> bool:
-    r = _run(
-        [sys.executable, "-c", "from llama_cpp import llama_cpp as l; print(hasattr(l, 'ggml_backend_cuda_reg'))"],
-        timeout=15,
-    )
-    return r.returncode == 0 and r.stdout.strip() == "True"
-
-
-def _ensure_build_tools() -> bool:
-    """Linux/macOS build llama-cpp-python from source: ninja + cmake are needed."""
-    if IS_WIN or _has_build_tools():
-        return True
-    info("Build tools (ninja, cmake) needed to compile llama-cpp-python...")
-    if _install_build_tools():
-        return True
-    error("Cannot install build tools. Please install manually:")
-    if IS_LIN:
-        hint = {"dnf": "sudo dnf install ninja-build cmake gcc-c++", "apt": "sudo apt install ninja-build cmake g++"}
-        print(f"    {hint.get(_detect_package_manager(), 'Install: ninja-build cmake g++ (or gcc-c++)')}")
-    elif IS_MAC:
-        print("    brew install ninja cmake")
-    return False
-
-
-def _install_llama_gpu(gpu: dict) -> bool:
-    """A GPU build of llama-cpp-python; False = fall back to the CPU build."""
-    if gpu["has_nvidia"] and IS_WIN:
-        # pip --extra-index-url silently falls back to PyPI's CPU wheel when the
-        # CUDA index has no wheel for this Python, so check CUDA after installing.
-        # --only-binary: otherwise pip compiles PyPI's source for ~10 minutes
-        # into a CPU-only build before we notice. --force-reinstall replaces one.
-        _pip_llama(
-            "Installing llama-cpp-python (CUDA prebuilt)",
-            "--force-reinstall", "--only-binary=llama-cpp-python", "--extra-index-url", f"{_LLAMA_WHEELS}/cu124",
-            "-q", "--no-warn-script-location",
-        )  # fmt: skip
-        if _llama_cuda_works():
-            return True
-        pyver = f"{sys.version_info.major}.{sys.version_info.minor}"
-        warn(f"Prebuilt CUDA wheel not available for Python {pyver} — trying source build.")
-        info(f"{C.DIM}Requires CUDA Toolkit (nvidia.com) + Visual Studio C++ tools.{C.RESET}")
-        ok = _pip_llama(
-            f"Building llama-cpp-python (CUDA from source, Python {pyver})",
-            "--force-reinstall", "--no-cache-dir", "-q", cmake="-DGGML_CUDA=on", timeout=900,
-        )  # fmt: skip
-        if not ok:
-            warn("CUDA install failed, falling back to CPU version...")
-        return ok
-    if gpu["has_nvidia"]:
-        ok = _pip_llama(
-            "Building llama-cpp-python (CUDA from source)",
-            "--force-reinstall",
-            "--no-cache-dir",
-            "-q",
-            cmake="-DGGML_CUDA=on",
-        )
-        if not ok:
-            warn("CUDA build failed, trying CPU...")
-        return ok
-    if not gpu["has_amd"]:
-        return False
-    info("AMD Radeon GPU detected. Installing llama-cpp-python with ROCm...")
-    if IS_WIN:
-        warn("ROCm is only supported on Linux for llama-cpp-python.")
-        info("Falling back to CPU mode on Windows (AMD DirectML not yet supported).")
-        return False
-    ok = _pip_llama(
-        "Building llama-cpp-python (ROCm/HIP from source)",
-        "--force-reinstall",
-        "--no-cache-dir",
-        cmake="-DGGML_HIP=on",
-        timeout=900,
-    )
-    if not ok:
-        warn("ROCm build failed. Check that ROCm is installed.")
-        info("Falling back to CPU...")
-    return ok
-
-
-def _install_llama_cpu() -> bool:
-    ok = _pip_llama(
-        "Installing llama-cpp-python (prebuilt CPU)",
-        "--only-binary=llama-cpp-python", "--extra-index-url", f"{_LLAMA_WHEELS}/cpu", "-q", "--no-warn-script-location",
-        timeout=300,
-    )  # fmt: skip
-    if ok:
-        return True
-    warn("Prebuilt wheel not available, building from source...")
-    return _pip_llama("Building llama-cpp-python (CPU from source)", "--no-warn-script-location", timeout=900)
-
-
 def install_llamacpp_python() -> bool:
     """Install llama-cpp-python with GPU support if NVIDIA detected."""
     from yume.hardware import detect_gpu
     from yume.servers import LLAMA_SERVER_DEPS
 
-    if not _check_pip() or not _ensure_build_tools():
+    if not _check_pip() or not ensure_build_tools():
         return False
-    if not (_install_llama_gpu(detect_gpu()) or _install_llama_cpu()):
+    if not (install_gpu_build(detect_gpu()) or install_cpu_build()):
         return False
     info("Installing server dependencies (uvicorn, fastapi)...")
     try:

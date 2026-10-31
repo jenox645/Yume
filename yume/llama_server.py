@@ -23,7 +23,7 @@ import zipfile
 from pathlib import Path
 
 from yume.constants import TOOLS_DIR
-from yume.utils import _run
+from yume.utils import _run, safe_extractall
 
 _log = logging.getLogger("pocket_yume")
 
@@ -122,10 +122,8 @@ def _extract(archive: Path, dest: Path) -> None:
         return target == root or root in target.parents
 
     if archive.suffix == ".zip":
-        from yume.installers import _safe_extractall
-
         with zipfile.ZipFile(archive) as zf:
-            _safe_extractall(zf, dest)  # nosec B202 — zip-slip checked inside
+            safe_extractall(zf, dest)  # nosec B202 — zip-slip checked inside
     else:
         with tarfile.open(archive, "r:gz") as tf:
             members = [m for m in tf.getmembers() if (m.isfile() or m.isdir() or m.issym()) and inside(m.name)]
