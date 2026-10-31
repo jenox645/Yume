@@ -117,63 +117,91 @@ def with_advice(message):
     return f"{message} — {hint}" if hint else message
 
 
+_CPU_SETTING = "       python pocket_yume.py settings   → Whisper settings → device 'cpu'"
+_CPU_FLAGS = "    3. Or restart with: --device cpu --compute-type int8"
+_NO_VRAM = [
+    "  CAUSE: Your GPU doesn't have enough VRAM for this model.",
+    "",
+    "  SOLUTIONS (pick one):",
+    "    1. Use a smaller model:",
+    "       python pocket_yume.py settings   → Whisper settings → a smaller model ('small', 'base')",
+    "    2. Use CPU instead (slower but works):",
+    _CPU_SETTING,
+    _CPU_FLAGS,
+]
+# (any of these in the error, what to print): the console's longer version of _ADVICE.
+# {missing} is the quoted name in the error.
+_LOAD_HELP = [
+    (("out of memory", "oom"), _NO_VRAM),
+    (
+        ("cublas", "cudnn", "cudart"),
+        [
+            "  CAUSE: CUDA libraries are missing or incomplete.",
+            "",
+            "  SOLUTIONS (pick one):",
+            "    1. Install CUDA Toolkit: https://developer.nvidia.com/cuda-toolkit",
+            "    2. Or switch to CPU mode (no CUDA needed):",
+            _CPU_SETTING,
+            _CPU_FLAGS,
+        ],
+    ),
+    (
+        ("no module", "modulenotfound"),
+        [
+            "  CAUSE: Missing Python package: {missing}",
+            "",
+            "  SOLUTION: Run the setup wizard to install dependencies:",
+            "    python pocket_yume.py setup",
+            "    Or manually: pip install {missing}",
+        ],
+    ),
+    (
+        (_state.ERR_NO_SUCH_FILE, "filenotfound"),
+        [
+            "  CAUSE: Model files not found on disk.",
+            "",
+            "  SOLUTIONS:",
+            "    1. The model will auto-download on first run (needs internet)",
+            "    2. Check your internet connection and try again",
+            "    3. Or choose a different model: python pocket_yume.py settings",
+        ],
+    ),
+    (
+        ("permission", "access"),
+        [
+            "  CAUSE: Permission denied — can't access model files or GPU.",
+            "",
+            "  SOLUTIONS:",
+            "    1. Try running as Administrator (Windows) or with sudo (Linux/macOS)",
+            "    2. Check that the model directory is not read-only",
+        ],
+    ),
+]
+_GENERAL_HELP = [
+    "  GENERAL SOLUTIONS:",
+    "    1. Switch to CPU:  --device cpu --compute-type int8",
+    "    2. Use smaller model:  --model small  or  --model tiny",
+    "    3. Re-run setup:  python pocket_yume.py setup",
+    "    4. Check logs:  logs/whisper_server.log",
+]
+
+
+def _load_help(err_msg):
+    if "cuda" in err_msg and "memory" in err_msg:
+        return _NO_VRAM
+    return next((lines for words, lines in _LOAD_HELP if any(w in err_msg for w in words)), _GENERAL_HELP)
+
+
 def print_model_load_error(e):
-    err_msg = str(e).lower()
+    message = str(e)
+    missing = message.split("'")[1] if "'" in message else "unknown"
     print("")
     print("=" * 70)
     print(f"  FAILED TO LOAD MODEL: {e}")
     print("=" * 70)
-
-    if "out of memory" in err_msg or "oom" in err_msg or ("cuda" in err_msg and "memory" in err_msg):
-        print("")
-        print("  CAUSE: Your GPU doesn't have enough VRAM for this model.")
-        print("")
-        print("  SOLUTIONS (pick one):")
-        print("    1. Use a smaller model:")
-        print("       python pocket_yume.py settings   → Whisper settings → a smaller model ('small', 'base')")
-        print("    2. Use CPU instead (slower but works):")
-        print("       python pocket_yume.py settings   → Whisper settings → device 'cpu'")
-        print("    3. Or restart with: --device cpu --compute-type int8")
-    elif "cublas" in err_msg or "cudnn" in err_msg or "cudart" in err_msg:
-        print("")
-        print("  CAUSE: CUDA libraries are missing or incomplete.")
-        print("")
-        print("  SOLUTIONS (pick one):")
-        print("    1. Install CUDA Toolkit: https://developer.nvidia.com/cuda-toolkit")
-        print("    2. Or switch to CPU mode (no CUDA needed):")
-        print("       python pocket_yume.py settings   → Whisper settings → device 'cpu'")
-        print("    3. Or restart with: --device cpu --compute-type int8")
-    elif "no module" in err_msg or "modulenotfound" in err_msg:
-        missing = str(e).split("'")[1] if "'" in str(e) else "unknown"
-        print("")
-        print(f"  CAUSE: Missing Python package: {missing}")
-        print("")
-        print("  SOLUTION: Run the setup wizard to install dependencies:")
-        print("    python pocket_yume.py setup")
-        print(f"    Or manually: pip install {missing}")
-    elif _state.ERR_NO_SUCH_FILE in err_msg or "filenotfound" in err_msg:
-        print("")
-        print("  CAUSE: Model files not found on disk.")
-        print("")
-        print("  SOLUTIONS:")
-        print("    1. The model will auto-download on first run (needs internet)")
-        print("    2. Check your internet connection and try again")
-        print("    3. Or choose a different model: python pocket_yume.py settings")
-    elif "permission" in err_msg or "access" in err_msg:
-        print("")
-        print("  CAUSE: Permission denied — can't access model files or GPU.")
-        print("")
-        print("  SOLUTIONS:")
-        print("    1. Try running as Administrator (Windows) or with sudo (Linux/macOS)")
-        print("    2. Check that the model directory is not read-only")
-    else:
-        print("")
-        print("  GENERAL SOLUTIONS:")
-        print("    1. Switch to CPU:  --device cpu --compute-type int8")
-        print("    2. Use smaller model:  --model small  or  --model tiny")
-        print("    3. Re-run setup:  python pocket_yume.py setup")
-        print("    4. Check logs:  logs/whisper_server.log")
-
+    print("")
+    for line in _load_help(message.lower()):
+        print(line.format(missing=missing))
     print("")
     print("  Need help? Run: python pocket_yume.py health")
     print("")

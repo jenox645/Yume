@@ -5,6 +5,7 @@ No GPU, model, network or LLM needed: Whisper and the LLM are faked.
 
 from __future__ import annotations
 
+import io
 import json
 import sys
 import tempfile
@@ -1882,6 +1883,43 @@ def test_a_garbled_first_reply_does_not_leave_the_endpoint_on_plain():
         assert tr.translate_batch(["あ"], "ja", "English") == ["Plain"]
         assert tr.translate_batch(["い"], "ja", "English") == ["Later"]
     assert seen == ["json_schema", "json_object", "plain", "json_schema"]
+
+
+@pytest.mark.parametrize(
+    "backend, url, reply, models",
+    [
+        (
+            "ollama",
+            "http://127.0.0.1:5000/api/tags",
+            {"models": [{"name": "qwen3", "size": 7}, {"name": "gemma"}]},
+            [{"id": "qwen3", "name": "qwen3", "size": 7}, {"id": "gemma", "name": "gemma", "size": 0}],
+        ),
+        (
+            "llamacpp",
+            "http://127.0.0.1:5000/v1/models",
+            {"data": [{"id": "a.gguf"}, {}]},
+            [{"id": "a.gguf", "name": "a.gguf"}, {"id": "?", "name": "?"}],
+        ),
+    ],
+)
+def test_translation_models_are_asked_of_the_backend(monkeypatch, backend, url, reply, models):
+    import _api
+
+    asked = []
+
+    def urlopen(req, timeout=0):
+        asked.append(getattr(req, "full_url", req))
+        return io.BytesIO(json.dumps(reply).encode())
+
+    monkeypatch.setattr(_api, "jsonify", lambda d: d)
+    monkeypatch.setattr(_api._settings, "reload_config", lambda: None)
+    monkeypatch.setattr(_state, "translation_backend", backend)
+    monkeypatch.setattr(_state, "translation_host", "127.0.0.1")
+    monkeypatch.setattr(_state, "translation_port", 5000)
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    out = _api.list_translation_models()
+    assert asked == [url]
+    assert out["models"] == models and out["translation_url"] == "http://127.0.0.1:5000"
 
 
 def test_plain_mode_does_not_ask_for_json():
