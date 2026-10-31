@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -29,14 +29,12 @@ def table_rows(fn, *args):
 
 
 def hardware(gpu, ram=32.0, disk=100.0):
-    status._hw_cache = None
     with (
         patch.object(status, "detect_gpu", lambda: gpu),
         patch.object(status, "detect_ram_gb", lambda: ram),
         patch.object(status, "disk_free_gb", lambda: disk),
     ):
         rows = table_rows(status._status_hardware)
-    status._hw_cache = None
     return {r[0]: r[1] for r in rows}
 
 
@@ -51,20 +49,6 @@ def test_hardware_flags_low_memory_and_disk():
     assert "low" in rows["RAM"] and "low!" in rows["Disk"]
     rows = hardware(CPU, ram=16.0, disk=50.0)
     assert "OK" in rows["RAM"] and "OK" in rows["Disk"]
-
-
-def test_hardware_is_cached_for_a_while():
-    status._hw_cache = None
-    probe = MagicMock(return_value=CPU)
-    with (
-        patch.object(status, "detect_gpu", probe),
-        patch.object(status, "detect_ram_gb", lambda: 1.0),
-        patch.object(status, "disk_free_gb", lambda: 1.0),
-    ):
-        status._hardware()
-        status._hardware()
-    status._hw_cache = None
-    assert probe.call_count == 1
 
 
 def test_tools_row_per_tool():

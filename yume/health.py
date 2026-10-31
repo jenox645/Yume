@@ -8,7 +8,7 @@ import re
 import sys
 from pathlib import Path
 
-from yume.constants import BASE_DIR, EXT_DIR, IS_MAC, IS_WIN, SERVER_DIR, backend_info
+from yume.constants import EXT_DIR, IS_MAC, IS_WIN, SERVER_DIR, backend_info
 from yume.hardware import detect_gpu, detect_ram_gb, disk_free_gb, recommend_whisper_model
 from yume.network import check_server, check_translation_server
 from yume.ports import get_port_process, is_port_free
@@ -78,16 +78,14 @@ def _chk_llama_cuda():
     from yume import llama_server
 
     if llama_server.server_path():
-        build = llama_server.installed_build()
-        return ("Translation engine", True, f"llama-server {build.get('tag', '')} ({build.get('variant', '?')})")
+        return ("Translation engine", True, llama_server.build_label())
     gpu = detect_gpu()
     if not (gpu.get("has_nvidia") or gpu.get("has_amd")):
         return None  # not relevant on CPU-only machines
-    try:
-        import llama_cpp.llama_cpp as _lib  # type: ignore[import]
-    except ImportError:
+    on_gpu = llama_server.python_engine_on_gpu()
+    if on_gpu is None:
         return ("llama-cpp CUDA support", False, "llama-cpp-python not installed")
-    if callable(getattr(_lib, "ggml_backend_cuda_reg", None)):
+    if on_gpu:
         return ("llama-cpp CUDA support", True, "GPU offloading available")
     return (
         "llama-cpp CUDA support",
@@ -163,8 +161,6 @@ def _chk_translation_srv(c, tp):
 
 def _chk_server_script():
     ss = SERVER_DIR / "faster_whisper_server.py"
-    if not ss.exists():
-        ss = BASE_DIR / "faster_whisper_server.py"
     return ("Whisper server script", ss.exists(), str(ss) if ss.exists() else "MISSING")
 
 

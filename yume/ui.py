@@ -24,7 +24,6 @@ class C:
     BLUE = "\033[94m"
     MAGENTA = "\033[95m"
     CYAN = "\033[96m"
-    WHITE = "\033[97m"
     GOLD = "\033[38;5;220m"
     PURPLE = "\033[38;5;141m"
 
@@ -34,7 +33,7 @@ class C:
         cls.RESET = cls.BOLD = cls.DIM = ""
         cls.RED = cls.GREEN = cls.YELLOW = ""
         cls.BLUE = cls.MAGENTA = cls.CYAN = ""
-        cls.WHITE = cls.GOLD = cls.PURPLE = ""
+        cls.GOLD = cls.PURPLE = ""
 
 
 # Pre-compiled regex for stripping ANSI escape codes (used in panel/table rendering)
@@ -44,7 +43,6 @@ ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 BOX_CHARS = {
     "rounded": {"tl": "╭", "tr": "╮", "bl": "╰", "br": "╯", "h": "─", "v": "│"},
-    "heavy": {"tl": "┏", "tr": "┓", "bl": "┗", "br": "┛", "h": "━", "v": "┃"},
     "simple": {"tl": "+", "tr": "+", "bl": "+", "br": "+", "h": "-", "v": "|"},
 }
 
@@ -141,8 +139,6 @@ def table(headers: list, rows: list, col_styles: list | None = None, title: str 
 
 SPINNERS = {
     "dots": ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
-    "line": ["-", "\\", "|", "/"],
-    "arrows": ["←", "↖", "↑", "↗", "→", "↘", "↓", "↙"],
     "simple": ["-", "\\", "|", "/"],
 }
 
@@ -208,21 +204,21 @@ def enable_ansi() -> None:
             C.disable()
 
         try:
-            import ctypes as _ctypes
+            import ctypes
 
-            _ctypes.windll.kernel32.SetConsoleOutputCP(65001)
-            _ctypes.windll.kernel32.SetConsoleCP(65001)
+            ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+            ctypes.windll.kernel32.SetConsoleCP(65001)
         except Exception:
-            import subprocess
+            from yume.utils import _run
 
-            subprocess.run(["cmd", "/c", "chcp", "65001"], capture_output=True)  # nosec B603
+            _run(["cmd", "/c", "chcp", "65001"])
 
 
 def clear() -> None:
-    import subprocess
-
     if IS_WIN:
-        subprocess.run(["cmd", "/c", "cls"], check=False)  # nosec B603 B607
+        from yume.utils import _run
+
+        _run(["cmd", "/c", "cls"], capture_output=False)
     else:
         sys.stdout.write("\033[2J\033[H")  # ANSI clear + home — no shell, no `clear` binary needed
         sys.stdout.flush()
@@ -234,10 +230,6 @@ def tw() -> int:
 
 def center(t: str) -> str:
     return t.center(tw())
-
-
-def gold_hr() -> None:
-    print(f"{C.GOLD}{'─' * tw()}{C.RESET}")
 
 
 def header(sub: str | None = None, version: str = "") -> None:

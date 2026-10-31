@@ -219,6 +219,13 @@ def disk_free_gb(p=None) -> float:
         return 0.0
 
 
+def whisper_compute_type(vram_mb: int) -> str:
+    """Whisper precision that fits in the GPU's memory."""
+    if vram_mb >= 8000:
+        return "float16"
+    return "int8_float16" if vram_mb >= 4000 else "int8"
+
+
 def recommend_whisper_model(gpu_info: dict | None = None) -> tuple[str, str]:
     """Return (model_name, reason) for the given hardware."""
     if gpu_info is None:

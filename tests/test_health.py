@@ -51,7 +51,8 @@ class Check:
 
         ls = MagicMock()
         ls.server_path.return_value = "llama-server.exe" if self.native_llama else None
-        ls.installed_build.return_value = {"tag": "b9000", "variant": "cuda"}
+        ls.build_label.return_value = "llama-server b9000 (cuda)"
+        ls.python_engine_on_gpu = yume.llama_server.python_engine_on_gpu
         fakes = {
             "detect_gpu": MagicMock(return_value=GPU),
             "detect_ram_gb": MagicMock(return_value=32.0),

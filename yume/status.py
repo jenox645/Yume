@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
 from yume.constants import ARCH, GiB, HEALTH_PATH_OPENAI, PLAT, backend_info
@@ -13,26 +12,9 @@ from yume.ports import port_owners
 from yume.ui import C, bullet, header, info, section, table, warn
 from yume.utils import find_gguf_models, find_tool
 
-# 30-second hardware info cache — avoids re-calling nvidia-smi on every status render
-_hw_cache: dict | None = None
-_hw_cache_ts: float = 0.0
-_HW_CACHE_TTL = 30.0
-
-
-def _hardware() -> dict:
-    """GPU / RAM / disk, cached 30 s: nvidia-smi is slow to call on every render."""
-    global _hw_cache, _hw_cache_ts
-
-    now = time.monotonic()
-    if _hw_cache is None or (now - _hw_cache_ts) > _HW_CACHE_TTL:
-        _hw_cache = {"gpu": detect_gpu(), "ram": detect_ram_gb(), "disk": disk_free_gb()}
-        _hw_cache_ts = now
-    return _hw_cache
-
 
 def _status_hardware() -> None:
-    hw = _hardware()
-    gpu, ram, disk = hw["gpu"], hw["ram"], hw["disk"]
+    gpu, ram, disk = detect_gpu(), detect_ram_gb(), disk_free_gb()
     if gpu["has_nvidia"]:
         gpu_txt = f"{C.GREEN}{gpu['name']} ({gpu['vram_mb']} MB){C.RESET}"
     elif gpu["has_amd"]:

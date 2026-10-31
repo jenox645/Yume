@@ -50,6 +50,21 @@ def installed_build() -> dict:
         return {}
 
 
+def build_label() -> str:
+    build = installed_build()
+    return f"llama-server {build.get('tag', '')} ({build.get('variant', '?')})"
+
+
+def python_engine_on_gpu() -> bool | None:
+    """Whether llama-cpp-python runs on the GPU; None when it does not load (a broken
+    install raises more than ImportError: RuntimeError when its library will not load)."""
+    try:
+        import llama_cpp.llama_cpp as lib  # type: ignore[import]
+    except Exception:
+        return None
+    return callable(getattr(lib, "ggml_backend_cuda_reg", None))
+
+
 def driver_cuda_version() -> tuple[int, int] | None:
     """Highest CUDA version the NVIDIA driver supports, from nvidia-smi's header
     ("CUDA Version: 12.8", or "CUDA UMD Version: 13.3" on newer drivers)."""

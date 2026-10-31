@@ -22,9 +22,10 @@ from yume.constants import (
     MiB,
     HEALTH_PATH_OLLAMA,
     BACKEND_INFO,
+    DEFAULT_OLLAMA_MODEL,
     use_backend,
 )
-from yume.hardware import detect_gpu, detect_ram_gb, disk_free_gb, recommend_whisper_model
+from yume.hardware import detect_gpu, detect_ram_gb, disk_free_gb, recommend_whisper_model, whisper_compute_type
 from yume.network import check_server
 from yume.ui import C, ask_arrow, ask_yn, center, error, header, info, pause, section, success, warn
 from yume.utils import _run, _try_import, find_gguf_models, find_tool
@@ -140,7 +141,6 @@ def _offer_one_click() -> None:
 def _offer_vocal_isolation() -> None:
     """Offer vocal isolation on NVIDIA machines (optional, ~3.5 GB)."""
     from yume import vocals
-    from yume.hardware import detect_gpu
 
     if not detect_gpu().get("has_nvidia") or vocals.status()[0]:
         return
@@ -159,15 +159,6 @@ _MISSING_LABELS = {
     "llama_server": "translation engine (llama.cpp)",
     "gguf_model": "GGUF translation model",
 }
-
-
-def _compute_type(vram_mb: int) -> str:
-    """Whisper precision that fits in the GPU's memory."""
-    if vram_mb >= 8000:
-        return "float16"
-    if vram_mb >= 4000:
-        return "int8_float16"
-    return "int8"
 
 
 def _welcome() -> None:
@@ -219,10 +210,10 @@ def _pick_whisper_model(cfg: dict, gpu: dict) -> None:
 def _pick_whisper_device(cfg: dict, gpu: dict, rocm: bool) -> None:
     if gpu["has_nvidia"]:
         cfg["whisper_device"] = "cuda"
-        cfg["whisper_compute_type"] = _compute_type(gpu["vram_mb"])
+        cfg["whisper_compute_type"] = whisper_compute_type(gpu["vram_mb"])
     elif rocm:
         cfg["whisper_device"] = "auto"
-        cfg["whisper_compute_type"] = _compute_type(gpu.get("vram_mb", 0))
+        cfg["whisper_compute_type"] = whisper_compute_type(gpu.get("vram_mb", 0))
         info(f"AMD GPU detected — ROCm (Linux), compute: {cfg['whisper_compute_type']}")
     else:
         cfg["whisper_device"] = "cpu"
@@ -250,22 +241,17 @@ def _translation_engine_ok(gpu: dict) -> bool:
     from yume import llama_server
 
     if llama_server.server_path():
-        build = llama_server.installed_build()
-        success(f"Translation engine: llama-server {build.get('tag', '')} ({build.get('variant', '?')})")
+        success(f"Translation engine: {llama_server.build_label()}")
         return True
     # llama.cpp's prebuilt server is the engine Yume installs. An existing
     # llama-cpp-python is kept only when it already runs on the GPU (or
     # there is no GPU to use): CUDA wheels lag behind new Pythons, and the
     # source build needs the CUDA Toolkit and a C++ compiler.
-    try:
-        import llama_cpp.llama_cpp as _lib  # noqa: F401
-        import uvicorn  # noqa: F401
-        import fastapi  # noqa: F401
-    except ImportError:
+    on_gpu = llama_server.python_engine_on_gpu()
+    if on_gpu is None or not _try_import("uvicorn") or not _try_import("fastapi"):
         warn("Translation engine: missing")
         return False
-    has_gpu_hw = gpu.get("has_nvidia") or gpu.get("has_amd")
-    if not has_gpu_hw or callable(getattr(_lib, "ggml_backend_cuda_reg", None)):
+    if on_gpu or not (gpu.get("has_nvidia") or gpu.get("has_amd")):
         success("Translation engine: llama-cpp-python")
         return True
     warn("Translation engine: llama-cpp-python runs on the CPU only — slow")
@@ -418,7 +404,7 @@ def _use_ollama(cfg: dict) -> None:
     from yume.installers import install_ollama, pull_ollama_model
 
     use_backend(cfg, "ollama")
-    cfg["translation_model"] = "qwen2.5:7b"
+    cfg["translation_model"] = DEFAULT_OLLAMA_MODEL
     if not ask_yn("Install Ollama?"):
         return
     _install_with_retry("Ollama", install_ollama, f"Install manually: {C.CYAN}https://ollama.com{C.RESET}")

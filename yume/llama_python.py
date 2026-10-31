@@ -42,26 +42,20 @@ def _install_build_tools() -> bool:
         "pacman": ["sudo", "pacman", "-S", "--noconfirm", "ninja", "cmake", "gcc"],
         "zypper": ["sudo", "zypper", "install", "-y", "ninja", "cmake", "gcc-c++"],
     }
-    cmd = cmds.get(pm)
-    if not cmd:
-        warn(f"Unknown package manager: {pm}")
-        return False
     try:
-        r = _run(cmd, timeout=300)
+        r = _run(cmds[pm], timeout=300)
         if r.returncode == 0:
             success("Build tools installed!")
             return True
         warn(f"Package manager returned code {r.returncode}")
         info("Trying pip install ninja cmake as fallback...")
-        _run([sys.executable, "-m", "pip", "install", "ninja", "cmake", "-q"], timeout=120)
-        return True
     except Exception as e:
         warn(f"System install failed: {e}")
-        try:
-            _run([sys.executable, "-m", "pip", "install", "ninja", "cmake", "-q"], timeout=120)
-            return True
-        except Exception:
-            return False
+    try:
+        _run([sys.executable, "-m", "pip", "install", "ninja", "cmake", "-q"], timeout=120)
+        return True
+    except Exception:
+        return False
 
 
 def _pip_with_progress(cmd: list, label: str, timeout: int = 600, env: dict | None = None) -> bool:

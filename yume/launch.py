@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from yume import servers
-from yume.constants import VERSION, GGUF_DIR, LOGS_DIR, IS_WIN, BACKEND_INFO, backend_info
+from yume.constants import VERSION, GGUF_DIR, LOGS_DIR, IS_WIN, BACKEND_INFO, DEFAULT_OLLAMA_MODEL, backend_info
 from yume.hardware import detect_gpu
 from yume.network import check_ollama_models, check_translation_server, discover_servers, reset_api_token
 from yume.ports import ensure_port_free, find_free_port, is_port_free, kill_port_process
@@ -27,22 +27,15 @@ from yume.utils import _run
 def _offer_llama_server() -> bool:
     """When llama-cpp-python would translate on the CPU although a GPU is
     there, offer llama.cpp's prebuilt GPU server instead (much faster)."""
-    gpu = detect_gpu()
-    if not (gpu["has_nvidia"] or gpu["has_amd"]):
-        return False
-    try:
-        import llama_cpp.llama_cpp as _lib  # type: ignore[import]
+    from yume import llama_server
 
-        if callable(getattr(_lib, "ggml_backend_cuda_reg", None)):
-            return False  # llama-cpp-python already runs on the GPU
-    except ImportError:
-        pass
+    gpu = detect_gpu()
+    if not (gpu["has_nvidia"] or gpu["has_amd"]) or llama_server.python_engine_on_gpu():
+        return False
     warn("The translator would run on the CPU (llama-cpp-python has no GPU support here).")
     info("llama.cpp's own GPU server translates ~10x faster — about 200-700 MB to download.")
     if not ask_yn("Install it now?", True):
         return False
-    from yume import llama_server
-
     return llama_server.install(gpu)
 
 
@@ -292,20 +285,13 @@ def _start_llamacpp(cfg: dict, procs: servers.Processes, bi: dict, env: dict) ->
 
 def _describe_engine(native: bool) -> None:
     """Say what will run the translation model (and warn when it is the CPU)."""
+    from yume import llama_server
+
     gpu = detect_gpu()
     if native:
-        from yume import llama_server
-
-        build = llama_server.installed_build()
-        info(f"Engine: llama-server {build.get('tag', '')} ({build.get('variant', '?')})")
+        info(f"Engine: {llama_server.build_label()}")
     elif gpu["has_nvidia"] or (gpu["has_amd"] and not IS_WIN):
-        try:
-            import llama_cpp.llama_cpp as _lib  # type: ignore[import]
-
-            backend_ok = callable(getattr(_lib, "ggml_backend_cuda_reg", None))
-        except Exception:
-            backend_ok = False
-        if backend_ok:
+        if llama_server.python_engine_on_gpu():
             info("GPU offloading enabled (--n_gpu_layers -1)")
         else:
             warn("llama-cpp-python is a CPU-only build — model will load into RAM, not VRAM.")
@@ -335,9 +321,9 @@ def _start_ollama(cfg: dict, procs: servers.Processes, env: dict) -> bool:
         # model name in every request, so pick the default instead of failing later.
         from config import save_config
 
-        cfg["translation_model"] = "qwen2.5:7b"
+        cfg["translation_model"] = DEFAULT_OLLAMA_MODEL
         save_config(cfg)
-        info("Translation model set to qwen2.5:7b (change it in Settings → Translation settings)")
+        info(f"Translation model set to {DEFAULT_OLLAMA_MODEL} (change it in Settings → Translation settings)")
     model = cfg["translation_model"]
     ms = check_ollama_models(cfg["translation_host"], cfg["translation_port"])
     if model not in ms and f"{model}:latest" not in ms:
