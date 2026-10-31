@@ -570,7 +570,6 @@ def prompt_menu(fn, choice, answer, cfg):
     saved = MagicMock()
     with (
         patch.object(prompts, "ask_arrow", lambda *a, **k: choice),
-        patch.object(prompts, "input", lambda *a: answer, create=True),
         patch("builtins.input", lambda *a: answer),
         patch.object(prompts, "pause", MagicMock()),
         patch("config.save_config", saved),
@@ -647,3 +646,45 @@ def test_model_switch_with_the_server_down_saves_a_full_path(tmp_path, monkeypat
     with patch.object(wm, "_server_get", return_value=None), patch("config.save_config"):
         wm.cli_model(cfg, ["switch", "ft"])
     assert cfg["whisper_model"] == str((tmp_path / "ft").resolve())
+
+
+def editor_text(fn):
+    said = []
+    with patch.object(prompts, "ask_arrow", lambda *a, **k: -1), patch.object(prompts, "info", said.append):
+        fn({})
+    return "\n".join(said)
+
+
+def test_the_translation_editor_quotes_rules_the_prompt_has():
+    import re
+
+    said = editor_text(prompts._menu_translation_prompt)
+    quoted = re.findall(r"• '([^']+)'", said)
+    assert len(quoted) == 3
+    assert all(rule.lower() in prompts._TRANSLATION_STARTER.lower() for rule in quoted)
+
+
+def test_the_romanization_editor_describes_what_the_server_does():
+    said = editor_text(prompts._menu_romanization_prompt)
+    assert "cutlet" in said
+    assert "'romanization'" in said and "romaji'" not in said  # the server fills {sys} with that one word
+
+
+def test_the_model_guide_shows_the_vram_of_the_model_list():
+    import yume.guides
+    import yume.hardware
+
+    said = []
+    with (
+        patch.object(yume.guides, "header", MagicMock()),
+        patch.object(yume.guides, "pause", MagicMock()),
+        patch.object(yume.guides, "section", MagicMock()),
+        patch.object(yume.guides, "bullet", said.append),
+        patch.object(yume.guides, "info", MagicMock()),
+        patch.object(yume.guides, "detect_gpu", lambda: {"has_nvidia": False, "vram_mb": 0}),
+    ):
+        yume.guides._guide_models({})
+    vram = yume.hardware.WHISPER_MODEL_VRAM_MB
+    for name in ("small", "large-v3-turbo", "large-v3"):
+        line = next(s for s in said if s.startswith(f"{name} "))
+        assert f"~{vram[name] / 1000:g} GB" in line

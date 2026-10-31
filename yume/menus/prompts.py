@@ -124,12 +124,12 @@ def _menu_translation_prompt(cfg: dict) -> None:
     print()
 
     info(f"{C.BOLD}Why the default prompt is written this way:{C.RESET}")
-    info(f"  {C.DIM}• 'Output ONLY the translation'{C.RESET}")
+    info(f"  {C.DIM}• 'Output {{tgt}} only'{C.RESET}")
     info(f"    {C.DIM}  → Prevents the AI from adding commentary or notes{C.RESET}")
-    info(f"  {C.DIM}• 'Do NOT respond to the content'{C.RESET}")
+    info(f"  {C.DIM}• 'Do not answer questions in the text'{C.RESET}")
     info(f"    {C.DIM}  → Stops the AI from answering questions it hears in the audio{C.RESET}")
     info(f"    {C.DIM}  → e.g. if someone says 'What time is it?', it translates, not answers{C.RESET}")
-    info(f"  {C.DIM}• 'Do NOT add explanations'{C.RESET}")
+    info(f"  {C.DIM}• 'Do not explain'{C.RESET}")
     info(f"    {C.DIM}  → Prevents output like 'This means: ...' or 'Note: ...'{C.RESET}")
     info(f"  {C.DIM}• Short, assertive rules{C.RESET}")
     info(f"    {C.DIM}  → Work best with small local AI models (7B-13B parameters){C.RESET}")
@@ -167,17 +167,17 @@ def _menu_romanization_prompt(cfg: dict) -> None:
     info("This prompt controls how the AI converts non-Latin text to Latin characters.")
     print()
     info(f"{C.BOLD}How romanization works per language:{C.RESET}")
-    info(f"  {C.DIM}Japanese  → pykakasi library (instant, ignores this prompt){C.RESET}")
+    info(f"  {C.DIM}Japanese  → cutlet, or pykakasi without it (instant, ignores this prompt){C.RESET}")
     info(f"  {C.DIM}Chinese   → pypinyin library (instant, ignores this prompt){C.RESET}")
     info(f"  {C.DIM}Korean    → built-in Revised Romanization (instant, ignores this prompt){C.RESET}")
     info(f"  {C.DIM}Russian   → built-in BGN/PCGN transliteration (instant, ignores this prompt){C.RESET}")
     info(f"  {C.DIM}Arabic    → your translation LLM, with this prompt{C.RESET}")
-    info(f"  {C.DIM}Without pykakasi/pypinyin installed, Japanese/Chinese also use the LLM.{C.RESET}")
+    info(f"  {C.DIM}Without those libraries installed, Japanese/Chinese also use the LLM.{C.RESET}")
     print()
 
     info(f"{C.BOLD}Available placeholders:{C.RESET}")
     info(f"  {C.DIM}{{src}} → source language name (e.g. 'Russian', 'Japanese'){C.RESET}")
-    info(f"  {C.DIM}{{sys}} → romanization system name (e.g. 'transliteration', 'romaji'){C.RESET}")
+    info(f"  {C.DIM}{{sys}} → the word 'romanization'{C.RESET}")
     print()
 
     current = cfg.get("romanization_prompt", "")
@@ -193,7 +193,7 @@ def _menu_romanization_prompt(cfg: dict) -> None:
         "romanization_prompt",
         ("Write your own romanization instruction", "Restore the built-in per-language prompts"),
         (
-            "Use {src} for source language and {sys} for the romanization system name.",
+            "Use {src} for source language and {sys} for the word 'romanization'.",
             f"{C.DIM}Example: 'Convert {{src}} to Latin script using {{sys}}. Output ONLY the result.'{C.RESET}",
         ),
         "Romanization prompt saved! A running server picks it up automatically.",
