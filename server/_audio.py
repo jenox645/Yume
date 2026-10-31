@@ -613,37 +613,45 @@ def _ytdlp_strategies(url, strategies, output_template, output_path, pp_opts):
     for label, extra_args in strategies:
         if "--cookies-from-browser" in extra_args and cookies_unreadable():
             continue  # the cookie DB could not be read a moment ago: it won't be now
-        for fmt_pass, fmt_args in _FORMAT_PASSES:
-            tag = f"{label}/{fmt_pass}"
-            print(f"[Yume] Trying yt-dlp ({tag}): {url[:80]}...")
-            try:
-                result = _run_tool(_ytdlp_audio_cmd(url, fmt_args, extra_args, output_template, pp_opts))
-            except subprocess.TimeoutExpired:
-                print(f"[Yume] yt-dlp ({label}) timed out")
-                raise _TimedOut from None
-            except Exception as e:
-                last_error = f"yt-dlp error: {e}"
-                continue
+        path, error = _ytdlp_format_passes(url, label, extra_args, output_template, output_path, pp_opts)
+        if path:
+            return path, None
+        last_error = error or last_error
+    return None, last_error
 
-            if result.returncode == 0 and os.path.exists(output_path):
-                print(f"[Yume] yt-dlp ({tag}) succeeded!")
-                return output_path, None
 
-            stderr_lower = (result.stderr or "").lower()
-            if _note_cookie_failure(result.stderr):
-                print(
-                    f"[Yume] Browser cookies unreadable — skipping cookie strategies for {_COOKIES_RETRY_S // 60} min"
-                )
-                break
-            if _is_live(stderr_lower):
-                raise _Live
-            if _state.ERR_REQUESTED_FORMAT in stderr_lower and fmt_pass == "bestaudio":
-                continue  # skip to nofmt pass of same auth strategy
+def _ytdlp_format_passes(url, label, extra_args, output_template, output_path, pp_opts):
+    """One auth strategy, each format pass: (path, None) or (None, last error if any)."""
+    last_error = None
+    for fmt_pass, fmt_args in _FORMAT_PASSES:
+        tag = f"{label}/{fmt_pass}"
+        print(f"[Yume] Trying yt-dlp ({tag}): {url[:80]}...")
+        try:
+            result = _run_tool(_ytdlp_audio_cmd(url, fmt_args, extra_args, output_template, pp_opts))
+        except subprocess.TimeoutExpired:
+            print(f"[Yume] yt-dlp ({label}) timed out")
+            raise _TimedOut from None
+        except Exception as e:
+            last_error = f"yt-dlp error: {e}"
+            continue
 
-            last_error = _ytdlp_error(result)
-            print(f"[Yume] yt-dlp ({tag}) failed: {last_error[:150]}")
-            if any(w in stderr_lower for w in _AUTH_ERROR_WORDS):
-                break  # auth error — skip nofmt pass, move to next auth strategy
+        if result.returncode == 0 and os.path.exists(output_path):
+            print(f"[Yume] yt-dlp ({tag}) succeeded!")
+            return output_path, None
+
+        stderr_lower = (result.stderr or "").lower()
+        if _note_cookie_failure(result.stderr):
+            print(f"[Yume] Browser cookies unreadable — skipping cookie strategies for {_COOKIES_RETRY_S // 60} min")
+            break
+        if _is_live(stderr_lower):
+            raise _Live
+        if _state.ERR_REQUESTED_FORMAT in stderr_lower and fmt_pass == "bestaudio":
+            continue  # skip to nofmt pass of same auth strategy
+
+        last_error = _ytdlp_error(result)
+        print(f"[Yume] yt-dlp ({tag}) failed: {last_error[:150]}")
+        if any(w in stderr_lower for w in _AUTH_ERROR_WORDS):
+            break  # auth error — skip nofmt pass, move to next auth strategy
     return None, last_error
 
 

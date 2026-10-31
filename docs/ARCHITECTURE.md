@@ -11,6 +11,9 @@ Three processes on the user's machine:
 │                                      │      │ _settings.py   config + live reload, blacklist     │
 │                                      │      │ _model.py      Whisper load / hot swap             │
 │                                      │      │ _jobs.py       job manager + 2 worker threads      │
+│                                      │      │ _job.py        one job's regions and lines         │
+│                                      │      │ _lines.py      line cleaning, joins at a cut       │
+│                                      │      │ _export.py     SRT / VTT, cached videos too        │
 │ subtitle-window.js  shadow-DOM overlay│ HTTP │ _audio.py      yt-dlp / ffmpeg download            │
 │ background.js  authenticated proxy   │ ◀─── │ _separate.py   vocal isolation (optional, CUDA)    │
 │                                      │      │ _regions.py    split audio at quiet points         │

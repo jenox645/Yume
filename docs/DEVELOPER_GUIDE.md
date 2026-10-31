@@ -47,7 +47,10 @@ python server/faster_whisper_server.py --model tiny --device cpu --compute-type 
 | `server/_settings.py` | Config file load + live reload, switched model written back, blacklist |
 | `server/_model.py` | Whisper model load (CUDA warm-up, CPU fallback), hot swap, load-error advice |
 | `server/_startup.py` | Args, logging, banner, yt-dlp self-update, Deno auth, token file, web server |
-| `server/_jobs.py` | Job manager, transcription + LLM workers, SRT/VTT export |
+| `server/_jobs.py` | Job manager: download and preview, transcription + LLM workers |
+| `server/_job.py` | One job's state: regions, lines, revisions, what the workers do next |
+| `server/_lines.py` | A region's raw lines cleaned, regions joined at a cut |
+| `server/_export.py` | SRT/VTT export, also of cached videos without a job |
 | `server/_regions.py` | Quiet-point region planning (pure numpy) |
 | `server/_transcribe.py` | Whisper call with the music-tuned parameters |
 | `server/_translate.py` | LLM client: structured output, fallbacks, retries |

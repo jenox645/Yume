@@ -17,7 +17,7 @@ from pathlib import Path
 from flask import Flask, jsonify, request
 
 import _audio
-import _jobs
+import _export
 import _model
 import _separate
 import _settings
@@ -319,7 +319,7 @@ _LANG_RE = re.compile(r"^[a-z]{2,3}$")
 def _job_params(data):
     """(params for JobManager.create, None), or (None, error message) for a bad request.
 
-    Durations and the playhead are sanitized by the job itself (_jobs.seconds)."""
+    Durations and the playhead are sanitized by the job itself (_job.seconds)."""
     url = str(data.get("url") or "")
     stream_url = str(data.get("stream_url") or "")
     if not url and not stream_url:
@@ -405,7 +405,7 @@ def job_export(job_id):
     with job.lock:
         segments = [dict(s) for s in job.segments.values()]
     progress = job.snapshot(0)["progress"]
-    content, count = _jobs.export_subtitles(segments, fmt)
+    content, count = _export.export_subtitles(segments, fmt)
     return jsonify({"content": content, "count": count, "format": fmt, "progress": progress})
 
 
@@ -421,7 +421,7 @@ def library_export():
     if not video_key or not model:
         return jsonify({"error": "video_key and model are required"}), 400
     fmt = "vtt" if a.get("format") == "vtt" else "srt"
-    content, count = _jobs.library_export(video_key, language, model, a.get("target") or None, fmt)
+    content, count = _export.library_export(video_key, language, model, a.get("target") or None, fmt)
     return jsonify({"content": content, "count": count, "format": fmt})
 
 

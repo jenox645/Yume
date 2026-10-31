@@ -21,7 +21,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "server"))
 
 import _audio  # noqa: E402
+import _export  # noqa: E402
+import _job  # noqa: E402
 import _jobs  # noqa: E402
+import _lines  # noqa: E402
 import _regions  # noqa: E402
 import _romanize  # noqa: E402
 import _separate  # noqa: E402
@@ -432,7 +435,7 @@ def test_job_transcribes_filters_translates_romanizes(pipeline):
     assert seg["text"] == "こんにちは" and seg["translation"] == "EN(こんにちは)"
     # hallucinations are never sent on a fresh snapshot
     assert all("視聴" not in s["text"] for s in snap["segments"])
-    srt, n = _jobs.export_subtitles(list(_state.jobs.get(snap["id"]).segments.values()))
+    srt, n = _export.export_subtitles(list(_state.jobs.get(snap["id"]).segments.values()))
     assert n == p["lines"] and "EN(こんにちは)" in srt
 
 
@@ -473,7 +476,7 @@ def test_stream_preview_covers_a_region_0_cut_before_30s(pipeline):
     # The preview hears [0, 30); the plan cuts region 0 at a quiet point, here
     # 21.5 s. Lines it heard after the cut are region 1's, which transcribes them
     # whole: a fixed cut at 30 s split the first sung line.
-    job = _jobs.Job(("pv", "ja", "English"), PARAMS)
+    job = _job.Job(("pv", "ja", "English"), PARAMS)
     raw = [_raw(1.0, 6.0, "最初の行"), _raw(24.0, 30.0, "半分の行")]
     with job.lock:
         job.show_preview(raw)  # shown before the plan exists
@@ -572,7 +575,7 @@ def test_no_stream_preview_of_the_start_for_a_resumed_video(pipeline):
 
 def test_stream_preview_shown_before_a_plan_that_keeps_its_region(pipeline):
     # Plans cached before the quiet cut (and stream mode) keep region 0 = [0, 30)
-    job = _jobs.Job(("pv30", "ja", "English"), PARAMS)
+    job = _job.Job(("pv30", "ja", "English"), PARAMS)
     raw = [_raw(1.0, 6.0, "最初の行"), _raw(24.0, 29.0, "次の行")]
     with job.lock:
         job.show_preview(raw)
@@ -586,7 +589,7 @@ def test_stream_preview_shown_before_a_plan_that_keeps_its_region(pipeline):
 
 
 def test_lines_end_with_their_region_and_window_fillers_are_hidden(pipeline):
-    job = _jobs.Job(("clip", "ko", "English"), {**PARAMS, "language": "ko"})
+    job = _job.Job(("clip", "ko", "English"), {**PARAMS, "language": "ko"})
     with job.lock:
         job.regions = [(0.0, 24.5), (24.5, 52.0), (52.0, 60.3)]
         job.region_state = ["pending"] * 3
@@ -625,10 +628,10 @@ def test_library_export_follows_the_plan_and_the_filters(pipeline):
     store.put_transcript("lib", "ja", "m", 20.0, 40.0, [_raw(21.0, 25.0, "二行目"), _raw(36.0, 52.0, "三行目")])
     store.put_video("lib2", "https://x", "t", 30.0, [[0.0, 30.0]])
     store.put_transcript("lib2", "ja", "m", 0.0, 30.0, [_raw(0.0, 30.0, "字幕")])  # fills the window
-    srt, n = _jobs.library_export("lib", "ja", "m", None)
+    srt, n = _export.library_export("lib", "ja", "m", None)
     assert n == 3 and "古い計画" not in srt
     assert "00:00:36,000 --> 00:00:40,000" in srt  # ends with the video, not at 52 s
-    assert _jobs.library_export("lib2", "ja", "m", None)[1] == 0
+    assert _export.library_export("lib2", "ja", "m", None)[1] == 0
 
 
 def test_download_failure_reports_error(pipeline):
@@ -732,7 +735,7 @@ def test_enable_again_retries_failed_regions(pipeline):
 
 @pytest.mark.parametrize("bad", [float("inf"), float("nan"), -5, "x", 10**12])
 def test_job_duration_and_playhead_are_sane(bad):
-    job = _jobs.Job(("k", "ja", "", "m"), {"duration": bad, "playhead": bad})
+    job = _job.Job(("k", "ja", "", "m"), {"duration": bad, "playhead": bad})
     assert job.duration == 0.0 and job.playhead == 0.0
     manager = _jobs.JobManager.__new__(_jobs.JobManager)
     manager._notify = lambda: None
@@ -959,7 +962,7 @@ def test_missing_server_requirements_are_reported(tmp_path, monkeypatch):
 
 
 def test_region_0_waits_for_whisper_on_the_preview_not_for_its_download(pipeline):
-    job = _jobs.Job(("v", "ja", "", "m"), {"language": "ja"})
+    job = _job.Job(("v", "ja", "", "m"), {"language": "ja"})
     job.status, job.mode, job.audio = "transcribing", "stream", None
     job.regions, job.region_state = [(0.0, 25.0), (25.0, 50.0)], ["pending", "pending"]
     with pipeline.jobs.lock:
@@ -974,7 +977,7 @@ def test_region_0_waits_for_whisper_on_the_preview_not_for_its_download(pipeline
 
 
 def test_a_preview_fetched_after_the_worker_took_region_0_is_not_transcribed(pipeline):
-    job = _jobs.Job(("v", "ja", "", "m"), {"language": "ja"})
+    job = _job.Job(("v", "ja", "", "m"), {"language": "ja"})
     job.regions, job.region_state = [(0.0, 25.0)], ["running"]
     job.preview_started = time.time()
     with pipeline.jobs.lock:
@@ -989,7 +992,7 @@ def test_a_preview_fetched_after_the_worker_took_region_0_is_not_transcribed(pip
 
 
 def test_vocals_are_separated_after_the_preview_not_during_it(pipeline):
-    job = _jobs.Job(("v", "ja", "", "m+htdemucs"), {"language": "ja", "url": "https://x/a"})
+    job = _job.Job(("v", "ja", "", "m+htdemucs"), {"language": "ja", "url": "https://x/a"})
     job.preview_started = time.time()
     with pipeline.jobs.lock:
         pipeline.jobs.jobs[job.id] = job
@@ -1005,7 +1008,7 @@ def test_vocals_are_separated_after_the_preview_not_during_it(pipeline):
     [("News & Politics", False), ("Education", False), ("Music", True), ("Entertainment", True), ("", True)],
 )
 def test_videos_filed_as_talk_are_not_separated(pipeline, category, separated):
-    job = _jobs.Job(("v", "ar", "", "m+htdemucs"), {"language": "ar", "url": "https://x/a"})
+    job = _job.Job(("v", "ar", "", "m+htdemucs"), {"language": "ar", "url": "https://x/a"})
     with (
         patch.object(_audio, "stream_category", return_value=category),
         patch.object(_separate, "read_stereo", return_value=None) as read,
@@ -1085,7 +1088,7 @@ def test_lines_at_the_playhead_are_translated_first_in_a_small_batch(pipeline):
     pipeline.translator.translate_batch = record
     job = pipeline.jobs.create({**PARAMS, "video_id": "near"})
     _run(pipeline.jobs, job)
-    assert pipeline.translator.batches[0] <= _jobs.NEAR_BATCH
+    assert pipeline.translator.batches[0] <= _job.NEAR_BATCH
 
 
 def test_system_prompt_is_the_same_for_every_batch():
@@ -1116,7 +1119,7 @@ def test_first_translation_batch_is_small_even_when_nothing_is_near_the_playhead
     while time.time() < deadline and job.status not in ("done", "error"):
         pipeline.jobs.poll(job, 500)  # playhead far past every line (an instrumental intro, say)
         time.sleep(0.05)
-    assert pipeline.translator.batches[0] <= _jobs.NEAR_BATCH
+    assert pipeline.translator.batches[0] <= _job.NEAR_BATCH
 
 
 def test_japanese_particles_are_written_as_pronounced():
@@ -1390,7 +1393,7 @@ def test_the_same_line_twice_becomes_one_line():
 
 def test_a_fragment_at_a_region_cut_is_hidden_whichever_region_finishes_first(pipeline):
     for order in ((0, 1), (1, 0)):
-        job = _jobs.Job(("frag", "ko", "", "m"), {"language": "ko"})
+        job = _job.Job(("frag", "ko", "", "m"), {"language": "ko"})
         job.regions, job.region_state = [(0.0, 28.8), (28.8, 55.0)], ["pending", "pending"]
         raw = {
             0: [_seg(20.0, 24.0, "주요 뉴스입니다."), _seg(28.5, 28.8, "호주 최고한")],
@@ -1522,7 +1525,7 @@ def test_an_unexpected_translation_error_does_not_stop_the_worker(pipeline):
     ],
 )
 def test_the_user_is_told_when_the_video_sounds_like_another_language(heard, notice):
-    job = _jobs.Job(("v", "ar", "", "m"), {"language": "ar"})
+    job = _job.Job(("v", "ar", "", "m"), {"language": "ar"})
     for lang, prob in heard:
         job.check_language(lang, prob)
     assert (notice in job.notice) if notice else job.notice == ""
@@ -1532,7 +1535,7 @@ def test_language_is_checked_while_transcribing_and_shown_in_the_snapshot(pipeli
     with patch.object(_jobs, "detect_language", return_value=("en", 0.97)) as det:
         snap = _run(pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "wrong-lang"}))
     assert "sounds like English, but Yume is set to Japanese" in snap["notice"]
-    assert det.call_count <= _jobs.LANG_CHECKS
+    assert det.call_count <= _job.LANG_CHECKS
     with patch.object(_jobs, "detect_language", return_value=("ja", 0.99)) as det:
         snap = _run(pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "right-lang"}))
     assert snap["notice"] == "" and det.call_count == 1
@@ -1562,14 +1565,14 @@ def test_a_sung_stutter_is_a_lyric_not_a_loop():
 
 def test_thanks_for_watching_in_chinese_is_hidden():
     for line in ("谢谢观看", "謝謝觀看", "谢谢收看"):
-        assert _jobs._hidden(line), line
-    assert not _jobs._hidden("谢谢你")  # "thank you" in a lyric
+        assert _lines.is_unwanted(line), line
+    assert not _lines.is_unwanted("谢谢你")  # "thank you" in a lyric
 
 
 def test_a_line_heard_by_both_regions_at_a_cut_is_shown_once(pipeline):
     line = "وظننت أنا أني بذلك حست غنى"
     for order in ((0, 1), (1, 0)):
-        job = _jobs.Job(("twice", "ar", "", "m"), {"language": "ar"})
+        job = _job.Job(("twice", "ar", "", "m"), {"language": "ar"})
         job.regions, job.region_state = [(0.0, 20.4), (20.4, 43.2)], ["pending", "pending"]
         raw = {
             0: [_seg(14.3, 19.5, "فبدوت شخصا آخر كي أتفخر"), _seg(19.5, 24.8, line)],  # cut at 20.4
@@ -1594,7 +1597,7 @@ def test_a_long_line_heard_by_both_regions_at_a_cut_is_shown_once(pipeline):
     # are timed differently, so the last piece of one region never equalled the
     # first piece of the next, and the whole line was shown twice.
     for order in ((0, 1), (1, 0)):
-        job = _jobs.Job(("long", "ru", "", "m"), {"language": "ru"})
+        job = _job.Job(("long", "ru", "", "m"), {"language": "ru"})
         job.regions, job.region_state = [(0.0, 20.4), (20.4, 50.0)], ["pending", "pending"]
         raw = {
             0: [_seg(3.0, 11.0, "Я помню."), _seg(12.0, 26.0, LONG)],
@@ -1615,7 +1618,7 @@ def test_library_export_shows_a_long_line_heard_by_both_regions_once(pipeline):
     store.put_video("long", "https://x", "t", 50.0, [[0.0, 20.4], [20.4, 50.0]])
     store.put_transcript("long", "ru", "m", 0.0, 20.4, [_raw(12.0, 26.0, LONG)])
     store.put_transcript("long", "ru", "m", 20.4, 50.0, [_raw(20.4, 34.0, LONG), _raw(35.0, 40.0, "Шли годы.")])
-    srt, n = _jobs.library_export("long", "ru", "m", None)
+    srt, n = _export.library_export("long", "ru", "m", None)
     assert srt.count("Я помню чудное мгновенье") == 1, srt
     assert "00:00:12,000 -->" in srt and "--> 00:00:34,000" in srt
 
@@ -1624,7 +1627,7 @@ def test_a_long_line_is_kept_in_the_pieces_of_the_region_that_held_more_of_it(pi
     # Region 0 holds 2.5 s of the line: one 157-column piece. Region 1 holds
     # 19.5 s and cuts it in two: those two are kept, over both regions' share.
     for order in ((0, 1), (1, 0)):
-        job = _jobs.Job(("more", "ru", "", "m"), {"language": "ru"})
+        job = _job.Job(("more", "ru", "", "m"), {"language": "ru"})
         job.regions, job.region_state = [(0.0, 14.5), (14.5, 50.0)], ["pending", "pending"]
         raw = {
             0: [_seg(3.0, 11.0, "Я помню."), _seg(12.0, 26.0, LONG)],
@@ -1653,7 +1656,7 @@ def test_the_end_of_a_line_heard_again_after_the_cut_is_shown_once(pipeline):
     # SBS Korean news: region 0 wrote its last line on past the cut, region 1
     # wrote what it heard after the cut; both were shown
     for order in ((0, 1), (1, 0)):
-        job = _jobs.Job(("tail", "ko", "", "m"), {"language": "ko"})
+        job = _job.Job(("tail", "ko", "", "m"), {"language": "ko"})
         job.regions, job.region_state = [(0.0, 20.7), (20.7, 45.0)], ["pending", "pending"]
         for idx in order:
             job.add_region(idx, (TAIL_LEFT, TAIL_RIGHT)[idx])
@@ -1673,7 +1676,7 @@ def test_the_end_of_a_line_heard_again_after_the_cut_is_shown_once(pipeline):
     ],
 )
 def test_a_line_that_only_ends_like_the_next_one_is_kept(pipeline, left, right):
-    job = _jobs.Job(("tail", "ko", "", "m"), {"language": "ko"})
+    job = _job.Job(("tail", "ko", "", "m"), {"language": "ko"})
     job.regions, job.region_state = [(0.0, 20.7), (20.7, 45.0)], ["pending", "pending"]
     job.add_region(0, [left])
     job.add_region(1, [right])
@@ -1685,7 +1688,7 @@ def test_library_export_shows_the_end_of_a_line_heard_again_once(pipeline):
     store.put_video("tail", "https://x", "t", 45.0, [[0.0, 20.7], [20.7, 45.0]])
     store.put_transcript("tail", "ko", "m", 0.0, 20.7, [_raw(s["start"], s["end"], s["text"]) for s in TAIL_LEFT])
     store.put_transcript("tail", "ko", "m", 20.7, 45.0, [_raw(s["start"], s["end"], s["text"]) for s in TAIL_RIGHT])
-    srt, n = _jobs.library_export("tail", "ko", "m", None)
+    srt, n = _export.library_export("tail", "ko", "m", None)
     assert n == 3 and srt.count("로고가 보입니다") == 1
     assert "00:00:19,480 --> 00:00:23,700" in srt
 
@@ -1696,7 +1699,7 @@ def test_library_export_shows_a_line_heard_by_both_regions_once(pipeline):
     store.put_video("twice", "https://x", "t", 43.2, [[0.0, 20.4], [20.4, 43.2]])
     store.put_transcript("twice", "ar", "m", 0.0, 20.4, [_raw(19.5, 24.8, line)])
     store.put_transcript("twice", "ar", "m", 20.4, 43.2, [_raw(20.4, 24.8, line), _raw(24.8, 30.4, "مظاهر")])
-    srt, n = _jobs.library_export("twice", "ar", "m", None)
+    srt, n = _export.library_export("twice", "ar", "m", None)
     assert n == 2 and srt.count(line) == 1
     assert "00:00:19,500 --> 00:00:24,800" in srt
 
@@ -1742,12 +1745,12 @@ def test_a_short_or_quick_line_is_not_cut():
 
 
 def test_a_long_line_reaches_the_job_in_pieces_each_judged_by_the_filter(pipeline):
-    job = _jobs.Job(("rap", "ru", "", "m"), {"language": "ru"})
+    job = _job.Job(("rap", "ru", "", "m"), {"language": "ru"})
     job.regions, job.region_state = [(101.75, 123.3)], ["pending"]
     job.add_region(0, [_seg(101.75, 123.2, RAP)])
     assert len(job.segments) == 5 and not any(s["hidden"] for s in job.segments.values())
 
-    job = _jobs.Job(("credits", "ru", "", "m"), {"language": "ru"})
+    job = _job.Job(("credits", "ru", "", "m"), {"language": "ru"})
     job.regions, job.region_state = [(0.0, 30.0)], ["pending"]
     job.add_region(0, [_seg(0.0, 25.0, "Субтитры создавал DimaTorzok. " + RAP)])
     hidden = [s["text"] for s in job.segments.values() if s["hidden"]]
@@ -1767,7 +1770,7 @@ def _picker(*jobs):
 
 
 def _llm_job(params, lines, playhead=0.0):
-    job = _jobs.Job(("pick", "ja", "", "m"), {"language": "ja", **params, "playhead": playhead})
+    job = _job.Job(("pick", "ja", "", "m"), {"language": "ja", **params, "playhead": playhead})
     for i, (start, translation, romaji) in enumerate(lines):
         job.segments[i] = {
             "id": i, "start": start, "end": start + 2, "text": f"行{i}", "hidden": False,
@@ -1789,7 +1792,7 @@ def test_the_llm_works_on_what_is_on_screen_first():
     # ...and with nothing due soon, a full batch, then the lines behind the playhead
     job.playhead = 200.0
     _j, kind, batch = _picker(job)._pick_llm_batch()
-    assert len(batch) == _jobs.BATCH_SIZE and batch[0]["start"] == 5.0
+    assert len(batch) == _job.BATCH_SIZE and batch[0]["start"] == 5.0
     for s in job.segments.values():
         s["translation"] = s["translation"] or "x"
     # translations done: LLM romanization (Arabic, or no romanizer) when asked for
