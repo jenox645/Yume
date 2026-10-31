@@ -38,6 +38,7 @@ class Spin:
 
 @pytest.fixture
 def said(monkeypatch):
+    """What the launcher printed through the ui helpers."""
     lines = []
     for name in ("info", "warn", "error", "success"):
         monkeypatch.setattr(launch, name, lambda msg, name=name: lines.append(f"{name}: {msg}"))

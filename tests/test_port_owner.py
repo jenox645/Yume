@@ -148,8 +148,7 @@ def test_macos_explains_airplay_on_port_5000():
             patch.object(ports, "ask_arrow", lambda *a, **k: 3),
             patch.object(ports, "warn", out.append),
             patch.object(ports, "info", out.append),
-            patch.object(ports, "IS_MAC", mac, create=True),
-            patch("platform.system", lambda: "Darwin" if mac else "Windows"),
+            patch.object(ports, "IS_MAC", mac),
         ):
             ports.ensure_port_free(port, {}, "translation")
         return out

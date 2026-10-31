@@ -184,17 +184,7 @@ def _launch_inner(cfg: dict, procs: servers.Processes) -> None:
     runtime_menu(cfg, procs, bk)
 
 
-def _report(result: servers.StartResult, spin: Spinner | None, ready_msg: str, slow_msg: list[str]) -> bool:
-    """Show how starting a server went. False = stop launching (after a pause)."""
-    if spin is not None:
-        spin.finish("ok" if result.ok else "timeout" if result.timed_out else "failed")
-    if result.ok:
-        success(ready_msg)
-        return True
-    if result.timed_out:  # a large model can take longer: keep going
-        for i, line in enumerate(slow_msg):
-            (warn if i == 0 else info)(line)
-        return True
+def _show_crash(result: servers.StartResult) -> None:
     error(result.error)
     if result.log_name:
         for line in servers.log_tail(result.log_name)[-10:]:
@@ -206,19 +196,27 @@ def _report(result: servers.StartResult, spin: Spinner | None, ready_msg: str, s
             info(line)
     if result.log_name:
         info(f"Full log: {LOGS_DIR / result.log_name}")
+
+
+def _report(result: servers.StartResult, spin: Spinner, ready_msg: str, slow_msg: list[str]) -> bool:
+    """Show how starting a server went. False = stop launching (after a pause)."""
+    if result.ok:
+        spin.finish("ok")
+        success(ready_msg)
+        return True
+    if result.timed_out:  # a large model can take longer: keep going
+        spin.finish("timeout")
+        for i, line in enumerate(slow_msg):
+            (warn if i == 0 else info)(line)
+        return True
+    spin.finish("failed")
+    _show_crash(result)
     pause()
     return False
 
 
-def _start_llamacpp(cfg: dict, procs: servers.Processes, bi: dict, env: dict) -> bool:
-    """Start the llama.cpp translation server (after the install prompts it may
-    need). False = launching cannot go on."""
-    from yume import llama_server
-    from yume.installers import install_llamacpp_python
-
-    if check_translation_server(cfg["translation_host"], cfg["translation_port"], bi)["up"]:
-        success("llama.cpp server already running!")
-        return True
+def _pick_gguf(cfg: dict) -> str | None:
+    """The model llama.cpp will load; None (said why) without one."""
     configured = cfg.get("gguf_model_path", "")
     gp = servers.resolve_gguf(cfg)
     if gp is None:
@@ -226,38 +224,59 @@ def _start_llamacpp(cfg: dict, procs: servers.Processes, bi: dict, env: dict) ->
         info("Fix: Main Menu → Tools → Download GGUF Model")
         info(f"Or: place a .gguf file in {GGUF_DIR}")
         pause()
-        return False
-    if gp != configured:
+    elif gp != configured:
         info(f"Auto-selected GGUF: {Path(gp).name}")
+    return gp
+
+
+def _ensure_python_engine(env: dict) -> bool:
+    """llama-cpp-python and the packages its server needs. False = launching cannot go on."""
+    from yume.installers import install_llamacpp_python
+
+    try:
+        import llama_cpp  # noqa: F401
+    except ImportError:
+        error("llama-cpp-python not installed! This is the translation engine.")
+        info(f"You can also install it manually: {C.CYAN}pip install llama-cpp-python{C.RESET}")
+        if ask_yn("Install now?"):
+            install_llamacpp_python()
+        else:
+            pause()
+        return False
+    try:
+        import fastapi  # noqa: F401
+        import uvicorn  # noqa: F401
+    except ImportError:
+        warn("Server dependencies missing (uvicorn/fastapi)")
+        info("Installing them now...")
+        try:
+            _run([sys.executable, "-m", "pip", "install", *servers.LLAMA_SERVER_DEPS, "-q",
+                  "--no-warn-script-location"], timeout=300, env=env)  # fmt: skip
+            success("Server dependencies installed!")
+        except Exception as e:
+            error(f"Failed to install: {e}")
+            pause()
+            return False
+    return True
+
+
+def _start_llamacpp(cfg: dict, procs: servers.Processes, bi: dict, env: dict) -> bool:
+    """Start the llama.cpp translation server (after the install prompts it may
+    need). False = launching cannot go on."""
+    from yume import llama_server
+
+    if check_translation_server(cfg["translation_host"], cfg["translation_port"], bi)["up"]:
+        success("llama.cpp server already running!")
+        return True
+    gp = _pick_gguf(cfg)
+    if gp is None:
+        return False
 
     native = llama_server.server_path() is not None
     if not native and _offer_llama_server():
         native = llama_server.server_path() is not None
-    if not native:
-        try:
-            import llama_cpp  # noqa: F401
-        except ImportError:
-            error("llama-cpp-python not installed! This is the translation engine.")
-            info(f"You can also install it manually: {C.CYAN}pip install llama-cpp-python{C.RESET}")
-            if ask_yn("Install now?"):
-                install_llamacpp_python()
-            else:
-                pause()
-            return False
-        try:
-            import fastapi  # noqa: F401
-            import uvicorn  # noqa: F401
-        except ImportError:
-            warn("Server dependencies missing (uvicorn/fastapi)")
-            info("Installing them now...")
-            try:
-                _run([sys.executable, "-m", "pip", "install", *servers.LLAMA_SERVER_DEPS, "-q",
-                      "--no-warn-script-location"], timeout=300, env=env)  # fmt: skip
-                success("Server dependencies installed!")
-            except Exception as e:
-                error(f"Failed to install: {e}")
-                pause()
-                return False
+    if not native and not _ensure_python_engine(env):
+        return False
 
     if not kill_port_process(cfg["translation_port"]):  # asks before killing another program
         error(f"Port {cfg['translation_port']} is still in use — cannot start the translation server.")

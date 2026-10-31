@@ -183,22 +183,16 @@ def _welcome() -> None:
     print()
 
 
-def _scan_hardware(cfg: dict) -> dict:
-    """Step 1: show GPU, RAM and disk; pick the Whisper model, device and precision."""
-    _step(1, "Detecting Hardware")
-    info(f"{C.DIM}Scanning GPU, RAM, and disk to recommend the best settings...{C.RESET}")
-    print()
-    gpu = detect_gpu()
-    ram = detect_ram_gb()
-    disk = disk_free_gb()
-
-    pyver = f"{sys.version_info.major}.{sys.version_info.minor}"
+def _warn_new_python() -> None:
     if sys.version_info >= (3, 13):
-        warn(f"Python {pyver} detected — some packages may need to build from source.")
+        warn(
+            f"Python {sys.version_info.major}.{sys.version_info.minor} detected — some packages may need to build from source."
+        )
         info("This requires C++ build tools. If installs fail, use Python 3.11 or 3.12.")
         print()
 
-    rocm = bool(gpu.get("has_amd")) and not IS_WIN
+
+def _show_hardware(gpu: dict, rocm: bool, ram: float, disk: float) -> None:
     if gpu["has_nvidia"]:
         success(f"GPU:  {gpu['name']} ({gpu['vram_mb']} MB)")
     elif rocm:
@@ -210,6 +204,8 @@ def _scan_hardware(cfg: dict) -> dict:
     success(f"RAM:  {ram:.1f} GB")
     (success if disk >= 10 else warn)(f"Disk: {disk:.1f} GB free" + ("" if disk >= 10 else " -- need ~8 GB"))
 
+
+def _pick_whisper_model(cfg: dict, gpu: dict) -> None:
     existing_model = cfg.get("whisper_model", "")
     if existing_model and (os.path.sep in existing_model or "/" in existing_model):
         info(f"Custom Whisper model preserved: {C.BOLD}{Path(existing_model).name}{C.RESET}")
@@ -219,6 +215,8 @@ def _scan_hardware(cfg: dict) -> dict:
         info(f"Recommendation: {rec_reason}")
         cfg["whisper_model"] = rec_model
 
+
+def _pick_whisper_device(cfg: dict, gpu: dict, rocm: bool) -> None:
     if gpu["has_nvidia"]:
         cfg["whisper_device"] = "cuda"
         cfg["whisper_compute_type"] = _compute_type(gpu["vram_mb"])
@@ -229,6 +227,21 @@ def _scan_hardware(cfg: dict) -> dict:
     else:
         cfg["whisper_device"] = "cpu"
         cfg["whisper_compute_type"] = "int8"
+
+
+def _scan_hardware(cfg: dict) -> dict:
+    """Step 1: show GPU, RAM and disk; pick the Whisper model, device and precision."""
+    _step(1, "Detecting Hardware")
+    info(f"{C.DIM}Scanning GPU, RAM, and disk to recommend the best settings...{C.RESET}")
+    print()
+    gpu = detect_gpu()
+    ram = detect_ram_gb()
+    disk = disk_free_gb()
+    _warn_new_python()
+    rocm = bool(gpu.get("has_amd")) and not IS_WIN
+    _show_hardware(gpu, rocm, ram, disk)
+    _pick_whisper_model(cfg, gpu)
+    _pick_whisper_device(cfg, gpu, rocm)
     return gpu
 
 

@@ -9,7 +9,7 @@ from yume.constants import ARCH, GiB, HEALTH_PATH_OPENAI, PLAT, backend_info
 from yume.hardware import detect_gpu, detect_ram_gb, disk_free_gb
 from yume.health import tools_menu_path
 from yume.network import check_server
-from yume.ports import get_port_process, is_port_free
+from yume.ports import port_owners
 from yume.ui import C, bullet, header, info, section, table, warn
 from yume.utils import find_gguf_models, find_tool
 
@@ -135,17 +135,11 @@ def _status_models(cfg: dict) -> None:
 
 
 def _status_ports(cfg: dict) -> None:
-    from config import DEFAULT_TRANSLATION_PORT
-
     section("Ports")
-    for label, key in [("Whisper", "whisper"), ("Translation", "translation")]:
-        host = cfg.get(f"{key}_host", "127.0.0.1")
-        port = cfg.get(f"{key}_port", DEFAULT_TRANSLATION_PORT)
-        if is_port_free(port, host):
+    for label, host, port, who in port_owners(cfg):
+        if who is None:
             info(f"{label:12s} {host}:{port}  {C.GREEN}available{C.RESET}")
         else:
-            pid, name = get_port_process(port)
-            who = f"{name} (PID {pid})" if pid else "unknown process"
             warn(f"{label:12s} {host}:{port}  {C.RED}in use{C.RESET} by {who}")
 
 

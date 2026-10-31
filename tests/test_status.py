@@ -139,8 +139,8 @@ def test_models_report_the_gguf_in_use_or_those_available(capsys, tmp_path):
 
 def test_status_ports_say_who_holds_a_busy_port(capsys):
     with (
-        patch.object(status, "is_port_free", lambda port, host: port == 5001),
-        patch.object(status, "get_port_process", lambda port: (77, "other.exe")),
+        patch.object(ports, "is_port_free", lambda port, host: port == 5001),
+        patch.object(ports, "get_port_process", lambda port: (77, "other.exe")),
     ):
         status._status_ports(CFG)
     out = capsys.readouterr().out

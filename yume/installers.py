@@ -10,6 +10,7 @@ import tarfile
 import time
 import zipfile
 
+from config import DEFAULT_OLLAMA_PORT
 from yume import po_token
 from yume.constants import BASE_DIR, TOOLS_DIR, IS_WIN, IS_MAC, IS_LIN, EXE, HEALTH_PATH_OLLAMA, DOWNLOAD_URLS
 from yume.llama_python import (
@@ -31,6 +32,8 @@ _pip_venv_warned = False
 # guards against corrupted/truncated downloads, not a compromised release.)
 _YTDLP_SUMS = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS"
 _BTBN_SUMS = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/checksums.sha256"
+
+_VS_BUILD_TOOLS = "https://visualstudio.microsoft.com/visual-cpp-build-tools/"
 
 
 def _expected_sha256(url: str) -> str | None:
@@ -206,58 +209,80 @@ def _install_deno_exe() -> bool:
         return False
 
 
-def install_ollama() -> bool:
+def _install_ollama_windows() -> bool:
     from yume.network import check_server, download_file
+    from yume.ui import pause
 
+    TOOLS_DIR.mkdir(parents=True, exist_ok=True)
+    inst = TOOLS_DIR / "OllamaSetup.exe"
+    if not download_file(DOWNLOAD_URLS.get("ollama", ""), inst, "Ollama installer"):
+        return False
+    print(f"\n  {C.YELLOW}The Ollama installer will now open. Follow the prompts.{C.RESET}\n")
+    pause("Press Enter to launch installer...")
+    try:
+        subprocess.Popen([str(inst)])
+        info("Waiting for Ollama...")
+        for _ in range(90):
+            time.sleep(2)
+            if find_ollama() or check_server("127.0.0.1", DEFAULT_OLLAMA_PORT, HEALTH_PATH_OLLAMA)["up"]:
+                success("Ollama installed!")
+                inst.unlink(missing_ok=True)
+                return True
+        warn("Timed out.")
+        return False
+    except Exception as e:
+        error(f"Failed: {e}")
+        return False
+
+
+def _install_ollama_mac() -> bool:
+    from yume.network import download_file
+
+    zp = TOOLS_DIR / "Ollama.zip"
+    if not download_file(DOWNLOAD_URLS.get("ollama", ""), zp, "Ollama"):
+        return False
+    info("Extract and move to Applications manually.")
+    return True
+
+
+def _install_ollama_linux() -> bool:
+    from yume.network import download_file
+
+    info("Installing Ollama via official script...")
+    script = TOOLS_DIR / "ollama_install.sh"
+    TOOLS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        if not download_file(DOWNLOAD_URLS.get("ollama", ""), script, "Ollama install script"):
+            return False
+        script.chmod(UNIX_EXEC_MODE)
+        # Not captured: the script asks for the sudo password
+        r = _run(["bash", str(script)], timeout=900, capture_output=False)
+        script.unlink(missing_ok=True)
+        return r.returncode == 0
+    except Exception as e:
+        error(f"Failed: {e}")
+        script.unlink(missing_ok=True)
+        return False
+
+
+def install_ollama() -> bool:
     if IS_WIN:
-        TOOLS_DIR.mkdir(parents=True, exist_ok=True)
-        inst = TOOLS_DIR / "OllamaSetup.exe"
-        if not download_file(DOWNLOAD_URLS.get("ollama", ""), inst, "Ollama installer"):
-            return False
-        print(f"\n  {C.YELLOW}The Ollama installer will now open. Follow the prompts.{C.RESET}\n")
-        from yume.ui import pause
+        return _install_ollama_windows()
+    return _install_ollama_mac() if IS_MAC else _install_ollama_linux()
 
-        pause("Press Enter to launch installer...")
-        try:
-            subprocess.Popen([str(inst)])
-            info("Waiting for Ollama...")
-            for _ in range(90):
-                time.sleep(2)
-                if find_ollama() or check_server("127.0.0.1", 11434, "/api/tags")["up"]:
-                    success("Ollama installed!")
-                    inst.unlink(missing_ok=True)
-                    return True
-            warn("Timed out.")
-            return False
-        except Exception as e:
-            error(f"Failed: {e}")
-            return False
-    elif IS_MAC:
-        from yume.network import download_file
 
-        zp = TOOLS_DIR / "Ollama.zip"
-        if not download_file(DOWNLOAD_URLS.get("ollama", ""), zp, "Ollama"):
-            return False
-        info("Extract and move to Applications manually.")
-        return True
+def _show_pip_failure(stderr: str | None) -> None:
+    error("pip install failed. Error output:")
+    stderr_text = (stderr or "").strip()
+    if stderr_text:
+        for line in stderr_text.splitlines()[-15:]:
+            print(f"    {C.DIM}{line}{C.RESET}")
     else:
-        info("Installing Ollama via official script...")
-        script = TOOLS_DIR / "ollama_install.sh"
-        TOOLS_DIR.mkdir(parents=True, exist_ok=True)
-        try:
-            from yume.network import download_file
-
-            if not download_file(DOWNLOAD_URLS.get("ollama", ""), script, "Ollama install script"):
-                return False
-            script.chmod(UNIX_EXEC_MODE)
-            # Not captured: the script asks for the sudo password
-            r = _run(["bash", str(script)], timeout=900, capture_output=False)
-            script.unlink(missing_ok=True)
-            return r.returncode == 0
-        except Exception as e:
-            error(f"Failed: {e}")
-            script.unlink(missing_ok=True)
-            return False
+        print(f"    {C.DIM}(no error output captured — try running with --verbose){C.RESET}")
+    if IS_WIN and ("Microsoft Visual C++" in stderr_text or "cl.exe" in stderr_text):
+        error("This looks like a missing C++ compiler.")
+        info("Install Visual Studio Build Tools:")
+        info(f"  {_VS_BUILD_TOOLS}")
 
 
 def install_python_deps() -> bool:
@@ -274,7 +299,7 @@ def install_python_deps() -> bool:
     if IS_WIN and not has_build_tools():
         warn("C++ build tools not detected.")
         info("If the install fails, you may need Visual Studio Build Tools:")
-        info("  https://visualstudio.microsoft.com/visual-cpp-build-tools/")
+        info(f"  {_VS_BUILD_TOOLS}")
 
     info("Installing Whisper server Python packages...")
     try:
@@ -282,17 +307,7 @@ def install_python_deps() -> bool:
             [sys.executable, "-m", "pip", "install", "-r", str(req), "-q", "--no-warn-script-location"], timeout=600
         )
         if r.returncode != 0:
-            error("pip install failed. Error output:")
-            stderr_text = (r.stderr or "").strip()
-            if stderr_text:
-                for line in stderr_text.splitlines()[-15:]:
-                    print(f"    {C.DIM}{line}{C.RESET}")
-            else:
-                print(f"    {C.DIM}(no error output captured — try running with --verbose){C.RESET}")
-            if IS_WIN and ("Microsoft Visual C++" in (r.stderr or "") or "cl.exe" in (r.stderr or "")):
-                error("This looks like a missing C++ compiler.")
-                info("Install Visual Studio Build Tools:")
-                info("  https://visualstudio.microsoft.com/visual-cpp-build-tools/")
+            _show_pip_failure(r.stderr)
             return False
         success("Done!")
         return True
@@ -327,7 +342,6 @@ def install_llamacpp_python() -> bool:
 
 def _ensure_ollama_serving(ollama: str) -> bool:
     """`ollama pull` talks to the Ollama server: start one (detached) when none answers."""
-    from config import DEFAULT_OLLAMA_PORT
     from yume.network import check_server
 
     if check_server("127.0.0.1", DEFAULT_OLLAMA_PORT, HEALTH_PATH_OLLAMA)["up"]:

@@ -174,19 +174,16 @@ def _as_rows(result) -> list:
     return result if isinstance(result, list) else [result]
 
 
-def _run_checks(cfg: dict) -> list:
-    """Run every check in parallel; rows come back in display order."""
-    from config import DEFAULT_TRANSLATION_PORT, DEFAULT_WHISPER_PORT, load_config
-
+def _check_list(cfg: dict, c: dict, wp: int, tp: int) -> list:
+    """(check, *its arguments) in display order."""
     from yume import llama_server, vocals
 
-    c = load_config()
-    wp = c.get("whisper_port", DEFAULT_WHISPER_PORT)
-    tp = c.get("translation_port", DEFAULT_TRANSLATION_PORT)
-    uses_llamacpp = cfg.get("translation_backend", "llamacpp") == "llamacpp"
-    native = llama_server.server_path() is not None  # llama-server replaces llama-cpp-python
-
-    checks = [
+    engine = []
+    if cfg.get("translation_backend", "llamacpp") == "llamacpp":
+        if llama_server.server_path() is None:  # llama-server replaces llama-cpp-python
+            engine.append((_chk_pkg, "llama_cpp", "llama-cpp-python"))
+        engine.append((_chk_llama_cuda,))
+    return [
         (_chk_system,),
         (_chk_tool, "yt-dlp"),
         (_chk_tool, "ffmpeg"),
@@ -196,27 +193,35 @@ def _run_checks(cfg: dict) -> list:
         (_chk_pkg, "faster_whisper", "faster-whisper"),
         (_chk_pkg, "flask", "Flask"),
         (_chk_requirements,),
-    ]
-    if uses_llamacpp and not native:
-        checks.append((_chk_pkg, "llama_cpp", "llama-cpp-python"))
-    if uses_llamacpp:
-        checks.append((_chk_llama_cuda,))
-    roma = [
+        *engine,
         (_chk_cutlet,),
         (_chk_roma, "pykakasi", "Japanese romaji fallback"),
         (_chk_roma, "pypinyin", "Chinese pinyin"),
+        (vocals.health_row, cfg),
+        (_chk_translation_srv, c, tp),
+        (_chk_whisper_srv, wp),
     ]
-    checks += [*roma, (vocals.health_row, cfg), (_chk_translation_srv, c, tp), (_chk_whisper_srv, wp)]
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
-        futures = [ex.submit(fn, *args) for fn, *args in checks]
-        results = [row for f in futures for row in _as_rows(f.result())]
 
+def _romanization_tip(results: list) -> None:
     roma_names = {"Japanese by word", "pykakasi", "pypinyin"}
     if not any(name in roma_names and "not installed" not in detail for name, _ok, detail in results):
         info(f"\n  {C.DIM}Tip: Install romanization libraries for instant romaji/pinyin:{C.RESET}")
         info(f"  {C.CYAN}pip install pykakasi pypinyin{C.RESET}")
         info(f"  {C.DIM}Without them, Yume uses the LLM for romanization (slower).{C.RESET}\n")
+
+
+def _run_checks(cfg: dict) -> list:
+    """Run every check in parallel; rows come back in display order."""
+    from config import DEFAULT_TRANSLATION_PORT, DEFAULT_WHISPER_PORT, load_config
+
+    c = load_config()
+    wp = c.get("whisper_port", DEFAULT_WHISPER_PORT)
+    tp = c.get("translation_port", DEFAULT_TRANSLATION_PORT)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+        futures = [ex.submit(fn, *args) for fn, *args in _check_list(cfg, c, wp, tp)]
+        results = [row for f in futures for row in _as_rows(f.result())]
+    _romanization_tip(results)
 
     # The config rows go between vocal isolation and the servers
     at = next(i for i, r in enumerate(results) if r[0].startswith("Translation port"))
@@ -323,6 +328,15 @@ def _fix_advice(name: str, detail: str) -> list[str]:
     return []
 
 
+def _show_failures(fails: list[tuple[str, str]]) -> None:
+    warn(f"{len(fails)} issue(s) found: {', '.join(name for name, _ in fails)}")
+    print()
+    for name, detail in fails:
+        for line in _fix_advice(name, detail):
+            info(line)
+    print()
+
+
 def health_check(cfg: dict) -> bool:
     """Comprehensive health check — all checks run in parallel for speed.
     True when every check passed."""
@@ -331,8 +345,7 @@ def health_check(cfg: dict) -> bool:
     print()
     results = _run_checks(cfg)
 
-    ok = sum(1 for _, p, _ in results if p)
-    total = len(results)
+    fails = [(name, detail) for name, passed, detail in results if not passed]
     table(
         ["Check", "Result", "Details"],
         [
@@ -340,19 +353,13 @@ def health_check(cfg: dict) -> bool:
             for name, passed, detail in results
         ],
         col_styles=[C.RESET, C.RESET, C.DIM],
-        title=f"Health Check — {ok}/{total} passed",
+        title=f"Health Check — {len(results) - len(fails)}/{len(results)} passed",
     )
     print()
-    if ok == total:
-        success("All checks passed! Yume is ready to launch.")
+    if fails:
+        _show_failures(fails)
     else:
-        fails = [(name, detail) for name, passed, detail in results if not passed]
-        warn(f"{total - ok} issue(s) found: {', '.join(name for name, _ in fails)}")
-        print()
-        for name, detail in fails:
-            for line in _fix_advice(name, detail):
-                info(line)
-        print()
+        success("All checks passed! Yume is ready to launch.")
 
     # Quick perf estimate
     rec_model, rec_reason = recommend_whisper_model(detect_gpu())
@@ -362,7 +369,7 @@ def health_check(cfg: dict) -> bool:
         title="Performance Estimate",
         style=C.CYAN,
     )
-    return ok == total
+    return not fails
 
 
 _FONT_EXTENSIONS = {".ttf", ".otf", ".ttc", ".woff", ".woff2"}

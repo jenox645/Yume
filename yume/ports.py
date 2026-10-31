@@ -7,17 +7,17 @@ import re
 import socket as _socket
 import time
 
-from config import DEFAULT_TRANSLATION_PORT, DEFAULT_WHISPER_PORT
-from yume.constants import IS_WIN
-from yume.ui import C, ask_arrow, ask_input, ask_yn, error, info, success, warn
+from config import DEFAULT_TRANSLATION_PORT, DEFAULT_WHISPER_PORT, MAX_PORT
+from yume.constants import IS_MAC, IS_WIN
+from yume.ui import C, ask_arrow, ask_input, ask_yn, error, info, section, success, warn
 
 _log = logging.getLogger("pocket_yume")
 
 
 MIN_PORT = 1
-MAX_PORT = 65535
 FIRST_UNPRIVILEGED_PORT = 1024
 IANA_EPHEMERAL_START = 49152
+AIRPLAY_PORT = 5000
 
 # What Yume itself runs on its ports. Ollama / llama-server are their own
 # binaries; Whisper and llama-cpp-python are Python, and "python" alone is not
@@ -58,7 +58,7 @@ def is_yume_process(pid: int, name: str | None) -> bool:
 
 
 def is_port_free(port: int, host: str = "127.0.0.1") -> bool:
-    if not isinstance(port, int) or port < 1 or port > 65535:
+    if not isinstance(port, int) or not MIN_PORT <= port <= MAX_PORT:
         return False
     # Something accepting connections means busy, even when bind() below would
     # succeed (Windows lets 127.0.0.1 bind next to a listener on 0.0.0.0).
@@ -67,20 +67,13 @@ def is_port_free(port: int, host: str = "127.0.0.1") -> bool:
             return False
     except OSError:
         pass
-    s = None
     try:
-        s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-        s.settimeout(1)
-        s.bind((host, port))
+        with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+            s.settimeout(1)
+            s.bind((host, port))
         return True
-    except (OSError, _socket.error):
+    except OSError:
         return False
-    finally:
-        if s:
-            try:
-                s.close()
-            except Exception:
-                pass
 
 
 def find_free_port(start: int = DEFAULT_TRANSLATION_PORT, exclude: set | None = None) -> int | None:
@@ -102,24 +95,31 @@ def _tool_lines(cmd: list[str], timeout: int = 10) -> list[str]:
     return (r.stdout or "").splitlines() if r.returncode == 0 else []
 
 
-def _listening_pid(port: int) -> int | None:
-    """The PID of the process LISTENING on the port (never a client connected to it)."""
+def _windows_listening_pid(port: int) -> int | None:
     on_port = re.compile(rf":{port}(?:\s|$)")
-    if IS_WIN:
-        for line in _tool_lines(["netstat", "-ano"]):
-            parts = line.split()
-            if on_port.search(line) and "LISTENING" in line and parts[-1].isdigit() and int(parts[-1]):
-                return int(parts[-1])
-        return None
+    for line in _tool_lines(["netstat", "-ano"]):
+        parts = line.split()
+        if on_port.search(line) and "LISTENING" in line and parts[-1].isdigit() and int(parts[-1]):
+            return int(parts[-1])
+    return None
+
+
+def _posix_listening_pid(port: int) -> int | None:
     # -sTCP:LISTEN: plain "lsof -ti :PORT" also lists clients (e.g. the browser)
     pids = [ln.strip() for ln in _tool_lines(["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"]) if ln.strip()]
     if pids and pids[0].isdigit():
         return int(pids[0])
+    on_port = re.compile(rf":{port}(?:\s|$)")
     for line in _tool_lines(["ss", "-tlnp"]):
         m = re.search(r"pid=(\d+)", line) if on_port.search(line) else None
         if m:
             return int(m.group(1))
     return None
+
+
+def _listening_pid(port: int) -> int | None:
+    """The PID of the process LISTENING on the port (never a client connected to it)."""
+    return _windows_listening_pid(port) if IS_WIN else _posix_listening_pid(port)
 
 
 def _process_name(pid: int) -> str:
@@ -175,7 +175,7 @@ def kill_port_process(port: int, interactive: bool = True) -> bool:
         if is_port_free(port):
             info(f"Killed {label} (PID {pid}) on port {port}")
             return True
-        return is_port_free(port)
+        return False
     except Exception as e:
         warn(f"Could not kill PID {pid}: {e}")
         return False
@@ -204,27 +204,37 @@ def stop_bgutil_server() -> None:
         _log.debug("[stop_bgutil_server] %s", e)
 
 
+def _airplay_note(port: int) -> None:
+    if IS_MAC and port == AIRPLAY_PORT:
+        info(f"{C.DIM}macOS uses port {AIRPLAY_PORT} for AirPlay Receiver.{C.RESET}")
+        info(f"{C.DIM}Disable it in System Settings > General > AirDrop & Handoff > AirPlay Receiver,{C.RESET}")
+        info(f"{C.DIM}or let Yume use a different port (recommended).{C.RESET}")
+        print()
+
+
+def _kill_owner(port: int) -> int | None:
+    if kill_port_process(port) and is_port_free(port):
+        success(f"Port {port} is now free")
+        return port
+    error("Failed to free port")
+    return None
+
+
 def ensure_port_free(port: int, cfg: dict, key_prefix: str, exclude: set | None = None) -> int | None:
     """Free up a port interactively. Returns port or None."""
     if is_port_free(port):
         return port
     pid, name = get_port_process(port)
     warn(f"Port {port} is in use by {name or 'unknown'} (PID {pid or '?'})")
-    import platform
-
-    if platform.system() == "Darwin" and port == 5000:
-        info(f"{C.DIM}macOS uses port 5000 for AirPlay Receiver.{C.RESET}")
-        info(f"{C.DIM}Disable it in System Settings > General > AirDrop & Handoff > AirPlay Receiver,{C.RESET}")
-        info(f"{C.DIM}or let Yume use a different port (recommended).{C.RESET}")
-        print()
-
+    _airplay_note(port)
+    owner = name or (f"PID {pid}" if pid else "unknown process")
     # Default = reassign, NOT kill: Enter-mashing must never terminate another
     # app's process (on macOS port 5000 is often AirPlay).
     ch = ask_arrow(
         "How to resolve?",
         [
             ("Use a different port", "Auto-find a free port (recommended)"),
-            ("Kill the process", f"Terminate {name or ('PID ' + str(pid) if pid else 'unknown process')}"),
+            ("Kill the process", f"Terminate {owner}"),
             ("Enter port manually", None),
             ("Cancel", None),
         ],
@@ -233,11 +243,7 @@ def ensure_port_free(port: int, cfg: dict, key_prefix: str, exclude: set | None 
     if ch == 0:
         return _other_port(port, cfg, key_prefix, exclude)
     if ch == 1:
-        if kill_port_process(port) and is_port_free(port):
-            success(f"Port {port} is now free")
-            return port
-        error("Failed to free port")
-        return None
+        return _kill_owner(port)
     if ch == 2:
         return _typed_port(port, cfg, key_prefix)
     return None
@@ -270,8 +276,8 @@ def _typed_port(port: int, cfg: dict, key_prefix: str) -> int | None:
     except ValueError:
         error("Invalid port")
         return None
-    if not 1 <= typed <= 65535:
-        error("Port must be between 1 and 65535")
+    if not MIN_PORT <= typed <= MAX_PORT:
+        error(f"Port must be between {MIN_PORT} and {MAX_PORT}")
         return None
     if not is_port_free(typed):
         error(f"Port {typed} is also in use")
@@ -280,21 +286,28 @@ def _typed_port(port: int, cfg: dict, key_prefix: str) -> int | None:
     return typed
 
 
-def show_ports_status(cfg: dict) -> None:
-    """Display port status overview."""
-    from yume.ui import section
-
-    section("Port Status")
+def port_owners(cfg: dict) -> list[tuple[str, str, int, str | None]]:
+    """(label, host, port, who holds it) per server; None when the port is free."""
+    rows = []
     for label, key, default_port in [
         ("Whisper", "whisper", DEFAULT_WHISPER_PORT),
         ("Translation", "translation", DEFAULT_TRANSLATION_PORT),
     ]:
         host = cfg.get(f"{key}_host", "127.0.0.1")
         port = cfg.get(f"{key}_port", default_port)
-        free = is_port_free(port, host)
-        if free:
-            info(f"{label:12s} {host}:{port}  -- {C.GREEN}free{C.RESET}")
-        else:
+        who = None
+        if not is_port_free(port, host):
             pid, name = get_port_process(port)
             who = f"{name} (PID {pid})" if pid else "unknown process"
+        rows.append((label, host, port, who))
+    return rows
+
+
+def show_ports_status(cfg: dict) -> None:
+    """Display port status overview."""
+    section("Port Status")
+    for label, host, port, who in port_owners(cfg):
+        if who is None:
+            info(f"{label:12s} {host}:{port}  -- {C.GREEN}free{C.RESET}")
+        else:
             warn(f"{label:12s} {host}:{port}  -- {C.RED}in use{C.RESET} by {who}")

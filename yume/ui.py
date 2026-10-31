@@ -320,31 +320,41 @@ def ask_input(prompt: str, default: str = "") -> str:
         return default
 
 
-def ask_choice(prompt: str, options: list, default: int = 0, allow_back: bool = True) -> int:
+def _show_choices(prompt: str, options: list, default: int) -> None:
     print(f"\n  {C.GOLD}?{C.RESET}  {prompt}\n")
     for i, (label, desc) in enumerate(options):
         mk = f"{C.GREEN}>{C.RESET}" if i == default else " "
         print(f"  {mk} {C.BOLD}{i + 1}.{C.RESET} {label}")
         if desc:
             print(f"      {C.DIM}{desc}{C.RESET}")
-    bh = ", b=back" if allow_back else ""
     print()
+
+
+def _typed_choice(reply: str, count: int, default: int, allow_back: bool) -> int | None:
+    """The option a typed reply picks (-1 = back); None = ask again."""
+    if reply == "":
+        return default
+    if reply == "b" and allow_back:
+        return -1
+    try:
+        c = int(reply) - 1
+    except ValueError:
+        return None
+    return c if 0 <= c < count else None
+
+
+def ask_choice(prompt: str, options: list, default: int = 0, allow_back: bool = True) -> int:
+    _show_choices(prompt, options, default)
+    bh = ", b=back" if allow_back else ""
     while True:
         try:
             r = input(f"  {C.DIM}[1-{len(options)}{bh}, default={default + 1}]: {C.RESET}").strip().lower()
         except (EOFError, KeyboardInterrupt):
             print()
             return -1 if allow_back else default
-        if r == "":
-            return default
-        if r == "b" and allow_back:
-            return -1
-        try:
-            c = int(r) - 1
-            if 0 <= c < len(options):
-                return c
-        except ValueError:
-            pass
+        c = _typed_choice(r, len(options), default, allow_back)
+        if c is not None:
+            return c
 
 
 def _read_byte_nonblock(fd: int) -> bytes:
@@ -421,6 +431,42 @@ def _move(sel: int, key: str, count: int) -> int:
     return sel
 
 
+def _key_stream():
+    """Key names from this console. Imports here: without them, the caller falls
+    back before anything is drawn."""
+    if IS_WIN:
+        import msvcrt  # type: ignore[import]
+
+        return _windows_keys(msvcrt)
+    import termios
+    import tty
+
+    return _posix_keys(termios, tty, sys.stdin.fileno())
+
+
+def _end_line() -> None:
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+
+
+def _arrow_menu(prompt: str, options: list, sel: int, allow_back: bool, keys) -> int:
+    """Draw the menu and follow the keys until one ends it."""
+    n = _render_arrow_menu(prompt, options, sel, allow_back)
+    for key in keys:
+        if key == "interrupt":
+            raise KeyboardInterrupt
+        # Esc never activates the highlighted item: without back it does nothing
+        if key == "enter" or (key == "esc" and allow_back):
+            _end_line()
+            return sel if key == "enter" else -1
+        new = _move(sel, key, len(options))
+        if new != sel:
+            sel = new
+            sys.stdout.write(f"\r\033[{n}A\033[J")  # rewind and clear the menu
+            n = _render_arrow_menu(prompt, options, sel, allow_back)
+    return -1
+
+
 def ask_arrow(prompt: str, options: list, default: int = 0, allow_back: bool = True) -> int:
     """Arrow-key + number-key navigated selection menu.
 
@@ -434,34 +480,9 @@ def ask_arrow(prompt: str, options: list, default: int = 0, allow_back: bool = T
 
     sel = max(0, min(default, len(options) - 1))
     try:
-        # Imported first: without them, fall back before drawing anything
-        if IS_WIN:
-            import msvcrt  # type: ignore[import]
-
-            keys = _windows_keys(msvcrt)
-        else:
-            import termios
-            import tty
-
-            keys = _posix_keys(termios, tty, sys.stdin.fileno())
-        n = _render_arrow_menu(prompt, options, sel, allow_back)
-        for key in keys:
-            if key == "interrupt":
-                raise KeyboardInterrupt
-            # Esc never activates the highlighted item: without back it does nothing
-            if key == "enter" or (key == "esc" and allow_back):
-                sys.stdout.write("\n")
-                sys.stdout.flush()
-                return sel if key == "enter" else -1
-            new = _move(sel, key, len(options))
-            if new != sel:
-                sel = new
-                sys.stdout.write(f"\r\033[{n}A\033[J")  # rewind and clear the menu
-                n = _render_arrow_menu(prompt, options, sel, allow_back)
+        return _arrow_menu(prompt, options, sel, allow_back, _key_stream())
     except KeyboardInterrupt:
-        sys.stdout.write("\n")
-        sys.stdout.flush()
+        _end_line()
         raise
     except Exception:  # no msvcrt / termios, or the terminal refused raw mode
         return ask_choice(prompt, options, default, allow_back)
-    return -1

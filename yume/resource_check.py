@@ -60,38 +60,44 @@ def _whisper_vram_mb(cfg: dict, gpu: dict) -> int:
     return needed
 
 
+def _gguf_issue(gguf: Path, has_gpu: bool, whisper_mb: int, free_vram: int) -> str | None:
+    """llama.cpp offloads every layer when there is a GPU, so the model lives in
+    VRAM next to Whisper; only without a GPU does it need system RAM."""
+    gguf_mb = int(gguf.stat().st_size / (1024 * 1024) * 1.2)
+    if has_gpu:
+        if 0 < free_vram < gguf_mb + whisper_mb:
+            both = f" (plus ~{whisper_mb / 1024:.1f} GB for Whisper)" if whisper_mb else ""
+            return (
+                f"Translation model ({gguf.name}) needs ~{gguf_mb / 1024:.1f} GB VRAM{both}, "
+                f"but only {free_vram / 1024:.1f} GB is free."
+            )
+        return None
+    free_ram = _get_available_ram_mb()
+    if 0 < free_ram < gguf_mb:
+        return (
+            f"Translation model ({gguf.name}) needs ~{gguf_mb / 1024:.1f} GB RAM, "
+            f"but only {free_ram / 1024:.1f} GB is available."
+        )
+    return None
+
+
 def _resource_issues(cfg: dict) -> list[str]:
     """What will not fit: Whisper in free VRAM, and the GGUF in VRAM (with Whisper) or RAM."""
     gpu = detect_gpu()
+    has_gpu = bool(gpu.get("has_nvidia") or gpu.get("has_amd"))
     issues = []
     whisper_mb = _whisper_vram_mb(cfg, gpu)
-    free_vram = _get_available_vram_mb() if gpu.get("has_nvidia") or gpu.get("has_amd") else 0
+    free_vram = _get_available_vram_mb() if has_gpu else 0
     if whisper_mb and 0 < free_vram < whisper_mb:
         issues.append(
             f"Whisper '{cfg.get('whisper_model', 'large-v3-turbo')}' needs ~{whisper_mb / 1024:.1f} GB VRAM, "
             f"but only {free_vram / 1024:.1f} GB is free."
         )
-
     gp = cfg.get("gguf_model_path", "")
-    if cfg.get("translation_backend", "llamacpp") != "llamacpp" or not gp or not Path(gp).exists():
-        return issues
-    # llama.cpp offloads every layer when there is a GPU, so the model lives in
-    # VRAM next to Whisper; only without a GPU does it need system RAM.
-    gguf_mb = int(Path(gp).stat().st_size / (1024 * 1024) * 1.2)
-    if gpu.get("has_nvidia") or gpu.get("has_amd"):
-        if 0 < free_vram < gguf_mb + whisper_mb:
-            both = f" (plus ~{whisper_mb / 1024:.1f} GB for Whisper)" if whisper_mb else ""
-            issues.append(
-                f"Translation model ({Path(gp).name}) needs ~{gguf_mb / 1024:.1f} GB VRAM{both}, "
-                f"but only {free_vram / 1024:.1f} GB is free."
-            )
-    else:
-        free_ram = _get_available_ram_mb()
-        if 0 < free_ram < gguf_mb:
-            issues.append(
-                f"Translation model ({Path(gp).name}) needs ~{gguf_mb / 1024:.1f} GB RAM, "
-                f"but only {free_ram / 1024:.1f} GB is available."
-            )
+    if cfg.get("translation_backend", "llamacpp") == "llamacpp" and gp and Path(gp).exists():
+        issue = _gguf_issue(Path(gp), has_gpu, whisper_mb, free_vram)
+        if issue:
+            issues.append(issue)
     return issues
 
 

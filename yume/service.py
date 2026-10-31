@@ -302,7 +302,8 @@ class _Supervisor:
         stats = server_get(self.cfg["whisper_host"], self.cfg["whisper_port"], "/stats", timeout=5)
         return bool(stats and stats.get("active"))
 
-    def run(self) -> int:
+    def _start_servers(self) -> str | None:
+        """Start what Yume runs here; the error, if a server did not come up."""
         from yume.utils import missing_requirements
 
         env = servers.build_server_env()
@@ -314,15 +315,10 @@ class _Supervisor:
         if err is None:
             self._state("starting", "Loading the speech model…")
             err = self._start_whisper(env)
-        if err:
-            if not self._stop_requested():
-                self._state("error", err)
-            return 1
-        if not self.procs:
-            _log.info("servers were already running (started elsewhere) — nothing to supervise")
-            return 0
+        return err
 
-        self._state("running")
+    def _supervise(self) -> int:
+        """Watch the servers until stopped, idle for too long, or one of them dies."""
         idle_limit = max(0.0, float(self.cfg.get("auto_stop_minutes", 30))) * 60
         last_active = time.time()
         while not self._stop_requested():
@@ -337,6 +333,18 @@ class _Supervisor:
                 _log.info("idle for %g min — stopping", idle_limit / 60)
                 break
         return 0
+
+    def run(self) -> int:
+        err = self._start_servers()
+        if err:
+            if not self._stop_requested():
+                self._state("error", err)
+            return 1
+        if not self.procs:
+            _log.info("servers were already running (started elsewhere) — nothing to supervise")
+            return 0
+        self._state("running")
+        return self._supervise()
 
     def shutdown(self) -> None:
         whisper_was_ours = "Whisper" in self.procs.names()

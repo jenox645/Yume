@@ -26,12 +26,20 @@ def _stop_all(cfg: dict, procs: servers.Processes) -> None:
         success(f"{n} stopped")
 
 
+def _worth_reading(line: str) -> bool:
+    return "[Yume]" in line or any(w in line.lower() for w in ("error", "fail", "warn"))
+
+
+def _is_request(line: str) -> bool:
+    return "HTTP/" in line and "/health" not in line
+
+
 def _log_excerpt(lines: list[str]) -> list[str]:
     """The lines of a server log worth showing: Yume's own messages and
     problems, then requests, then anything else (health checks left out)."""
     lines = lines[-2000:]  # logs reach 5 MB; only the tail matters
-    yume_lines = [ln for ln in lines if "[Yume]" in ln or any(w in ln.lower() for w in ("error", "fail", "warn"))]
-    access_lines = [ln for ln in lines if "HTTP/" in ln and "/health" not in ln]
+    yume_lines = [ln for ln in lines if _worth_reading(ln)]
+    access_lines = [ln for ln in lines if _is_request(ln)]
     seen = set(yume_lines) | set(access_lines)
     other_lines = [ln for ln in lines if ln not in seen and "GET /health" not in ln]
     shown = yume_lines[-10:] + access_lines[-5:] + other_lines[-5:]
@@ -40,7 +48,7 @@ def _log_excerpt(lines: list[str]) -> list[str]:
 
 def _show_logs() -> None:
     section("Recent Logs")
-    for name in ["whisper_server.log", "translation_server.log"]:
+    for name in [servers.WHISPER_LOG, servers.TRANSLATION_LOG]:
         lp = LOGS_DIR / name
         if not lp.exists():
             continue
