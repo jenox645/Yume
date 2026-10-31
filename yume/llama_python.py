@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 import sys
 import threading
 import time
@@ -75,9 +74,6 @@ def _pip_with_progress(cmd: list, label: str, timeout: int = 600, env: dict | No
     threading.Thread(target=_ticker, daemon=True).start()
     try:
         r = _run(cmd, timeout=timeout, **({"env": env} if env is not None else {}))
-    except subprocess.TimeoutExpired:
-        error(f"{label} — timed out after {timeout // 60} minutes")
-        return False
     except Exception as e:
         error(f"{label} — error: {e}")
         return False
@@ -89,6 +85,9 @@ def _pip_with_progress(cmd: list, label: str, timeout: int = 600, env: dict | No
     if r.returncode == 0:
         success(f"{label} — done in {m}m{s:02d}s")
         return True
+    if r.returncode == 124:  # _run's code for a timeout
+        error(f"{label} — timed out after {timeout // 60} minutes")
+        return False
     error(f"{label} — failed after {m}m{s:02d}s")
     for line in (r.stderr or "").strip().splitlines()[-10:]:
         print(f"    {C.DIM}{line}{C.RESET}")

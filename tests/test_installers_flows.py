@@ -213,6 +213,11 @@ class TestPipHelpers:
         assert "line 19" in out and "line 9" not in out.replace("line 19", "")
         assert any("failed after" in s for s in said)
 
+    def test_progress_says_when_pip_timed_out(self, said, monkeypatch, capsys):
+        monkeypatch.setattr(llama_python, "_run", lambda cmd, **k: done(124, stderr="Timed out"))
+        assert llama_python._pip_with_progress(["pip"], "Installing x", timeout=600) is False
+        assert any("timed out after 10 minutes" in s for s in said)
+
     def test_progress_passes_the_environment_only_when_given(self, said, monkeypatch, capsys):
         seen = []
         monkeypatch.setattr(llama_python, "_run", lambda cmd, **k: seen.append(k) or done())
