@@ -29,13 +29,18 @@ def export_subtitles(segments, fmt="srt"):
     return "\n".join(lines), len(cues)
 
 
+def _cached_regions(store, video_key, cached):
+    """The cached regions to show, in order: the video's current plan's, since a
+    region of an older plan would duplicate lines."""
+    planned = [tuple(r) for r in (store.get_video(video_key) or {}).get("regions") or []]
+    return [r for r in planned or sorted(cached) if r in cached]
+
+
 def _library_lines(store, video_key, language, model):
     """A cached video's lines, cleaned as a live job cleans them: (lines, ids of the hidden ones)."""
     cached = store.get_transcripts(video_key, language, model)
-    # The video's current plan: a region of an older plan would duplicate lines
-    planned = [tuple(r) for r in (store.get_video(video_key) or {}).get("regions") or []]
     lines, hide, last = [], set(), []
-    for region in [r for r in planned or sorted(cached) if r in cached]:
+    for region in _cached_regions(store, video_key, cached):
         segs, loops, filler = clean_region(cached[region], region)
         hide |= {id(segs[i]) for i in loops | filler}
         lines.extend(segs)

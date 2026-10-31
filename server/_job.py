@@ -226,17 +226,17 @@ class Job:
         # Lines at/after the playhead first, then the rest in order
         pending = sorted(self.pending_llm(), key=lambda s: (s["end"] < self.playhead, s["start"]))
         need_tr = [s for s in pending if s["translation"] is None]
-        if not need_tr:
-            need_roma = [s for s in pending if s["romaji"] is None]
-            return ("romanize", need_roma[:BATCH_SIZE]) if need_roma else (None, [])
+        if need_tr:
+            return "translate", self._to_translate(need_tr)
+        return ("romanize", pending[:BATCH_SIZE]) if pending else (None, [])
+
+    def _to_translate(self, need_tr):
         # Lines due within NEAR_S, and the very first lines of a job, go in a
         # small batch so they are ready in seconds; the rest goes in full
         # batches (10 lines take ~25 s on a CPU-only llama.cpp)
         near = [s for s in need_tr if s["start"] < self.playhead + NEAR_S and s["end"] >= self.playhead]
         first = not any(s["translation"] for s in self.segments.values())
-        if near or first:
-            return "translate", (near or need_tr)[:NEAR_BATCH]
-        return "translate", need_tr[:BATCH_SIZE]
+        return (near or need_tr)[:NEAR_BATCH] if near or first else need_tr[:BATCH_SIZE]
 
     def next_region(self, now):
         """The region to transcribe next, marked running, or None."""
