@@ -9,6 +9,7 @@ import sys
 import tarfile
 import time
 import zipfile
+from pathlib import Path
 
 from config import DEFAULT_OLLAMA_PORT
 from yume import po_token
@@ -209,6 +210,13 @@ def _install_deno_exe() -> bool:
         return False
 
 
+def _remove_finished_setup(setup_exe: Path) -> None:
+    try:
+        setup_exe.unlink(missing_ok=True)
+    except OSError:  # ollama.exe lands before the setup program exits, and Windows locks a running program
+        pass
+
+
 def _install_ollama_windows() -> bool:
     from yume.network import check_server, download_file
     from yume.ui import pause
@@ -226,7 +234,7 @@ def _install_ollama_windows() -> bool:
             time.sleep(2)
             if find_ollama() or check_server("127.0.0.1", DEFAULT_OLLAMA_PORT, HEALTH_PATH_OLLAMA)["up"]:
                 success("Ollama installed!")
-                inst.unlink(missing_ok=True)
+                _remove_finished_setup(inst)
                 return True
         warn("Timed out.")
         return False

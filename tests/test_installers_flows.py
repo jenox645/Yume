@@ -268,6 +268,16 @@ class TestInstallOllama:
         popen.assert_called_once_with([str(tools / "OllamaSetup.exe")])
         assert not (tools / "OllamaSetup.exe").exists()
 
+    def test_windows_setup_still_running_is_not_a_failed_install(self, tools, said, monkeypatch):
+        # ollama.exe lands before OllamaSetup.exe exits, and Windows locks a running program
+        self._common(tools, monkeypatch, win=True, mac=False)
+        (tools / "OllamaSetup.exe").write_bytes(b"")
+        monkeypatch.setattr(inst.subprocess, "Popen", MagicMock())
+        monkeypatch.setattr(yume.network, "check_server", lambda *a: {"up": True})
+        monkeypatch.setattr(Path, "unlink", MagicMock(side_effect=PermissionError(13, "in use")))
+        assert inst.install_ollama() is True
+        assert not any(s.startswith("error") for s in said)
+
     def test_windows_installer_that_cannot_start(self, tools, said, monkeypatch):
         self._common(tools, monkeypatch, win=True, mac=False)
         monkeypatch.setattr(inst.subprocess, "Popen", MagicMock(side_effect=OSError("blocked")))
