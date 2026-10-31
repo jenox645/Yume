@@ -14,7 +14,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import yume.benchmark  # noqa: E402
+import yume.menus.blacklist as bl_menu  # noqa: E402
 import yume.menus.server as srv  # noqa: E402
+import yume.menus.whisper_model as wm  # noqa: E402
 
 MODELS = [name for name, *_ in yume.benchmark.WHISPER_MODELS_INFO]
 
@@ -56,11 +58,11 @@ class WhisperMenu:
         }
         with ExitStack() as stack:
             for name, fake in fakes.items():
-                stack.enter_context(patch.object(srv, name, fake))
+                stack.enter_context(patch.object(wm, name, fake))
             stack.enter_context(patch("builtins.input", side_effect=self.inputs))
             stack.enter_context(patch.object(yume.benchmark, "_is_whisper_model_cached", lambda m: m == "small"))
             stack.enter_context(patch("config.save_config", self.saved))
-            srv._menu_whisper_model(cfg)
+            wm._menu_whisper_model(cfg)
         return self
 
 
@@ -288,6 +290,14 @@ def test_model_manager_select_a_gguf_and_switch_to_llamacpp(tmp_path):
     )
 
 
+def test_selecting_a_gguf_keeps_the_model_of_a_backend_that_stays(tmp_path):
+    gguf = tmp_path / "qwen-7b.gguf"
+    gguf.write_bytes(b"x")
+    cfg = {"translation_backend": "ollama", "translation_model": "qwen2.5:7b"}
+    manage([3, 0, 4], cfg, yns=[False], ggufs=[gguf])
+    assert (cfg["gguf_model_path"], cfg["translation_model"]) == (str(gguf), "qwen2.5:7b")
+
+
 def test_model_manager_without_ggufs_and_browse():
     r = manage([3, 2, -1], {"translation_backend": "llamacpp"})
     r.browsed.assert_called_once()
@@ -417,7 +427,7 @@ class Blacklist:
         }
         with ExitStack() as stack:
             for name, fake in fakes.items():
-                stack.enter_context(patch.object(srv, name, fake))
+                stack.enter_context(patch.object(bl_menu, name, fake))
             fn({"whisper_host": "127.0.0.1", "whisper_port": 5001}, *args)
         return self
 
@@ -431,49 +441,49 @@ def test_an_unknown_autostart_command_exits_2():
 
 def test_blacklist_command_add_remove_clear_on_the_server(tmp_path):
     b = Blacklist(tmp_path, server=["Subscribe"])
-    b.run(srv.cli_blacklist, ["add", "Thank", "you"])
+    b.run(bl_menu.cli_blacklist, ["add", "Thank", "you"])
     assert b.saved() == ["Subscribe", "Thank you"]
-    b.run(srv.cli_blacklist, ["add", "thank you"])
+    b.run(bl_menu.cli_blacklist, ["add", "thank you"])
     assert b.saved() == ["Subscribe", "Thank you"] and any("Already blocked" in s for s in b.said)
-    b.run(srv.cli_blacklist, ["rm", "SUBSCRIBE"])
+    b.run(bl_menu.cli_blacklist, ["rm", "SUBSCRIBE"])
     assert b.saved() == ["Thank you"]
-    b.run(srv.cli_blacklist, ["clear"])
+    b.run(bl_menu.cli_blacklist, ["clear"])
     assert b.saved() == []
 
 
 def test_blacklist_command_edits_the_saved_file_when_the_server_is_down(tmp_path):
     b = Blacklist(tmp_path, saved_file=["Subscribe"])
-    b.run(srv.cli_blacklist, ["add", "Thanks"])
+    b.run(bl_menu.cli_blacklist, ["add", "Thanks"])
     assert b.saved() == ["Subscribe", "Thanks"]
-    b.run(srv.cli_blacklist, ["list"])
+    b.run(bl_menu.cli_blacklist, ["list"])
     assert any("server not running" in s for s in b.said)
-    b.run(srv.cli_blacklist, ["remove", "nope"])
+    b.run(bl_menu.cli_blacklist, ["remove", "nope"])
     assert any("Not in blacklist" in s for s in b.said)
 
 
 def test_blacklist_menu_add_remove_clear(tmp_path):
     b = Blacklist(tmp_path, server=["Subscribe"])
-    b.run(srv._menu_blacklist, choices=[0, 3], inputs=["Thank you"])
+    b.run(bl_menu._menu_blacklist, choices=[0, 3], inputs=["Thank you"])
     assert b.saved() == ["Subscribe", "Thank you"]
-    b.run(srv._menu_blacklist, choices=[1, 0, 3])  # remove the first
+    b.run(bl_menu._menu_blacklist, choices=[1, 0, 3])  # remove the first
     assert b.saved() == ["Thank you"]
-    b.run(srv._menu_blacklist, choices=[2, 3], yns=[False])
+    b.run(bl_menu._menu_blacklist, choices=[2, 3], yns=[False])
     assert b.saved() == ["Thank you"]
-    b.run(srv._menu_blacklist, choices=[2, 3], yns=[True])
+    b.run(bl_menu._menu_blacklist, choices=[2, 3], yns=[True])
     assert b.saved() == []
 
 
 def test_blacklist_menu_offline_and_back_from_remove(tmp_path):
     items = [f"phrase {i}" for i in range(25)]
     b = Blacklist(tmp_path, saved_file=items)
-    b.run(srv._menu_blacklist, choices=[1, 20, 3])  # index 20 is "Back" (20 shown), not phrase 20
+    b.run(bl_menu._menu_blacklist, choices=[1, 20, 3])  # index 20 is "Back" (20 shown), not phrase 20
     assert b.saved() == items
     assert any("Server not running" in s for s in b.said)
 
 
 def test_blacklist_menu_ignores_case_like_the_command(tmp_path):
     b = Blacklist(tmp_path, server=["Subscribe"])
-    b.run(srv._menu_blacklist, choices=[0, 3], inputs=["subscribe"])  # the menu used to add it twice
+    b.run(bl_menu._menu_blacklist, choices=[0, 3], inputs=["subscribe"])  # the menu used to add it twice
     assert b.saved() == ["Subscribe"] and "Already blocked" in b.said
 
 
@@ -518,13 +528,171 @@ def test_stats_and_model_say_how_to_start_a_stopped_server(capsys):
     import yume.cli as cli
 
     cfg = {"whisper_host": "127.0.0.1", "whisper_port": 5999, "whisper_model": "small"}
-    with patch.object(srv, "_server_get", return_value=None):
+    with patch.object(srv, "_server_get", return_value=None), patch.object(wm, "_server_get", return_value=None):
         assert srv.cli_server_stats(cfg) is False
         out = capsys.readouterr().out
         assert "not reachable" in out and "pocket_yume.py launch" in out
         with pytest.raises(SystemExit) as e:
             cli._stats(cfg, [])
         assert e.value.code == 1
-        srv.cli_model(cfg, [])
+        wm.cli_model(cfg, [])
         out = capsys.readouterr().out
         assert "pocket_yume.py launch" in out and "small" in out
+
+
+def test_model_switch_command_clears_the_old_friendly_name():
+    # The server clears it in the config file; saving the stale cfg wrote it back
+    cfg = {**_cfg(str(Path("D:/models/ft"))), "whisper_model_name": "Fine-tuned"}
+    saved = MagicMock()
+    with (
+        patch.object(wm, "_server_get", return_value={"model": cfg["whisper_model"]}),
+        patch.object(wm, "_server_post", return_value={"status": "ok", "model": "medium"}),
+        patch("config.save_config", saved),
+    ):
+        wm.cli_model(cfg, ["switch", "medium"])
+    saved.assert_called_once()
+    assert cfg["whisper_model"] == "medium" and cfg["whisper_model_name"] == ""
+
+
+def test_a_failed_switch_keeps_the_friendly_name():
+    path = str(Path("D:/models/ft"))
+    cfg = {**_cfg(path), "whisper_model_name": "Fine-tuned"}
+    WhisperMenu(MODELS.index("medium"), stats={"model": path}, switch={"error": "CUDA out of memory"}).go(cfg)
+    assert cfg["whisper_model_name"] == "Fine-tuned"
+
+
+def test_a_failed_switch_to_a_custom_model_does_not_rename_the_active_one(tmp_path):
+    for f in ("model.bin", "config.json", "tokenizer.json", "vocabulary.txt"):
+        (tmp_path / f).write_text("x")
+    cfg = _cfg()
+    WhisperMenu(len(MODELS), stats={"model": "small"}, inputs=[str(tmp_path), "My Whisper"], switch={"error": "x"}).go(
+        cfg
+    )
+    assert cfg["whisper_model"] == "small" and not cfg.get("whisper_model_name")
+
+
+import yume.menus.prompts as prompts  # noqa: E402
+
+
+def prompt_menu(fn, choice, answer, cfg):
+    saved = MagicMock()
+    with (
+        patch.object(prompts, "ask_arrow", lambda *a, **k: choice),
+        patch("builtins.input", lambda *a: answer),
+        patch.object(prompts, "pause", MagicMock()),
+        patch("config.save_config", saved),
+    ):
+        fn(cfg)
+    return saved
+
+
+def test_enter_in_the_prompt_editor_keeps_the_built_in_prompt():
+    # Enter returned the offered starter text, saved as a custom prompt: no more script rules
+    cfg = {"translation_prompt": ""}
+    saved = prompt_menu(prompts._menu_translation_prompt, 0, "", cfg)
+    saved.assert_not_called()
+    assert cfg["translation_prompt"] == ""
+
+
+def test_the_prompt_editor_saves_new_text():
+    cfg = {"translation_prompt": ""}
+    saved = prompt_menu(prompts._menu_translation_prompt, 0, "Translate {src} to {tgt}.", cfg)
+    saved.assert_called_once()
+    assert cfg["translation_prompt"] == "Translate {src} to {tgt}."
+
+
+def test_hf_declining_llamacpp_keeps_the_other_backends_model():
+    # That backend gets translation_model as its model name; a .gguf name made every request fail
+    cfg = {"translation_backend": "ollama", "translation_model": "qwen2.5:7b"}
+    browse([0, 1], cfg, yns=[True, False])
+    assert cfg["translation_model"] == "qwen2.5:7b" and cfg["translation_backend"] == "ollama"
+    assert cfg["gguf_model_path"].endswith("qwen-q4_k_m.gguf")
+
+
+def test_blacklist_menu_says_when_a_change_was_not_saved(tmp_path):
+    b = Blacklist(tmp_path, server=["Subscribe"])
+    b._post = lambda *a, **k: {"error": "HTTP 500"}
+    b.run(bl_menu._menu_blacklist, choices=[1, 0, 3])
+    b.run(bl_menu._menu_blacklist, choices=[2, 3], yns=[True])
+    assert b.said.count("Failed to save") == 2
+
+
+@pytest.mark.parametrize("answer", [3, -1])
+def test_keeping_the_current_device_saves_nothing(answer):
+    saved, said = MagicMock(), MagicMock()
+    with (
+        patch.object(st, "ask_arrow", MagicMock(side_effect=[1, answer])),
+        patch.object(st, "detect_gpu", lambda: {"has_nvidia": False, "vram_mb": 0}),
+        patch.object(st, "header", MagicMock()),
+        patch.object(st, "pause", MagicMock()),
+        patch.object(st, "success", said),
+        patch("config.save_config", saved),
+    ):
+        st._set_whisper({"whisper_model": "small", "whisper_device": "auto", "whisper_compute_type": "auto"})
+    saved.assert_not_called()
+    said.assert_not_called()
+
+
+@pytest.mark.parametrize("fn, args", [("cli_blacklist", ["lsit"]), ("cli_blacklist", ["add"]), ("cli_model", ["lsit"])])
+def test_a_typo_in_blacklist_or_model_exits_2(fn, args, capsys):
+    cfg = {"whisper_host": "127.0.0.1", "whisper_port": 5999}
+    with (
+        patch.object(bl_menu, "_server_get", return_value=None),
+        patch.object(bl_menu, "_bl_read_offline", return_value=[]),
+        pytest.raises(SystemExit) as e,
+    ):
+        getattr(yume.menus, fn)(cfg, args)
+    assert e.value.code == 2
+    assert "Usage:" in capsys.readouterr().out
+
+
+def test_model_switch_with_the_server_down_saves_a_full_path(tmp_path, monkeypatch):
+    # A relative path only worked when the server started in the same folder
+    (tmp_path / "ft").mkdir()
+    monkeypatch.chdir(tmp_path)
+    cfg = _cfg()
+    with patch.object(wm, "_server_get", return_value=None), patch("config.save_config"):
+        wm.cli_model(cfg, ["switch", "ft"])
+    assert cfg["whisper_model"] == str((tmp_path / "ft").resolve())
+
+
+def editor_text(fn):
+    said = []
+    with patch.object(prompts, "ask_arrow", lambda *a, **k: -1), patch.object(prompts, "info", said.append):
+        fn({})
+    return "\n".join(said)
+
+
+def test_the_translation_editor_quotes_rules_the_prompt_has():
+    import re
+
+    said = editor_text(prompts._menu_translation_prompt)
+    quoted = re.findall(r"• '([^']+)'", said)
+    assert len(quoted) == 3
+    assert all(rule.lower() in prompts._TRANSLATION_STARTER.lower() for rule in quoted)
+
+
+def test_the_romanization_editor_describes_what_the_server_does():
+    said = editor_text(prompts._menu_romanization_prompt)
+    assert "cutlet" in said
+    assert "'romanization'" in said and "romaji'" not in said  # the server fills {sys} with that one word
+
+
+def test_the_model_guide_shows_the_vram_of_the_model_list():
+    import yume.guides
+    import yume.hardware
+
+    said = []
+    with (
+        patch.object(yume.guides, "header", MagicMock()),
+        patch.object(yume.guides, "pause", MagicMock()),
+        patch.object(yume.guides, "section", MagicMock()),
+        patch.object(yume.guides, "bullet", said.append),
+        patch.object(yume.guides, "info", MagicMock()),
+        patch.object(yume.guides, "detect_gpu", lambda: {"has_nvidia": False, "vram_mb": 0}),
+    ):
+        yume.guides._guide_models({})
+    vram = yume.hardware.WHISPER_MODEL_VRAM_MB
+    for name in ("small", "large-v3-turbo", "large-v3"):
+        line = next(s for s in said if s.startswith(f"{name} "))
+        assert f"~{vram[name] / 1000:g} GB" in line

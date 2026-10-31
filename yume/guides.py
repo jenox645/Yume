@@ -22,34 +22,30 @@ def _steps(*lines: str) -> None:
 
 def guides_menu(cfg: dict) -> None:
     """Cookbook menu: pick a goal, get a recipe."""
+    entries = [
+        ("Get subtitles on a video", "The full path from zero to subtitles, in 4 steps", _guide_quickstart),
+        ("Install the browser extension", "Load Yume into Chrome, Edge, Brave or Firefox", _guide_extension),
+        (
+            "Fix YouTube download problems",
+            "When audio won't download: update, cookies, Deno, stream URL",
+            _guide_youtube,
+        ),
+        ("Pick the right models for your PC", "Whisper sizes and translation model quantization", _guide_models),
+        ("Improve translation quality", "Bigger models, prompt styles, hallucination filter", _guide_quality),
+        ("Save subtitles to a file", "Export SRT / WebVTT from the extension", _guide_export),
+        ("Fix common problems", "No subtitles, red server dots, port conflicts, logs", _guide_troubleshoot),
+    ]
     while True:
         header("Help & Guides")
         info("Pick a goal — each guide is a short step-by-step recipe.")
         ch = ask_arrow(
             "What do you want to do?",
-            [
-                ("Get subtitles on a video", "The full path from zero to subtitles, in 4 steps"),
-                ("Install the browser extension", "Load Yume into Chrome, Edge, Brave or Firefox"),
-                ("Fix YouTube download problems", "When audio won't download: update, cookies, Deno, stream URL"),
-                ("Pick the right models for your PC", "Whisper sizes and translation model quantization"),
-                ("Improve translation quality", "Bigger models, prompt styles, hallucination filter"),
-                ("Save subtitles to a file", "Export SRT / WebVTT from the extension"),
-                ("Fix common problems", "No subtitles, red server dots, port conflicts, logs"),
-                ("Back", None),
-            ],
-            default=7,
+            [(label, desc) for label, desc, _ in entries] + [("Back", None)],
+            default=len(entries),
         )
-        if ch in (-1, 7):
+        if not 0 <= ch < len(entries):
             return
-        [
-            _guide_quickstart,
-            _guide_extension,
-            _guide_youtube,
-            _guide_models,
-            _guide_quality,
-            _guide_export,
-            _guide_troubleshoot,
-        ][ch](cfg)
+        entries[ch][2](cfg)
 
 
 def _guide_quickstart(cfg: dict) -> None:
@@ -85,6 +81,9 @@ def _guide_extension(cfg: dict) -> None:
 
 def _guide_youtube(cfg: dict) -> None:
     header("Fix YouTube Download Problems")
+    auth = cfg.get("youtube_auth_method", "cookies")
+    if auth == "cookies":
+        auth += f" ({cfg.get('cookies_browser', 'chrome')})"
     info('Symptom: subtitles never start, popup or window shows "Failed to download audio".')
     info("Try these in order — the first one fixes it most of the time:")
     _steps(
@@ -92,13 +91,7 @@ def _guide_youtube(cfg: dict) -> None:
         f"       {C.DIM}Tools & Fonts → yt-dlp → Install / Update{C.RESET}",
         f"{C.BOLD}Check your login (cookies method){C.RESET} — Yume borrows your browser's YouTube\n"
         f"       login. Be logged into YouTube in the browser set in Settings → YouTube auth.\n"
-        f"       {C.DIM}Currently: {cfg.get('youtube_auth_method', 'cookies')}"
-        + (
-            f" ({cfg.get('cookies_browser', 'chrome')})"
-            if cfg.get("youtube_auth_method", "cookies") == "cookies"
-            else ""
-        )
-        + f"{C.RESET}",
+        f"       {C.DIM}Currently: {auth}{C.RESET}",
         f"{C.BOLD}Switch to Deno{C.RESET} — solves YouTube's bot challenge without any account.\n"
         f"       {C.DIM}Settings → YouTube auth → Deno (downloads ~35 MB once){C.RESET}",
         f"{C.BOLD}Last resort: paste the stream URL directly{C.RESET} — works on any site yt-dlp\n"
@@ -120,7 +113,7 @@ def _guide_models(cfg: dict) -> None:
 
     section("Whisper (speech → text) — accuracy vs. VRAM")
     bullet(f"tiny / base      ~1 GB   {C.DIM}fastest, weakest — okay for clear speech{C.RESET}")
-    bullet(f"small            ~2 GB   {C.DIM}decent for podcasts and vlogs{C.RESET}")
+    bullet(f"small            ~1.5 GB {C.DIM}decent for podcasts and vlogs{C.RESET}")
     bullet(f"large-v3-turbo   ~3 GB   {C.DIM}best on any GPU: as accurate as large-v3 on songs, 2x faster{C.RESET}")
     bullet(f"large-v3         ~4.5 GB {C.DIM}slower, and no more accurate in Yume's tests{C.RESET}")
     info(f"{C.DIM}Avoid distil-* models: they are English-only and can't transcribe JA/ZH/KO/RU/AR.{C.RESET}")
