@@ -203,7 +203,7 @@ def vocal_isolation_status():
 @app.route("/model/switch", methods=["POST"])
 def switch_model():
     """Hot-swap the Whisper model without restarting the server."""
-    new_model, err = _requested_model((request.get_json(silent=True) or {}).get("model"))
+    new_model, err = _requested_model(_json_body().get("model"))
     if err:
         return jsonify(err), 400
     if new_model == _state.model_name:
@@ -223,7 +223,7 @@ _VALID_MODELS = ["tiny", "base", "small", "medium", "large-v1", "large-v2", "lar
 
 def _requested_model(name):
     """A model name or local CTranslate2 folder from a switch request → (model, None) or (None, error)."""
-    if not name:
+    if not name or not isinstance(name, str):
         return None, {"error": "Missing 'model' field"}
     if os.path.sep in name or "/" in name:
         return _local_model(name)
@@ -315,6 +315,12 @@ def list_translation_models():
 _LANG_RE = re.compile(r"^[a-z]{2,3}$")
 
 
+def _json_body():
+    """The request's JSON object, {} for anything else: every route then answers 400, not 500."""
+    body = request.get_json(silent=True)
+    return body if isinstance(body, dict) else {}
+
+
 def _url_error(*urls):
     for url in urls:
         valid, err = validate_url(url) if url else (True, "")
@@ -371,7 +377,7 @@ def create_job():
     _settings.reload_config()  # vocal_isolation may have changed
     if _state.load_error:
         return jsonify({"error": f"Whisper could not load its model: {_state.load_error}"}), 503
-    params, err = _job_params(request.get_json(silent=True) or {})
+    params, err = _job_params(_json_body())
     if err:
         return jsonify({"error": err}), 400
     try:
@@ -402,7 +408,7 @@ def job_options(job_id):
     job, err = _job_or_404(job_id)
     if err:
         return err
-    data = request.get_json(silent=True) or {}
+    data = _json_body()
     if "romanize" in data:
         _state.jobs.set_romanize(job, bool(data["romanize"]))
     return jsonify({"success": True})
@@ -439,7 +445,7 @@ def library_export():
 
 @app.route("/library/delete", methods=["POST"])
 def library_delete():
-    video_key = str((request.get_json(silent=True) or {}).get("video_key") or "")
+    video_key = str(_json_body().get("video_key") or "")
     if not video_key:
         return jsonify({"error": "video_key is required"}), 400
     _state.store.delete_video(video_key)
@@ -458,7 +464,7 @@ def get_blacklist():
 
 @app.route("/blacklist/update", methods=["POST"])
 def update_blacklist():
-    incoming = (request.get_json(silent=True) or {}).get("blacklist", [])
+    incoming = _json_body().get("blacklist", [])
     if not isinstance(incoming, list):
         return jsonify({"error": "blacklist must be a list"}), 400
     return _change_blacklist(lambda _current: incoming)
@@ -466,7 +472,7 @@ def update_blacklist():
 
 @app.route("/blacklist/add", methods=["POST"])
 def blacklist_add():
-    text = str((request.get_json(silent=True) or {}).get("text") or "").strip()
+    text = str(_json_body().get("text") or "").strip()
     if not text:
         return jsonify({"error": "text is required"}), 400
     return _change_blacklist(lambda current: [*current, text])
@@ -474,7 +480,7 @@ def blacklist_add():
 
 @app.route("/blacklist/remove", methods=["POST"])
 def blacklist_remove():
-    text = str((request.get_json(silent=True) or {}).get("text") or "").strip().lower()
+    text = str(_json_body().get("text") or "").strip().lower()
     return _change_blacklist(lambda current: [b for b in current if b.lower() != text])
 
 
@@ -487,7 +493,7 @@ def translation_health():
 @app.route("/translation/test", methods=["POST"])
 def translation_test():
     """Translate one sentence end-to-end — used by the CLI health check."""
-    data = request.get_json(silent=True) or {}
+    data = _json_body()
     text = str(data.get("text") or "今日はいい天気ですね")[:500]
     try:
         out = _state.jobs.translator.translate_batch(

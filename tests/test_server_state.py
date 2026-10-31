@@ -137,3 +137,24 @@ def test_health_says_how_it_went_in_the_exit_code():
 def test_the_menu_entry_for_health_never_quits_the_menu():
     with patch("yume.health.health_check", return_value=False):
         cli._health({}, [])
+
+
+@pytest.mark.parametrize("body", [[1, 2], 5, "text", None])
+def test_a_json_body_that_is_no_object_counts_as_empty(body):
+    import _api
+
+    with patch.object(_api, "request", SimpleNamespace(get_json=lambda silent: body)):
+        assert _api._json_body() == {}
+
+
+def test_a_model_name_that_is_no_text_is_a_bad_request():
+    import _api
+
+    assert _api._requested_model(5) == (None, {"error": "Missing 'model' field"})
+
+
+def test_both_in_an_error_is_no_bot_check():
+    import _download
+
+    assert not any(w in "both formats failed" for w in _download._AUTH_ERROR_WORDS)
+    assert any(w in "confirm you're not a bot" for w in _download._AUTH_ERROR_WORDS)

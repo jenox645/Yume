@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import urllib.request
 
-from yume.constants import BACKEND_INFO, GGUF_DIR, GiB, backend_info, use_backend
+from yume.constants import BACKEND_INFO, DEFAULT_OLLAMA_MODEL, GGUF_DIR, GiB, backend_info, use_backend
 from yume.menus.hf_browser import browse_hf
 from yume.network import check_ollama_models, check_translation_server
 from yume.ports import find_free_port, get_port_process, is_port_free
@@ -197,7 +197,7 @@ def _pull_model(cfg: dict, ggufs: list) -> None:
     from config import save_config
     from yume.installers import pull_ollama_model
 
-    name = ask_input("Ollama model to pull", cfg.get("translation_model", "") or "qwen2.5:7b")
+    name = ask_input("Ollama model to pull", cfg.get("translation_model", "") or DEFAULT_OLLAMA_MODEL)
     if name and pull_ollama_model(name):  # starts Ollama if needed
         cfg["translation_model"] = name
         save_config(cfg)

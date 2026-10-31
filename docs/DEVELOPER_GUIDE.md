@@ -34,7 +34,8 @@ python server/faster_whisper_server.py --model tiny --device cpu --compute-type 
 | `yume/native_host.py` | Native messaging host + browser registration (`autostart on/off`) |
 | `yume/setup.py` | Setup wizard, extension install guide, uninstall |
 | `yume/menus/` | `server.py` `stats` command; `blacklist.py` `blacklist` command + subtitle filter menu; `whisper_model.py` `model` command + hot-swap menu; `hf_browser.py` GGUF browser; `tools.py` Tools & Fonts (installers, translation engine, Python dependencies); `translation.py` backend, address, model, test sentence; `youtube_auth.py` cookies or Deno; `one_click.py` one-click start; `prompts.py` translation and romanization prompt editors; `settings.py` Settings menu. `__init__` re-exports the entry points |
-| `yume/health.py` | Health check (incl. end-to-end translation), fonts |
+| `yume/health.py` | Health check (incl. end-to-end translation) |
+| `yume/fonts.py` | Subtitle font detection |
 | `yume/status.py` | `status` report: hardware, tools, packages, servers, models, ports |
 | `yume/installers.py` | yt-dlp, FFmpeg, Deno, Ollama, Python packages, llama-cpp-python entry point |
 | `yume/llama_python.py` | llama-cpp-python pip builds per GPU/OS, build tools |

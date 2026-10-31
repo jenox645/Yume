@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import yume.health as health  # noqa: E402
+from yume import fonts  # noqa: E402
 
 GPU = {"has_nvidia": True, "has_amd": False, "vram_mb": 12288, "name": "RTX 3060", "vendor": "nvidia"}
 
@@ -193,14 +194,14 @@ def test_fonts_are_found_by_their_windows_file_names():
     files = [
         Path(f"C:/Windows/Fonts/{n}") for n in ("msyh.ttc", "YuGothR.ttc", "malgun.ttf", "simsun.ttc", "arial.ttf")
     ]
-    found = {script: health._matching(files, patterns) for script, (patterns, _) in health._SCRIPT_FONTS.items()}
+    found = {script: fonts._matching(files, patterns) for script, (patterns, _) in fonts._SCRIPT_FONTS.items()}
     assert found == {
         "Japanese": ["YuGothR.ttc"],
         "Chinese": ["msyh.ttc", "simsun.ttc"],
         "Korean": ["malgun.ttf"],
         "Arabic": [],
     }
-    assert health._SCRIPT_FONTS["Arabic"][1] == "Noto Naskh Arabic"  # was "Noto Sans AR", which does not exist
+    assert fonts._SCRIPT_FONTS["Arabic"][1] == "Noto Naskh Arabic"  # was "Noto Sans AR", which does not exist
 
 
 def test_reports_run_as_commands_do_not_wait_for_enter(monkeypatch):
@@ -211,7 +212,7 @@ def test_reports_run_as_commands_do_not_wait_for_enter(monkeypatch):
     import yume.menus.tools as tools
     import yume.status
 
-    for fn in (yume.status.show_status, health.health_check, health.detect_fonts):
+    for fn in (yume.status.show_status, health.health_check, fonts.detect_fonts):
         assert "pause" not in fn.__code__.co_names, fn.__name__
     waited = []
     monkeypatch.setattr(cli, "pause", lambda *a: waited.append(1))

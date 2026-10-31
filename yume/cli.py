@@ -120,7 +120,7 @@ def _recommend(cfg, args):
 
 
 def _fonts(cfg, args):
-    from yume.health import detect_fonts
+    from yume.fonts import detect_fonts
 
     detect_fonts()
 

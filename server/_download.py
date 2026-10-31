@@ -49,7 +49,7 @@ def _ffmpeg_to_wav(src, out_path, rate, channels, timeout=DOWNLOAD_TIMEOUT_S):
 # to extract audio — several times more data for no benefit. Fall back to any
 # format-with-audio, then best, only if no audio-only track exists.
 _FORMAT_PASSES = (("bestaudio", ["-f", "bestaudio/bestaudio*/best"]), ("nofmt", []))
-_AUTH_ERROR_WORDS = ("drm", "sign in", "forbidden", "invalid token", "bot")
+_AUTH_ERROR_WORDS = ("drm", "sign in", "forbidden", "invalid token", "not a bot")
 
 
 class _Live(Exception):

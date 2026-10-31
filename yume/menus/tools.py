@@ -30,7 +30,7 @@ def _benchmark(cfg: dict) -> None:
 
 
 def _fonts(cfg: dict) -> None:
-    from yume.health import detect_fonts
+    from yume.fonts import detect_fonts
 
     detect_fonts()
     pause()

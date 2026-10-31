@@ -8,7 +8,8 @@ Submodules:
   installers  — yt-dlp / FFmpeg / Deno / Ollama / pip-package installers
   llama_python — llama-cpp-python builds per GPU and OS
   po_token    — YouTube PO-token plugin and server
-  health      — health_check, detect_fonts
+  health      — health_check
+  fonts       — detect_fonts
   status      — show_status
   benchmark   — Whisper model benchmark
   menus       — All interactive CLI menus

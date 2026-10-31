@@ -140,7 +140,8 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 | `yume/setup.py` | Setup wizard, extension guide, uninstall |
 | `yume/menus/` | Interactive menus, split by area: `server.py` (`stats` command), `blacklist.py` (`blacklist` command, subtitle filter), `whisper_model.py` (`model` command, hot swap), `hf_browser.py`, `tools.py` (installers, translation engine, Python dependencies), `translation.py` (backend, address, model, test sentence), `youtube_auth.py`, `one_click.py`, `prompts.py` (translation and romanization prompts), `settings.py` |
 | `yume/guides.py` | Help & Guides menu: in-CLI cookbook of task-oriented recipes |
-| `yume/health.py` | Health check (incl. end-to-end translation), font detection |
+| `yume/health.py` | Health check (incl. end-to-end translation) |
+| `yume/fonts.py` | Subtitle font detection |
 | `yume/status.py` | `status` report: hardware, tools, packages, servers, models, ports |
 | `yume/benchmark.py` | Whisper speed benchmark across models |
 | `yume/network.py` | HTTP helpers (`server_get`, `server_post`), downloads (`.part` + rename), health checks |
