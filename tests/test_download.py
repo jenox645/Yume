@@ -178,3 +178,114 @@ def test_failure_removes_the_temp_dir(monkeypatch, no_auth):
     path, _err = _audio.download_full_audio(DIRECT)
     assert path is None
     assert made and not os.path.exists(made[0])
+
+
+def test_a_ytdlp_that_cannot_start_counts_as_a_failed_attempt(monkeypatch, no_auth):
+    def ytdlp(cmd):
+        raise OSError("no yt-dlp")
+
+    tools = Tools(monkeypatch, ytdlp=ytdlp, stream_url=None)
+    path, err = _audio.download_full_audio(YT)
+    assert path is None and err == "yt-dlp error: no yt-dlp"
+    assert [_fmt(c) for c in tools.ytdlp_calls()] == ["bestaudio", "nofmt"]
+
+
+def test_the_stream_fallback_survives_an_exception(monkeypatch, no_auth):
+    def ffmpeg(cmd):
+        raise OSError("no ffmpeg")
+
+    Tools(monkeypatch, ffmpeg=ffmpeg)
+    path, err = _audio.download_full_audio(YT)
+    assert path is None and err == "This video is unavailable or private."
+
+
+@pytest.mark.parametrize("error", [subprocess.TimeoutExpired("ffmpeg", 900), OSError("no ffmpeg")])
+def test_ffmpeg_direct_survives_a_timeout_and_an_exception(monkeypatch, no_auth, error):
+    def ffmpeg(cmd):
+        raise error
+
+    Tools(monkeypatch, ffmpeg=ffmpeg)
+    path, err = _audio.download_full_audio(DIRECT)
+    assert path is None and err == "This video is unavailable or private."
+
+
+def _direct_temp(monkeypatch, tmp_path):
+    out = tmp_path / "yume_direct_x"
+    out.mkdir()
+    monkeypatch.setattr(_audio.tempfile, "mkdtemp", lambda prefix: str(out))
+    return out
+
+
+def test_direct_download_is_ffmpeg_when_it_works(monkeypatch, tmp_path, no_auth):
+    out = _direct_temp(monkeypatch, tmp_path)
+    tools = Tools(monkeypatch, ffmpeg=lambda cmd: (0, "", True))
+    path, err = _audio.download_direct(DIRECT)
+    assert err is None and path == str(out / "full_audio.wav")
+    (ff,) = tools.calls
+    assert ff[:6] == ["ffmpeg", "-y", "-protocol_whitelist", _state.FFMPEG_PROTOCOL_WHITELIST, "-i", DIRECT]
+    assert ff[6:] == ["-vn", "-ar", "16000", "-ac", "1", "-f", "wav", path]
+
+
+def test_direct_download_falls_back_to_ytdlp_after_a_tiny_output(monkeypatch, tmp_path, no_auth):
+    out = _direct_temp(monkeypatch, tmp_path)
+
+    def ffmpeg(cmd):
+        Path(cmd[-1]).write_bytes(b"\0" * 100)
+        return 0, "", False
+
+    tools = Tools(monkeypatch, ffmpeg=ffmpeg, ytdlp=lambda cmd: (0, "", True))
+    path, err = _audio.download_direct(DIRECT)
+    assert err is None and path == str(out / "full_audio.wav")
+    (yt,) = tools.ytdlp_calls()
+    assert yt[-2:] == ["--", DIRECT] and "-f" not in yt and "--cookies-from-browser" not in yt
+    assert yt[yt.index("-o") + 1] == str(out / "full_audio.%(ext)s")
+    assert yt[yt.index("--postprocessor-args") + 1] == _state.FFMPEG_AUDIO_OPTS
+
+
+def test_direct_download_failure_explains_stream_urls_expire(monkeypatch, tmp_path, no_auth):
+    out = _direct_temp(monkeypatch, tmp_path)
+    Tools(monkeypatch, ytdlp=lambda cmd: (1, "WARNING: x\nERROR: HTTP Error 403\n", False))
+    path, err = _audio.download_direct(DIRECT)
+    assert path is None and "(HTTP Error 403)" in err and "expire" in err
+    assert not out.exists()
+
+
+def test_direct_download_reports_the_exit_code_without_an_error_line(monkeypatch, tmp_path, no_auth):
+    _direct_temp(monkeypatch, tmp_path)
+    Tools(monkeypatch, ytdlp=lambda cmd: (3, "", False))
+    assert "(exit code 3)" in _audio.download_direct(DIRECT)[1]
+
+
+@pytest.mark.parametrize(
+    "error, message",
+    [
+        (subprocess.TimeoutExpired("ffmpeg", 600), "Direct download timed out"),
+        (OSError("no ffmpeg"), "Direct download error: no ffmpeg"),
+    ],
+)
+def test_direct_download_cleans_up_when_a_tool_blows_up(monkeypatch, tmp_path, no_auth, error, message):
+    out = _direct_temp(monkeypatch, tmp_path)
+
+    def ffmpeg(cmd):
+        raise error
+
+    Tools(monkeypatch, ffmpeg=ffmpeg)
+    assert _audio.download_direct(DIRECT) == (None, message)
+    assert not out.exists()
+
+
+def test_tool_timeouts(monkeypatch, tmp_path, no_auth):
+    """A direct download gets 10 minutes per tool, a full download 15."""
+    seen = []
+
+    def run(cmd, **kw):
+        seen.append(kw["timeout"])
+        return types.SimpleNamespace(returncode=1, stderr="", stdout="")
+
+    monkeypatch.setattr(_audio.subprocess, "run", run)
+    monkeypatch.setattr(_audio, "_cookies_failed_at", 0.0)
+    _audio.download_direct(DIRECT)
+    assert seen == [600, 600]
+    seen.clear()
+    _audio.download_full_audio(DIRECT)
+    assert seen == [900] * 3  # yt-dlp's two format passes, ffmpeg
