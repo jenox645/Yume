@@ -193,6 +193,17 @@ def test_a_ytdlp_that_cannot_start_counts_as_a_failed_attempt(monkeypatch, no_au
     assert [_fmt(c) for c in tools.ytdlp_calls()] == ["bestaudio", "nofmt"]
 
 
+def test_no_yt_dlp_is_said_plainly(monkeypatch, no_auth):
+    """The message existed, but only for an error yt-dlp itself would have to print."""
+
+    def ytdlp(cmd):
+        raise FileNotFoundError("[WinError 2] The system cannot find the file specified")
+
+    Tools(monkeypatch, ytdlp=ytdlp, stream_url=None)
+    path, err = _download.download_full_audio(YT)
+    assert path is None and err == _ytdlp.NOT_INSTALLED
+
+
 def test_the_stream_fallback_survives_an_exception(monkeypatch, no_auth):
     def ffmpeg(cmd):
         raise OSError("no ffmpeg")

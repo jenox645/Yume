@@ -119,6 +119,9 @@ def _ytdlp_format_passes(url, label, extra_args, output_template, output_path, p
         except subprocess.TimeoutExpired:
             print(f"[Yume] yt-dlp ({label}) timed out")
             raise _TimedOut from None
+        except FileNotFoundError:
+            last_error = _ytdlp.NOT_INSTALLED
+            continue
         except Exception as e:
             last_error = f"yt-dlp error: {e}"
             continue

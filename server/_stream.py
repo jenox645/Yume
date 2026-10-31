@@ -110,6 +110,9 @@ def _resolve_stream_url(url):
         except subprocess.TimeoutExpired:
             print("[Yume] yt-dlp get-url timed out (30s)")
             return None
+        except OSError as e:  # not installed
+            print(f"[Yume] yt-dlp get-url could not run: {e}")
+            return None
         if result.returncode == 0 and result.stdout.strip().startswith("http"):
             return _remember_stream_url(url, result.stdout)
         last_stderr = result.stderr or ""

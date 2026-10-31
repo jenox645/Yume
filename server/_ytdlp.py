@@ -163,6 +163,8 @@ _COOKIES_FIX = (
     f"Fix: Settings → YouTube auth → Browser cookies, and pick a browser you are logged in with ({_SETTINGS})"
 )
 
+NOT_INSTALLED = "yt-dlp is not installed. Run the Yume setup wizard to install it."
+
 # (conditions, message): the first rule whose every condition matches wins.
 # A condition is a tuple of phrases, any of which may appear in the error.
 _YTDLP_ERRORS = [
@@ -197,10 +199,7 @@ _YTDLP_ERRORS = [
         "Cannot reach YouTube. Check your internet connection, or YouTube may be temporarily down.",
     ),
     ((("timed out", "timeout"),), "Download timed out — the video may be too long or the connection too slow."),
-    (
-        ((_state.ERR_NO_SUCH_FILE,), ("yt-dlp",)),
-        "yt-dlp is not installed. Run the Yume setup wizard to install it.",
-    ),
+    (((_state.ERR_NO_SUCH_FILE,), ("yt-dlp",)), NOT_INSTALLED),
     (
         (("no video formats", _state.ERR_REQUESTED_FORMAT),),
         "No compatible audio format found. Update yt-dlp (Tools → yt-dlp → Install / Update).",

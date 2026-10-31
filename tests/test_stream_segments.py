@@ -173,6 +173,17 @@ def test_a_get_url_timeout_gives_up(monkeypatch):
     assert len(calls) == 1
 
 
+def test_no_yt_dlp_means_no_stream_url(monkeypatch, capsys):
+    """It raised: the job failed with "FileNotFoundError: [WinError 2]..." for a video with a duration."""
+
+    def run(cmd, **kw):
+        raise FileNotFoundError("yt-dlp")
+
+    monkeypatch.setattr(_stream.subprocess, "run", run)
+    assert _stream.get_stream_url(YT) is None
+    assert "could not run" in capsys.readouterr().out
+
+
 def test_a_full_url_cache_drops_the_oldest_entry(monkeypatch):
     monkeypatch.setattr(_state, "STREAM_URL_CACHE_MAX", 2)
     now = time.time()
