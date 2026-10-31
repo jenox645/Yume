@@ -245,7 +245,7 @@ def ensure_port_free(port: int, cfg: dict, key_prefix: str, exclude: set | None 
     if ch == 1:
         return _kill_owner(port)
     if ch == 2:
-        return _typed_port(port, cfg, key_prefix)
+        return _typed_port(port, cfg, key_prefix, exclude)
     return None
 
 
@@ -256,6 +256,11 @@ def _save_port(cfg: dict, key_prefix: str, port: int) -> None:
     save_config(cfg)
 
 
+def _remind_extension(key_prefix: str, port: int) -> None:
+    if key_prefix == "whisper":
+        warn(f"Set the Whisper port to {port} in the browser extension popup (Server Settings) too.")
+
+
 def _other_port(port: int, cfg: dict, key_prefix: str, exclude: set | None) -> int | None:
     """Move to the next free port above `port` and save it."""
     new_port = find_free_port(port + 1, exclude=exclude)
@@ -264,12 +269,11 @@ def _other_port(port: int, cfg: dict, key_prefix: str, exclude: set | None) -> i
         return None
     _save_port(cfg, key_prefix, new_port)
     success(f"Reassigned to port {new_port}")
-    if key_prefix == "whisper":
-        warn(f"Set the Whisper port to {new_port} in the browser extension popup (Server Settings) too.")
+    _remind_extension(key_prefix, new_port)
     return new_port
 
 
-def _typed_port(port: int, cfg: dict, key_prefix: str) -> int | None:
+def _typed_port(port: int, cfg: dict, key_prefix: str, exclude: set | None) -> int | None:
     """Ask for a port number; save and return it if it is valid and free."""
     try:
         typed = int(ask_input("Port number", str(port + 1)))
@@ -279,10 +283,14 @@ def _typed_port(port: int, cfg: dict, key_prefix: str) -> int | None:
     if not MIN_PORT <= typed <= MAX_PORT:
         error(f"Port must be between {MIN_PORT} and {MAX_PORT}")
         return None
+    if typed in (exclude or ()):
+        error(f"Port {typed} is for the other server")
+        return None
     if not is_port_free(typed):
         error(f"Port {typed} is also in use")
         return None
     _save_port(cfg, key_prefix, typed)
+    _remind_extension(key_prefix, typed)
     return typed
 
 

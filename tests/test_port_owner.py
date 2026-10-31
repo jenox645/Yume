@@ -80,7 +80,7 @@ def test_posix_nobody_listening():
 # ── ensure_port_free: the "port in use" prompt ───────────────────────────────
 
 
-def resolve(choice, typed="", free=(), killed=True, found=5002, key="whisper"):
+def resolve(choice, typed="", free=(), killed=True, found=5002, key="whisper", exclude=None):
     """ensure_port_free(5001) with the user picking `choice` (and typing `typed`);
     `free` are the ports that are free. Returns (result, saved config, output)."""
     import config
@@ -105,7 +105,7 @@ def resolve(choice, typed="", free=(), killed=True, found=5002, key="whisper"):
         patch.object(ports, "warn", out.append),
         patch.object(ports, "info", out.append),
     ):
-        return ports.ensure_port_free(5001, cfg, key), saved, out
+        return ports.ensure_port_free(5001, cfg, key, exclude), saved, out
 
 
 def test_a_free_port_is_kept_without_asking():
@@ -132,6 +132,17 @@ def test_a_typed_port_is_checked():
     assert resolve(2, typed="6000", free={6000})[:2] == (6000, [{"whisper_port": 6000}])
     for typed in ("6000", "0", "70000", "abc"):  # in use, out of range, not a number
         assert resolve(2, typed=typed)[:2] == (None, [])
+
+
+def test_a_typed_port_cannot_be_the_other_servers():
+    # llama.cpp is not started yet, so its port is free: both servers would share it
+    port, saved, out = resolve(2, typed="5000", free={5000}, exclude={5000})
+    assert (port, saved) == (None, []) and any("5000" in line for line in out)
+
+
+def test_a_typed_whisper_port_reminds_about_the_extension():
+    assert any("extension popup" in line for line in resolve(2, typed="6000", free={6000})[2])
+    assert not any("extension popup" in line for line in resolve(2, typed="6000", free={6000}, key="translation")[2])
 
 
 def test_cancel_changes_nothing():
