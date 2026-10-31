@@ -222,6 +222,20 @@ def _pick_gguf(cfg: dict) -> str | None:
     return gp
 
 
+def _install_server_deps(env: dict) -> bool:
+    try:
+        r = _run([sys.executable, "-m", "pip", "install", *servers.LLAMA_SERVER_DEPS, "-q",
+                  "--no-warn-script-location"], timeout=300, env=env)  # fmt: skip
+    except Exception as e:
+        error(f"Failed to install: {e}")
+        return False
+    if r.returncode != 0:
+        error(f"Failed to install: {(r.stderr or '').strip()[-300:]}")
+        return False
+    success("Server dependencies installed!")
+    return True
+
+
 def _ensure_python_engine(env: dict) -> bool:
     """llama-cpp-python and the packages its server needs. False = launching cannot go on."""
     from yume.installers import install_llamacpp_python
@@ -242,12 +256,7 @@ def _ensure_python_engine(env: dict) -> bool:
     except ImportError:
         warn("Server dependencies missing (uvicorn/fastapi)")
         info("Installing them now...")
-        try:
-            _run([sys.executable, "-m", "pip", "install", *servers.LLAMA_SERVER_DEPS, "-q",
-                  "--no-warn-script-location"], timeout=300, env=env)  # fmt: skip
-            success("Server dependencies installed!")
-        except Exception as e:
-            error(f"Failed to install: {e}")
+        if not _install_server_deps(env):
             pause()
             return False
     return True

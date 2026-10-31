@@ -212,6 +212,16 @@ def test_a_failing_package_install_stops_the_launch(said, monkeypatch):
     assert "error: Failed to install: no pip" in said and said[-1] == "pause" and llama.spawned == []
 
 
+def test_a_refused_package_install_stops_the_launch(said, monkeypatch):
+    llama = Llama(monkeypatch, said, native=False)
+    _python_engine(monkeypatch)
+    monkeypatch.setitem(sys.modules, "uvicorn", None)
+    monkeypatch.setattr(launch, "_run", lambda *a, **k: types.SimpleNamespace(returncode=1, stderr="pip: no network\n"))
+    assert llama.go() is False
+    assert "error: Failed to install: pip: no network" in said and said[-1] == "pause" and llama.spawned == []
+    assert not has(said, "Server dependencies installed!")
+
+
 def test_a_port_that_stays_busy_stops_the_launch(said, monkeypatch):
     llama = Llama(monkeypatch, said, freed=False)
     assert llama.go() is False
