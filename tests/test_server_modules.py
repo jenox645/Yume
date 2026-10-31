@@ -1013,7 +1013,7 @@ class TestBuildDownloadStrategies(unittest.TestCase):
         # URL that never needed cookies (direct media, cookie-less environments).
         _state.youtube_auth_method = "cookies"
         with patch.object(_ytdlp, "resolve_browser_cookies", return_value="firefox"):
-            strategies = _download._build_download_strategies("https://example.com/video", False)
+            strategies = _download._build_download_strategies(False)
         labels = [label for label, _ in strategies]
         self.assertIn("no-auth", labels)
         self.assertEqual(labels[-1], "no-auth")
@@ -1021,20 +1021,20 @@ class TestBuildDownloadStrategies(unittest.TestCase):
     def test_youtube_cookies_has_multiple_strategies(self):
         _state.youtube_auth_method = "cookies"
         with patch.object(_ytdlp, "resolve_browser_cookies", return_value="firefox"):
-            strategies = _download._build_download_strategies("https://youtube.com/watch", True)
+            strategies = _download._build_download_strategies(True)
         self.assertGreater(len(strategies), 1)
 
     def test_youtube_deno_has_deno_strategy(self):
         _state.youtube_auth_method = "deno"
         with patch.object(_ytdlp, "resolve_browser_cookies", return_value="firefox"):
-            strategies = _download._build_download_strategies("https://youtube.com/watch", True)
+            strategies = _download._build_download_strategies(True)
         labels = [label for label, _ in strategies]
         self.assertTrue(any("deno" in lb for lb in labels))
 
     def test_all_strategies_are_tuples(self):
         _state.youtube_auth_method = "cookies"
         with patch.object(_ytdlp, "resolve_browser_cookies", return_value="firefox"):
-            strategies = _download._build_download_strategies("https://youtube.com/watch", True)
+            strategies = _download._build_download_strategies(True)
         for item in strategies:
             self.assertIsInstance(item, tuple)
             self.assertEqual(len(item), 2)

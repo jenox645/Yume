@@ -18,7 +18,6 @@ import _state
 _COOKIE_DB_ERRORS = ("could not copy chrome cookie database", "failed to decrypt", "cookies database", "app-bound")
 COOKIES_RETRY_S = 600
 _cookies_failed_at = 0.0
-_cookies_error = ""
 
 
 def cookies_unreadable():
@@ -26,11 +25,10 @@ def cookies_unreadable():
 
 
 def note_cookie_failure(stderr):
-    global _cookies_failed_at, _cookies_error
+    global _cookies_failed_at
     low = (stderr or "").lower()
     if any(e in low for e in _COOKIE_DB_ERRORS):
         _cookies_failed_at = time.time()
-        _cookies_error = next((ln.strip() for ln in stderr.splitlines() if "ERROR" in ln), "cookie error")[:200]
         return True
     return False
 
@@ -144,20 +142,16 @@ def build_auth_args(url):
     For deno mode: bgutil plugin works transparently (no args needed).
     We still add cookies as backup for non-download calls.
     """
-    args = []
     if cookies_unreadable():
-        return args
-    if is_youtube_url(url):
-        if _state.youtube_auth_method == "cookies":
-            args.extend(["--cookies-from-browser", resolve_browser_cookies()])
-        elif _state.youtube_auth_method == "deno":
-            try:
-                args.extend(["--cookies-from-browser", resolve_browser_cookies()])
-            except Exception:
-                pass
-    elif _state.youtube_auth_method == "cookies":
-        args.extend(["--cookies-from-browser", resolve_browser_cookies()])
-    return args
+        return []
+    if _state.youtube_auth_method == "cookies":
+        return ["--cookies-from-browser", resolve_browser_cookies()]
+    if _state.youtube_auth_method == "deno" and is_youtube_url(url):
+        try:
+            return ["--cookies-from-browser", resolve_browser_cookies()]
+        except Exception:
+            pass
+    return []
 
 
 # ── What its errors mean ──────────────────────────────────────────────────────

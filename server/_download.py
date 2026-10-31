@@ -1,9 +1,4 @@
-"""The whole audio track of a video, once.
-
-Strategy 1: yt-dlp (each auth strategy × format pass)
-Strategy 2: yt-dlp resolves the stream URL, ffmpeg downloads it (YouTube)
-Strategy 3: ffmpeg on the URL itself (other sites: m3u8, direct media)
-"""
+"""A video's whole audio track, by every way there is; custom stream URLs too."""
 
 import os
 import shutil
@@ -19,6 +14,7 @@ from _security import validate_url
 # timeout means retrying with other auth/format options would only waste the
 # same time again.
 DOWNLOAD_TIMEOUT_S = 900
+DIRECT_TIMEOUT_S = 600  # per tool: ffmpeg, then yt-dlp
 
 LIVE_ERROR = (
     "This is a live stream. Yume transcribes a video's whole audio, so it works on the "
@@ -32,18 +28,11 @@ def _is_live(stderr_lower):
     return "yt_live_broadcast" in stderr_lower or "/live/1/" in stderr_lower
 
 
-def _run_tool(cmd):
-    return subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=DOWNLOAD_TIMEOUT_S,
-    )
+def _run_tool(cmd, timeout=DOWNLOAD_TIMEOUT_S):
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
 
 
-def _ffmpeg_to_wav(src, out_path, rate, channels):
+def _ffmpeg_to_wav(src, out_path, rate, channels, timeout=DOWNLOAD_TIMEOUT_S):
     """ffmpeg `src` (a URL) into a WAV; returns (ok, stderr)."""
     result = _run_tool(
         [
@@ -61,7 +50,8 @@ def _ffmpeg_to_wav(src, out_path, rate, channels):
             "-f",
             "wav",
             out_path,
-        ]
+        ],  # fmt: skip
+        timeout,
     )
     ok = result.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 10000
     return ok, (result.stderr or "")
@@ -86,28 +76,19 @@ class _TimedOut(Exception):
 
 def _ytdlp_audio_cmd(url, fmt_args, auth_args, output_template, pp_opts):
     return [
-        *_ytdlp.ytdlp_cmd(),
-        *fmt_args,
-        "-x",
-        "--audio-format",
-        "wav",
-        "--postprocessor-args",
-        pp_opts,
-        "--no-playlist",
-        "--no-cache-dir",
-        "--no-exec",
-        *auth_args,
-        "-o",
-        output_template,
-        "--",
-        url,
-    ]
+        *_ytdlp.ytdlp_cmd(), *fmt_args, "-x", "--audio-format", "wav", "--postprocessor-args", pp_opts,
+        "--no-playlist", "--no-cache-dir", "--no-exec", *auth_args, "-o", output_template, "--", url,
+    ]  # fmt: skip
+
+
+def _last_error_line(result):
+    lines = [ln.strip() for ln in (result.stderr or "").split("\n") if "ERROR" in ln.upper()]
+    return lines[-1] if lines else ""
 
 
 def _ytdlp_error(result):
     """A failed run's last ERROR line, as advice for the user."""
-    lines = [ln.strip() for ln in (result.stderr or "").split("\n") if ln.strip() and "ERROR" in ln.upper()]
-    return _ytdlp.friendlify_ytdlp_error(lines[-1][:300] if lines else f"exit code {result.returncode}")
+    return _ytdlp.friendlify_ytdlp_error(_last_error_line(result)[:300] or f"exit code {result.returncode}")
 
 
 def _ytdlp_strategies(url, strategies, output_template, output_path, pp_opts):
@@ -146,22 +127,27 @@ def _ytdlp_format_passes(url, label, extra_args, output_template, output_path, p
             print(f"[Yume] yt-dlp ({tag}) succeeded!")
             return output_path, None
 
-        stderr_lower = (result.stderr or "").lower()
-        if _ytdlp.note_cookie_failure(result.stderr):
-            print(
-                f"[Yume] Browser cookies unreadable — skipping cookie strategies for {_ytdlp.COOKIES_RETRY_S // 60} min"
-            )
+        next_pass, error = _failed_pass(result, fmt_pass, tag)
+        last_error = error or last_error
+        if not next_pass:
             break
-        if _is_live(stderr_lower):
-            raise _Live
-        if _state.ERR_REQUESTED_FORMAT in stderr_lower and fmt_pass == "bestaudio":
-            continue  # skip to nofmt pass of same auth strategy
-
-        last_error = _ytdlp_error(result)
-        print(f"[Yume] yt-dlp ({tag}) failed: {last_error[:150]}")
-        if any(w in stderr_lower for w in _AUTH_ERROR_WORDS):
-            break  # auth error — skip nofmt pass, move to next auth strategy
     return None, last_error
+
+
+def _failed_pass(result, fmt_pass, tag):
+    """What a failed attempt means: (try the next format pass?, its error if any)."""
+    stderr_lower = (result.stderr or "").lower()
+    if _ytdlp.note_cookie_failure(result.stderr):
+        print(f"[Yume] Browser cookies unreadable — skipping cookie strategies for {_ytdlp.COOKIES_RETRY_S // 60} min")
+        return False, None
+    if _is_live(stderr_lower):
+        raise _Live
+    if _state.ERR_REQUESTED_FORMAT in stderr_lower and fmt_pass == "bestaudio":
+        return True, None
+    error = _ytdlp_error(result)
+    print(f"[Yume] yt-dlp ({tag}) failed: {error[:150]}")
+    # An auth error fails on every format: on to the next auth strategy
+    return not any(w in stderr_lower for w in _AUTH_ERROR_WORDS), error
 
 
 def _stream_url_fallback(url, tmp_dir, rate, channels):
@@ -221,7 +207,7 @@ def download_full_audio(url, stereo=False):
     try:
         path, last_error = _ytdlp_strategies(
             url,
-            _build_download_strategies(url, is_yt),
+            _build_download_strategies(is_yt),
             os.path.join(tmp_dir, "full_audio.%(ext)s"),
             output_path,
             f"ffmpeg:-ar {rate} -ac {channels}",
@@ -240,13 +226,18 @@ def download_full_audio(url, stereo=False):
         return path, None
 
     shutil.rmtree(tmp_dir, ignore_errors=True)
-    auth_error = any(k in last_error.lower() for k in ("403", "sign-in", "sign in", "age-restricted", "access denied"))
-    if _ytdlp.cookies_unreadable() and is_yt and auth_error:
-        last_error = last_error.split(" For YouTube:")[0] + _ytdlp.cookies_hint()  # cookies are what failed
-    return None, last_error
+    return None, _with_cookies_hint(last_error) if is_yt else last_error
 
 
-def _build_download_strategies(url, is_yt):
+def _with_cookies_hint(error):
+    """An auth error on YouTube, when the cookies are what failed."""
+    auth_error = any(k in error.lower() for k in ("403", "sign-in", "sign in", "age-restricted", "access denied"))
+    if _ytdlp.cookies_unreadable() and auth_error:
+        return error.split(" For YouTube:")[0] + _ytdlp.cookies_hint()
+    return error
+
+
+def _build_download_strategies(is_yt):
     """Return the ordered list of (label, extra_args) yt-dlp auth strategies."""
     cookie_args = []
     try:
@@ -293,36 +284,21 @@ def download_direct(stream_url):
     tmp_dir = tempfile.mkdtemp(prefix="yume_direct_")
     output_path = os.path.join(tmp_dir, "full_audio.wav")
     try:
-        result = subprocess.run(
-            [
-                "ffmpeg", "-y", "-protocol_whitelist", _state.FFMPEG_PROTOCOL_WHITELIST,
-                "-i", stream_url, "-vn", "-ar", "16000", "-ac", "1", "-f", "wav", output_path,
-            ],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600,
-        )  # fmt: skip
-        if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
+        if _ffmpeg_to_wav(stream_url, output_path, "16000", "1", DIRECT_TIMEOUT_S)[0]:
             return output_path, None
         print("[Yume] ffmpeg failed on stream URL, trying yt-dlp...")
-        result = subprocess.run(
-            [
-                *_ytdlp.ytdlp_cmd(), "-x", "--audio-format", "wav", "--postprocessor-args", _state.FFMPEG_AUDIO_OPTS,
-                "--no-playlist", "--no-cache-dir", "--no-exec",
-                "-o", os.path.join(tmp_dir, "full_audio.%(ext)s"), "--", stream_url,
-            ],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600,
-        )  # fmt: skip
+        template = os.path.join(tmp_dir, "full_audio.%(ext)s")
+        result = _run_tool(_ytdlp_audio_cmd(stream_url, [], [], template, _state.FFMPEG_AUDIO_OPTS), DIRECT_TIMEOUT_S)
         if result.returncode == 0 and os.path.exists(output_path):
             return output_path, None
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        lines = [ln.strip() for ln in (result.stderr or "").splitlines() if "ERROR" in ln.upper()]
-        reason = lines[-1].replace("ERROR: ", "")[:150] if lines else f"exit code {result.returncode}"
-        return None, (
+        reason = _last_error_line(result).replace("ERROR: ", "")[:150] or f"exit code {result.returncode}"
+        error = (
             f"Could not download the custom stream URL ({reason}). Stream URLs copied from the browser "
             "usually expire within hours: copy a fresh one (DevTools > Network) and paste it again."
         )
     except subprocess.TimeoutExpired:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        return None, "Direct download timed out"
+        error = "Direct download timed out"
     except Exception as e:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        return None, f"Direct download error: {e}"
+        error = f"Direct download error: {e}"
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    return None, error
