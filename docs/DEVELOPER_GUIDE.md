@@ -33,7 +33,7 @@ python server/faster_whisper_server.py --model tiny --device cpu --compute-type 
 | `yume/llama_server.py` | llama.cpp's prebuilt `llama-server`: picks the build for the GPU/driver from GitHub releases, verified download, command line (preferred over llama-cpp-python) |
 | `yume/native_host.py` | Native messaging host + browser registration (`autostart on/off`) |
 | `yume/setup.py` | Setup wizard, extension install guide, uninstall |
-| `yume/menus/` | `server.py` `stats` command; `blacklist.py` `blacklist` command + subtitle filter menu; `whisper_model.py` `model` command + hot-swap menu; `hf_browser.py` GGUF browser; `tools.py` Tools & Fonts (installers, translation engine, Python dependencies); `translation.py` backend, address, model, test sentence; `youtube_auth.py` cookies or Deno; `one_click.py` one-click start; `settings.py` Settings menu. `__init__` re-exports the entry points |
+| `yume/menus/` | `server.py` `stats` command; `blacklist.py` `blacklist` command + subtitle filter menu; `whisper_model.py` `model` command + hot-swap menu; `hf_browser.py` GGUF browser; `tools.py` Tools & Fonts (installers, translation engine, Python dependencies); `translation.py` backend, address, model, test sentence; `youtube_auth.py` cookies or Deno; `one_click.py` one-click start; `prompts.py` translation and romanization prompt editors; `settings.py` Settings menu. `__init__` re-exports the entry points |
 | `yume/health.py` | Health check (incl. end-to-end translation), status, fonts |
 | `yume/installers.py` | yt-dlp, FFmpeg, Deno + PO-token plugin, llama-cpp-python, Ollama |
 | `yume/hardware.py` | GPU/CPU/RAM detection, **`WHISPER_MODELS` (the one model table)**, recommendation |

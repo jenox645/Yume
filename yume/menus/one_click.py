@@ -7,6 +7,12 @@ import sys
 from yume.ui import C, ask_arrow, ask_input, error, header, info, pause, success
 
 
+def _show_state(browsers: list, mins: int) -> None:
+    state = f"{C.GREEN}✓ on{C.RESET}  ({', '.join(browsers)})" if browsers else f"{C.DIM}– off{C.RESET}"
+    info(f"Status:     {state}")
+    info(f"Auto-stop:  {f'after {mins} min without a video' if mins else 'never'}")
+
+
 def menu_one_click(cfg: dict) -> None:
     """Let the browser extension start/stop Yume (native messaging host)."""
     from yume import native_host
@@ -17,37 +23,28 @@ def menu_one_click(cfg: dict) -> None:
         info("no launcher window. Yume then stops on its own when you stop watching.")
         print()
         browsers = native_host.registered_browsers()
-        mins = int(cfg.get("auto_stop_minutes", 30))
-        state = f"{C.GREEN}✓ on{C.RESET}  ({', '.join(browsers)})" if browsers else f"{C.DIM}– off{C.RESET}"
-        info(f"Status:     {state}")
-        info(f"Auto-stop:  {f'after {mins} min without a video' if mins else 'never'}")
+        _show_state(browsers, int(cfg.get("auto_stop_minutes", 30)))
         print()
+        entries = [
+            (
+                "Turn on" if not browsers else "Repair / re-register",
+                "Register Yume with Chrome, Edge, Brave and Firefox",
+                _register,
+            ),
+            ("Turn off", "Remove the registration", _unregister),
+            ("Auto-stop delay", "Minutes without a video before Yume stops (0 = never)", _ask_auto_stop),
+        ]
         ch = ask_arrow(
             "Options:",
-            [
-                (
-                    "Turn on" if not browsers else "Repair / re-register",
-                    "Register Yume with Chrome, Edge, Brave and Firefox",
-                ),
-                ("Turn off", "Remove the registration"),
-                ("Auto-stop delay", "Minutes without a video before Yume stops (0 = never)"),
-                ("Back", None),
-            ],
-            default=0 if not browsers else 3,
+            [(label, desc) for label, desc, _ in entries] + [("Back", None)],
+            default=0 if not browsers else len(entries),
         )
-        if ch == -1 or ch == 3:
+        if not 0 <= ch < len(entries):
             return
-        elif ch == 0:
-            _register()
-        elif ch == 1:
-            native_host.unregister()
-            success("One-click start is off.")
-            pause()
-        elif ch == 2:
-            _ask_auto_stop(cfg, mins)
+        entries[ch][2](cfg)
 
 
-def _register() -> None:
+def _register(cfg: dict) -> None:
     from yume import native_host
 
     try:
@@ -59,11 +56,19 @@ def _register() -> None:
     pause()
 
 
-def _ask_auto_stop(cfg: dict, mins: int) -> None:
+def _unregister(cfg: dict) -> None:
+    from yume import native_host
+
+    native_host.unregister()
+    success("One-click start is off.")
+    pause()
+
+
+def _ask_auto_stop(cfg: dict) -> None:
     from config import save_config
 
     try:
-        n = int(ask_input("Minutes (0 = never)", str(mins)))
+        n = int(ask_input("Minutes (0 = never)", str(int(cfg.get("auto_stop_minutes", 30)))))
         if not 0 <= n <= 24 * 60:
             raise ValueError
     except ValueError:

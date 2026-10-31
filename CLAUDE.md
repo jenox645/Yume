@@ -136,7 +136,7 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 | `yume/vocals.py` | Vocal isolation from the CLI: status, install (PyTorch CUDA build matched to the driver + demucs), on/off |
 | `yume/native_host.py` | Native messaging host `com.pocketyume.yume` (status/start/stop) + registration; allowed extension ID must match the manifest `key` |
 | `yume/setup.py` | Setup wizard, extension guide, uninstall |
-| `yume/menus/` | Interactive menus, split by area: `server.py` (`stats` command), `blacklist.py` (`blacklist` command, subtitle filter), `whisper_model.py` (`model` command, hot swap), `hf_browser.py`, `tools.py` (installers, translation engine, Python dependencies), `translation.py` (backend, address, model, test sentence), `youtube_auth.py`, `one_click.py`, `settings.py` |
+| `yume/menus/` | Interactive menus, split by area: `server.py` (`stats` command), `blacklist.py` (`blacklist` command, subtitle filter), `whisper_model.py` (`model` command, hot swap), `hf_browser.py`, `tools.py` (installers, translation engine, Python dependencies), `translation.py` (backend, address, model, test sentence), `youtube_auth.py`, `one_click.py`, `prompts.py` (translation and romanization prompts), `settings.py` |
 | `yume/guides.py` | Help & Guides menu: in-CLI cookbook of task-oriented recipes |
 | `yume/health.py` | Health check (incl. end-to-end translation), system status, font detection |
 | `yume/benchmark.py` | Whisper speed benchmark across models |

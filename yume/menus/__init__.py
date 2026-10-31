@@ -8,6 +8,7 @@ tools.py       Tools & Fonts: installers, the translation engine, Python depende
 translation.py Translation backend, address, model, test sentence
 youtube_auth.py Browser cookies or Deno
 one_click.py   One-click start
+prompts.py     Translation and romanization prompt editors
 settings.py    Settings menu
 """
 

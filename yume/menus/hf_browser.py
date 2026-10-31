@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import re
 
 from yume.constants import GGUF_DIR, KiB, MiB, GiB, use_backend
@@ -20,9 +19,6 @@ from yume.ui import (
     success,
     warn,
 )
-
-
-_log = logging.getLogger("pocket_yume")
 
 
 # ── HuggingFace browser ────────────────────────────────────────────────────────
@@ -133,7 +129,7 @@ def _download_model(cfg: dict, repo: str, sel: dict, vram_gb: float) -> None:
     for i, part in enumerate(parts, 1):
         if len(parts) > 1:
             info(f"Part {i}/{len(parts)}")
-        if not hf_download(repo, part, sel.get("sha256", {}).get(part)):
+        if not hf_download(repo, part, sel["sha256"].get(part)):
             error(f"Download failed: {part}")
             return
     # llama.cpp loads a split model from its first part
