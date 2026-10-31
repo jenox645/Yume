@@ -66,8 +66,10 @@ def _show_custom(current: str) -> None:
 def _edit(cfg: dict, key: str, hints: tuple, starter: str, saved: str) -> None:
     for hint in hints:
         info(hint)
-    new_prompt = ask_input("New prompt", cfg.get(key, "") or starter)
-    if new_prompt:
+    offered = cfg.get(key, "") or starter
+    new_prompt = ask_input("New prompt", offered)
+    # Enter returns what was offered: the starter must not replace the built-in prompt
+    if new_prompt and new_prompt != offered:
         _store(cfg, key, new_prompt)
         success(saved)
     pause()

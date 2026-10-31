@@ -561,3 +561,34 @@ def test_a_failed_switch_to_a_custom_model_does_not_rename_the_active_one(tmp_pa
         cfg
     )
     assert cfg["whisper_model"] == "small" and not cfg.get("whisper_model_name")
+
+
+import yume.menus.prompts as prompts  # noqa: E402
+
+
+def prompt_menu(fn, choice, answer, cfg):
+    saved = MagicMock()
+    with (
+        patch.object(prompts, "ask_arrow", lambda *a, **k: choice),
+        patch.object(prompts, "input", lambda *a: answer, create=True),
+        patch("builtins.input", lambda *a: answer),
+        patch.object(prompts, "pause", MagicMock()),
+        patch("config.save_config", saved),
+    ):
+        fn(cfg)
+    return saved
+
+
+def test_enter_in_the_prompt_editor_keeps_the_built_in_prompt():
+    # Enter returned the offered starter text, saved as a custom prompt: no more script rules
+    cfg = {"translation_prompt": ""}
+    saved = prompt_menu(prompts._menu_translation_prompt, 0, "", cfg)
+    saved.assert_not_called()
+    assert cfg["translation_prompt"] == ""
+
+
+def test_the_prompt_editor_saves_new_text():
+    cfg = {"translation_prompt": ""}
+    saved = prompt_menu(prompts._menu_translation_prompt, 0, "Translate {src} to {tgt}.", cfg)
+    saved.assert_called_once()
+    assert cfg["translation_prompt"] == "Translate {src} to {tgt}."
