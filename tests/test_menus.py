@@ -9,6 +9,8 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import yume.benchmark  # noqa: E402
@@ -233,6 +235,8 @@ def test_reset_only_when_confirmed():
 
 import yume.installers  # noqa: E402
 import yume.menus.tools as tools  # noqa: E402
+import yume.menus.translation as translation  # noqa: E402
+from yume.menus.one_click import cli_one_click  # noqa: E402
 
 
 def manage(choices, cfg, *, inputs=(), yns=(), ggufs=()):
@@ -253,10 +257,10 @@ def manage(choices, cfg, *, inputs=(), yns=(), ggufs=()):
     }
     with ExitStack() as stack:
         for name, fake in fakes.items():
-            stack.enter_context(patch.object(tools, name, fake))
+            stack.enter_context(patch.object(translation, name, fake))
         stack.enter_context(patch.object(yume.installers, "pull_ollama_model", lambda m: pulled.append(m) or True))
         stack.enter_context(patch("config.save_config", saved))
-        tools._manage_model(cfg)
+        translation._manage_model(cfg)
     return types.SimpleNamespace(cfg=cfg, pulled=pulled, browsed=browsed, saved=saved)
 
 
@@ -416,6 +420,13 @@ class Blacklist:
                 stack.enter_context(patch.object(srv, name, fake))
             fn({"whisper_host": "127.0.0.1", "whisper_port": 5001}, *args)
         return self
+
+
+def test_an_unknown_autostart_command_exits_2():
+    with patch("yume.menus.one_click.error") as said, pytest.raises(SystemExit) as e:
+        cli_one_click({}, ["onn"])
+    assert e.value.code == 2
+    said.assert_called_once()
 
 
 def test_blacklist_command_add_remove_clear_on_the_server(tmp_path):

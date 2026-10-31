@@ -21,7 +21,9 @@ from yume.ui import (
 )
 
 from yume.menus.server import _menu_whisper_model
-from yume.menus.tools import _change_addr, _menu_backend, _menu_yt_auth, menu_one_click
+from yume.menus.one_click import menu_one_click
+from yume.menus.translation import _change_addr, _menu_backend
+from yume.menus.youtube_auth import _menu_yt_auth
 
 _log = logging.getLogger("pocket_yume")
 
