@@ -1021,6 +1021,19 @@ def test_videos_filed_as_talk_are_not_separated(pipeline, category, separated):
     assert read.called is separated
 
 
+@pytest.mark.parametrize(("isolate", "looked_up"), [(True, 1), (False, 0)])
+def test_a_video_with_no_preview_still_gets_its_category(pipeline, isolate, looked_up):
+    # Yume starting takes ~35 s: the playhead is then past the preview's 30 s
+    job = _job.Job(("v", "ar", "", "m"), {"language": "ar", "url": "https://x/a", "playhead": 40})
+    job.isolate = isolate
+    with patch.object(_stream, "get_stream_url") as url:
+        pipeline.jobs._start_preview(job, {})
+        for t in threading.enumerate():
+            if t.name.startswith("preview-"):
+                t.join(timeout=5)
+    assert url.call_count == looked_up
+
+
 def test_stream_url_keeps_the_category(monkeypatch):
     url = "https://www.youtube.com/watch?v=cat"
     monkeypatch.setattr(_state, "stream_url_cache", {})

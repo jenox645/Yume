@@ -216,11 +216,23 @@ class JobManager:
 
     def _start_preview(self, job, cached):
         # For a video watched from the start, not one resumed at 40:00
-        if job.playhead >= _regions.FIRST_REGION_S or job.stream_url or any(r[0] == 0.0 for r in cached):
+        no_preview = job.playhead >= _regions.FIRST_REGION_S or any(r[0] == 0.0 for r in cached)
+        if job.stream_url or (no_preview and not job.isolate):
             return
         with job.lock:
             job.preview_started = time.time()
-        threading.Thread(target=self._preview, args=(job,), name=f"preview-{job.id[:6]}", daemon=True).start()
+        target = self._learn_category if no_preview else self._preview
+        threading.Thread(target=target, args=(job,), name=f"preview-{job.id[:6]}", daemon=True).start()
+
+    def _learn_category(self, job):
+        """_isolate needs the video's category, which comes with the stream URL.
+        Yume starting takes ~35 s, so a news video opened cold has no preview to ask it."""
+        try:
+            _stream.get_stream_url(job.url)
+        finally:
+            with job.lock:
+                job.preview_started = 0.0
+            self._notify()
 
     def _stream_regions(self, job, err, cached):
         """Full download failed but the stream itself is reachable:
