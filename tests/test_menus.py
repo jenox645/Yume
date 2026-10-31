@@ -600,3 +600,11 @@ def test_hf_declining_llamacpp_keeps_the_other_backends_model():
     browse([0, 1], cfg, yns=[True, False])
     assert cfg["translation_model"] == "qwen2.5:7b" and cfg["translation_backend"] == "ollama"
     assert cfg["gguf_model_path"].endswith("qwen-q4_k_m.gguf")
+
+
+def test_blacklist_menu_says_when_a_change_was_not_saved(tmp_path):
+    b = Blacklist(tmp_path, server=["Subscribe"])
+    b._post = lambda *a, **k: {"error": "HTTP 500"}
+    b.run(bl_menu._menu_blacklist, choices=[1, 0, 3])
+    b.run(bl_menu._menu_blacklist, choices=[2, 3], yns=[True])
+    assert b.said.count("Failed to save") == 2

@@ -112,14 +112,13 @@ def _bl_remove(bl: _Blacklist) -> None:
     # Against len(shown), not len(items): with >20 items "Back" is index 20, a valid item index
     if 0 <= ch < len(shown):
         removed = bl.items[ch]
-        if bl.save(bl.items[:ch] + bl.items[ch + 1 :]):
-            success(f"Removed: {removed}")
+        _said(bl.save(bl.items[:ch] + bl.items[ch + 1 :]), f"Removed: {removed}")
     pause()
 
 
 def _bl_clear(bl: _Blacklist) -> None:
-    if ask_yn("Clear ALL?", False) and bl.save([]):
-        success("Cleared")
+    if ask_yn("Clear ALL?", False):
+        _said(bl.save([]), "Cleared")
     pause()
 
 
