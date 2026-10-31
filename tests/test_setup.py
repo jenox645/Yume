@@ -72,7 +72,8 @@ class Wizard:
 
         ls = MagicMock()
         ls.server_path.return_value = "llama-server.exe" if self.engine else None
-        ls.installed_build.return_value = {"tag": "b9000", "variant": "cuda"}
+        ls.build_label.return_value = "llama-server b9000 (cuda)"
+        ls.python_engine_on_gpu.return_value = None
         ls.install = self._installer("llama-server")
         ls.LLAMA_DIR = Path("tools/llama.cpp")
         modules = {

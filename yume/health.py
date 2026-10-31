@@ -1,37 +1,17 @@
-"""Health check, system status, and font detection."""
+"""Health check."""
 
 from __future__ import annotations
 
 import concurrent.futures
-import os
 import re
 import sys
-import time
-from pathlib import Path
 
-from yume.constants import (
-    BASE_DIR,
-    SERVER_DIR,
-    EXT_DIR,
-    PLAT,
-    IS_WIN,
-    IS_MAC,
-    ARCH,
-    GiB,
-    HEALTH_PATH_OPENAI,
-    backend_info,
-)
+from yume.constants import SERVER_DIR, backend_info
 from yume.hardware import detect_gpu, detect_ram_gb, disk_free_gb, recommend_whisper_model
 from yume.network import check_server, check_translation_server
 from yume.ports import get_port_process, is_port_free
-from yume.ui import C, bullet, header, info, panel, section, success, table, warn
-from yume.utils import find_gguf_models, find_tool
-
-
-# 30-second hardware info cache — avoids re-calling nvidia-smi on every status render
-_hw_cache: dict | None = None
-_hw_cache_ts: float = 0.0
-_HW_CACHE_TTL = 30.0
+from yume.ui import C, header, info, panel, success, table, warn
+from yume.utils import _try_import, find_gguf_models, find_tool
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
@@ -83,6 +63,8 @@ def _chk_pkg(pkg, name):
         return (name, True, "installed")
     except ImportError:
         return (name, False, "not installed")
+    except Exception as e:  # llama_cpp raises RuntimeError when its library will not load
+        return (name, False, f"fails to load: {e}"[:90])
 
 
 def _chk_requirements():
@@ -96,16 +78,14 @@ def _chk_llama_cuda():
     from yume import llama_server
 
     if llama_server.server_path():
-        build = llama_server.installed_build()
-        return ("Translation engine", True, f"llama-server {build.get('tag', '')} ({build.get('variant', '?')})")
+        return ("Translation engine", True, llama_server.build_label())
     gpu = detect_gpu()
     if not (gpu.get("has_nvidia") or gpu.get("has_amd")):
         return None  # not relevant on CPU-only machines
-    try:
-        import llama_cpp.llama_cpp as _lib  # type: ignore[import]
-    except ImportError:
+    on_gpu = llama_server.python_engine_on_gpu()
+    if on_gpu is None:
         return ("llama-cpp CUDA support", False, "llama-cpp-python not installed")
-    if callable(getattr(_lib, "ggml_backend_cuda_reg", None)):
+    if on_gpu:
         return ("llama-cpp CUDA support", True, "GPU offloading available")
     return (
         "llama-cpp CUDA support",
@@ -116,11 +96,9 @@ def _chk_llama_cuda():
 
 def _chk_roma(pkg, desc):
     # Optional lib: always PASS, but the detail must not read like a failure
-    try:
-        __import__(pkg)
+    if _try_import(pkg):
         return (pkg, True, f"installed — {desc}")
-    except ImportError:
-        return (pkg, True, f"optional, not installed — {desc} will use the LLM (slower)")
+    return (pkg, True, f"optional, not installed — {desc} will use the LLM (slower)")
 
 
 def _chk_cutlet():
@@ -137,11 +115,11 @@ def _chk_cutlet():
 def _port_row(label, port, responding, launched_by_yume):
     """A busy port is only a problem when something OTHER than the expected
     server holds it (the old check failed whenever Yume was running)."""
+    if responding:  # first: a server on another machine leaves this port free
+        return (f"{label} port {port}", True, "in use by the running server")
     if is_port_free(port):
         ok = launched_by_yume  # free is fine if Yume will start it; an external LLM should be up
         return (f"{label} port {port}", ok, "free — starts on Launch" if ok else "nothing listening")
-    if responding:
-        return (f"{label} port {port}", True, "in use by the running server")
     pid, name = get_port_process(port)
     return (f"{label} port {port}", False, f"held by {name or 'unknown'} (PID {pid or '?'}), not by the server")
 
@@ -181,8 +159,6 @@ def _chk_translation_srv(c, tp):
 
 def _chk_server_script():
     ss = SERVER_DIR / "faster_whisper_server.py"
-    if not ss.exists():
-        ss = BASE_DIR / "faster_whisper_server.py"
     return ("Whisper server script", ss.exists(), str(ss) if ss.exists() else "MISSING")
 
 
@@ -192,19 +168,16 @@ def _as_rows(result) -> list:
     return result if isinstance(result, list) else [result]
 
 
-def _run_checks(cfg: dict) -> list:
-    """Run every check in parallel; rows come back in display order."""
-    from config import DEFAULT_TRANSLATION_PORT, DEFAULT_WHISPER_PORT, load_config
-
+def _check_list(cfg: dict, c: dict, wp: int, tp: int) -> list:
+    """(check, *its arguments) in display order."""
     from yume import llama_server, vocals
 
-    c = load_config()
-    wp = c.get("whisper_port", DEFAULT_WHISPER_PORT)
-    tp = c.get("translation_port", DEFAULT_TRANSLATION_PORT)
-    uses_llamacpp = cfg.get("translation_backend", "llamacpp") == "llamacpp"
-    native = llama_server.server_path() is not None  # llama-server replaces llama-cpp-python
-
-    checks = [
+    engine = []
+    if cfg.get("translation_backend", "llamacpp") == "llamacpp":
+        if llama_server.server_path() is None:  # llama-server replaces llama-cpp-python
+            engine.append((_chk_pkg, "llama_cpp", "llama-cpp-python"))
+        engine.append((_chk_llama_cuda,))
+    return [
         (_chk_system,),
         (_chk_tool, "yt-dlp"),
         (_chk_tool, "ffmpeg"),
@@ -214,27 +187,35 @@ def _run_checks(cfg: dict) -> list:
         (_chk_pkg, "faster_whisper", "faster-whisper"),
         (_chk_pkg, "flask", "Flask"),
         (_chk_requirements,),
-    ]
-    if uses_llamacpp and not native:
-        checks.append((_chk_pkg, "llama_cpp", "llama-cpp-python"))
-    if uses_llamacpp:
-        checks.append((_chk_llama_cuda,))
-    roma = [
+        *engine,
         (_chk_cutlet,),
         (_chk_roma, "pykakasi", "Japanese romaji fallback"),
         (_chk_roma, "pypinyin", "Chinese pinyin"),
+        (vocals.health_row, cfg),
+        (_chk_translation_srv, c, tp),
+        (_chk_whisper_srv, wp),
     ]
-    checks += [*roma, (vocals.health_row, cfg), (_chk_translation_srv, c, tp), (_chk_whisper_srv, wp)]
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
-        futures = [ex.submit(fn, *args) for fn, *args in checks]
-        results = [row for f in futures for row in _as_rows(f.result())]
 
+def _romanization_tip(results: list) -> None:
     roma_names = {"Japanese by word", "pykakasi", "pypinyin"}
     if not any(name in roma_names and "not installed" not in detail for name, _ok, detail in results):
         info(f"\n  {C.DIM}Tip: Install romanization libraries for instant romaji/pinyin:{C.RESET}")
         info(f"  {C.CYAN}pip install pykakasi pypinyin{C.RESET}")
         info(f"  {C.DIM}Without them, Yume uses the LLM for romanization (slower).{C.RESET}\n")
+
+
+def _run_checks(cfg: dict) -> list:
+    """Run every check in parallel; rows come back in display order."""
+    from config import DEFAULT_TRANSLATION_PORT, DEFAULT_WHISPER_PORT, load_config
+
+    c = load_config()
+    wp = c.get("whisper_port", DEFAULT_WHISPER_PORT)
+    tp = c.get("translation_port", DEFAULT_TRANSLATION_PORT)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+        futures = [ex.submit(fn, *args) for fn, *args in _check_list(cfg, c, wp, tp)]
+        results = [row for f in futures for row in _as_rows(f.result())]
+    _romanization_tip(results)
 
     # The config rows go between vocal isolation and the servers
     at = next(i for i, r in enumerate(results) if r[0].startswith("Translation port"))
@@ -249,7 +230,7 @@ def _run_checks(cfg: dict) -> list:
     return results
 
 
-def _tools_menu() -> str:
+def tools_menu_path() -> str:
     return f"{C.CYAN}python pocket_yume.py{C.RESET} → Tools & Fonts"
 
 
@@ -289,7 +270,7 @@ _ADVICE = [
         lambda n: n == "llama-cpp CUDA support",
         lambda n, d: [
             "Translation will run on the CPU (slow).",
-            f"  Install the GPU translation engine: {_tools_menu()} → Translation Engine",
+            f"  Install the GPU translation engine: {tools_menu_path()} → Translation Engine",
         ],
     ),
     (lambda n: "faster-whisper" in n or "Flask" in n or "llama-cpp" in n,
@@ -316,7 +297,7 @@ _ADVICE = [
         lambda n: n == "GGUF model present",
         lambda n, d: [
             "llama.cpp needs a translation model (a .gguf file).",
-            f"  Download one: {_tools_menu()} → Download Translation Model",
+            f"  Download one: {tools_menu_path()} → Download Translation Model",
             "  Or put a .gguf file in models/translation/",
         ],
     ),
@@ -341,6 +322,15 @@ def _fix_advice(name: str, detail: str) -> list[str]:
     return []
 
 
+def _show_failures(fails: list[tuple[str, str]]) -> None:
+    warn(f"{len(fails)} issue(s) found: {', '.join(name for name, _ in fails)}")
+    print()
+    for name, detail in fails:
+        for line in _fix_advice(name, detail):
+            info(line)
+    print()
+
+
 def health_check(cfg: dict) -> bool:
     """Comprehensive health check — all checks run in parallel for speed.
     True when every check passed."""
@@ -349,8 +339,7 @@ def health_check(cfg: dict) -> bool:
     print()
     results = _run_checks(cfg)
 
-    ok = sum(1 for _, p, _ in results if p)
-    total = len(results)
+    fails = [(name, detail) for name, passed, detail in results if not passed]
     table(
         ["Check", "Result", "Details"],
         [
@@ -358,19 +347,13 @@ def health_check(cfg: dict) -> bool:
             for name, passed, detail in results
         ],
         col_styles=[C.RESET, C.RESET, C.DIM],
-        title=f"Health Check — {ok}/{total} passed",
+        title=f"Health Check — {len(results) - len(fails)}/{len(results)} passed",
     )
     print()
-    if ok == total:
-        success("All checks passed! Yume is ready to launch.")
+    if fails:
+        _show_failures(fails)
     else:
-        fails = [(name, detail) for name, passed, detail in results if not passed]
-        warn(f"{total - ok} issue(s) found: {', '.join(name for name, _ in fails)}")
-        print()
-        for name, detail in fails:
-            for line in _fix_advice(name, detail):
-                info(line)
-        print()
+        success("All checks passed! Yume is ready to launch.")
 
     # Quick perf estimate
     rec_model, rec_reason = recommend_whisper_model(detect_gpu())
@@ -380,247 +363,4 @@ def health_check(cfg: dict) -> bool:
         title="Performance Estimate",
         style=C.CYAN,
     )
-    return ok == total
-
-
-def _hardware() -> dict:
-    """GPU / RAM / disk, cached 30 s: nvidia-smi is slow to call on every render."""
-    global _hw_cache, _hw_cache_ts
-
-    now = time.monotonic()
-    if _hw_cache is None or (now - _hw_cache_ts) > _HW_CACHE_TTL:
-        _hw_cache = {"gpu": detect_gpu(), "ram": detect_ram_gb(), "disk": disk_free_gb()}
-        _hw_cache_ts = now
-    return _hw_cache
-
-
-def _status_hardware() -> None:
-    hw = _hardware()
-    gpu, ram, disk = hw["gpu"], hw["ram"], hw["disk"]
-    if gpu["has_nvidia"]:
-        gpu_txt = f"{C.GREEN}{gpu['name']} ({gpu['vram_mb']} MB){C.RESET}"
-    elif gpu["has_amd"]:
-        vr = f" ({gpu['vram_mb']} MB)" if gpu["vram_mb"] else ""
-        gpu_txt = f"{C.CYAN}{gpu['name']}{vr}{C.RESET}"
-    else:
-        gpu_txt = f"{C.YELLOW}None (CPU mode){C.RESET}"
-    table(
-        ["Component", "Status"],
-        [
-            ["GPU", gpu_txt],
-            ["RAM", f"{ram:.1f} GB" + (f"  {C.GREEN}OK{C.RESET}" if ram >= 8 else f"  {C.YELLOW}low{C.RESET}")],
-            ["Disk", f"{disk:.1f} GB free" + (f"  {C.GREEN}OK{C.RESET}" if disk >= 10 else f"  {C.RED}low!{C.RESET}")],
-            ["OS", f"{PLAT} ({ARCH})"],
-        ],
-        col_styles=[C.BOLD, C.RESET],
-        title="Hardware",
-    )
-
-
-def _status_tools(cfg: dict) -> None:
-    rows = []
-    for t in ["yt-dlp", "ffmpeg", "deno"]:
-        p = find_tool(t)
-        if p:
-            rows.append([t, f"{C.GREEN}installed{C.RESET}", p])
-        elif t == "deno" and cfg.get("youtube_auth_method") == "cookies":
-            rows.append([t, f"{C.DIM}skipped{C.RESET}", "using cookies"])
-        else:
-            rows.append([t, f"{C.RED}MISSING{C.RESET}", "run Tools menu to install"])
-    table(["Tool", "Status", "Path"], rows, col_styles=[C.CYAN, C.RESET, C.DIM], title="Tools")
-
-
-def _status_packages(cfg: dict) -> None:
-    from yume import llama_server
-
-    packages = [("faster_whisper", "faster-whisper"), ("flask", "Flask"), ("waitress", "Waitress")]
-    # llama-cpp-python only matters when llama.cpp translates without llama-server
-    if cfg.get("translation_backend", "llamacpp") == "llamacpp" and not llama_server.server_path():
-        packages.append(("llama_cpp", "llama-cpp-python"))
-    rows = []
-    for pkg, display in packages:
-        try:
-            __import__(pkg)
-            rows.append([display, f"{C.GREEN}✓{C.RESET}"])
-        except ImportError:
-            rows.append([display, f"{C.RED}✗  not installed{C.RESET}"])
-    table(["Package", "Status"], rows, col_styles=[C.CYAN, C.RESET], title="Python Packages")
-
-
-def _status_servers(cfg: dict) -> None:
-    bi = backend_info(cfg.get("translation_backend", "llamacpp"))
-    ws = check_server(cfg["whisper_host"], cfg["whisper_port"], "/health")
-    ts = check_server(cfg["translation_host"], cfg["translation_port"], bi["hp"])
-    if not ts["up"]:
-        ts = check_server(cfg["translation_host"], cfg["translation_port"], HEALTH_PATH_OPENAI)
-
-    def state(up: bool) -> str:
-        return f"{C.GREEN}● running{C.RESET}" if up else f"{C.DIM}○ stopped{C.RESET}"
-
-    table(
-        ["Server", "Address", "Status"],
-        [
-            ["Whisper", f"{cfg['whisper_host']}:{cfg['whisper_port']}", state(ws["up"])],
-            [bi["name"], f"{cfg['translation_host']}:{cfg['translation_port']}", state(ts["up"])],
-        ],
-        col_styles=[C.CYAN, C.DIM, C.RESET],
-        title="Servers",
-    )
-
-
-def _status_models(cfg: dict) -> None:
-    from yume.benchmark import _is_whisper_model_cached
-    from yume.utils import hf_hub_dir
-
-    section("Models")
-    wm = cfg.get("whisper_model", "large-v3")
-    if Path(wm).is_dir():
-        info(f"Whisper:      {C.BOLD}{Path(wm).name}{C.RESET}  {C.DIM}(custom: {wm}){C.RESET}")
-    elif _is_whisper_model_cached(wm):
-        info(f"Whisper:      {C.BOLD}{wm}{C.RESET}")
-        info(f"              {C.GREEN}downloaded{C.RESET}  {C.DIM}{hf_hub_dir()}{C.RESET}")
-    else:
-        info(f"Whisper:      {C.BOLD}{wm}{C.RESET}")
-        info(f"              {C.YELLOW}not downloaded{C.RESET}  (will download on first use)")
-        info(f"              {C.DIM}Cache: {hf_hub_dir()}{C.RESET}")
-
-    gp = cfg.get("gguf_model_path", "")
-    ggufs = find_gguf_models()
-    if gp and Path(gp).exists():
-        info(f"Translation:  {C.BOLD}{Path(gp).name}{C.RESET}  {C.DIM}({gp}){C.RESET}")
-    elif ggufs:
-        info(f"Translation:  {len(ggufs)} GGUF file(s) in models/translation/")
-        for f in ggufs:
-            bullet(f"{f.name} ({f.stat().st_size / GiB:.2f} GB)")
-    else:
-        info(f"Translation:  {C.DIM}no GGUF models found{C.RESET}")
-        if cfg.get("translation_backend", "llamacpp") == "llamacpp":
-            info(f"              Download one: {_tools_menu()} → Download Translation Model")
-
-
-def _status_ports(cfg: dict) -> None:
-    from config import DEFAULT_TRANSLATION_PORT
-
-    section("Ports")
-    for label, key in [("Whisper", "whisper"), ("Translation", "translation")]:
-        host = cfg.get(f"{key}_host", "127.0.0.1")
-        port = cfg.get(f"{key}_port", DEFAULT_TRANSLATION_PORT)
-        if is_port_free(port, host):
-            info(f"{label:12s} {host}:{port}  {C.GREEN}available{C.RESET}")
-        else:
-            pid, name = get_port_process(port)
-            who = f"{name} (PID {pid})" if pid else "unknown process"
-            warn(f"{label:12s} {host}:{port}  {C.RED}in use{C.RESET} by {who}")
-
-
-def show_status(cfg: dict) -> None:
-    """Display system status overview."""
-    header("System Status")
-    _status_hardware()
-    _status_tools(cfg)
-    _status_packages(cfg)
-    _status_servers(cfg)
-    _status_models(cfg)
-    _status_ports(cfg)
-
-
-_FONT_EXTENSIONS = {".ttf", ".otf", ".ttc", ".woff", ".woff2"}
-
-# script -> (file-name patterns, the free font to suggest). Patterns match the
-# FILE name, which on Windows is not the font's name: Microsoft YaHei is
-# msyh.ttc, Yu Gothic YuGothR.ttc, MS Gothic msgothic.ttc.
-_SCRIPT_FONTS = {
-    "Japanese": (
-        ["NotoSansJP", "NotoSerifJP", "MPLUS", "YuGoth", "YuMin", "Meiryo", "MSGothic", "MSMincho", "Hiragino",
-         "Kosugi", "ZenMaru"],
-        "Noto Sans JP",
-    ),
-    "Chinese": (
-        ["NotoSansSC", "NotoSansTC", "SourceHanSans", "msyh", "MicrosoftYaHei", "msjh", "SimHei", "SimSun", "MingLiU",
-         "DengXian", "PingFang", "STHeiti"],
-        "Noto Sans SC",
-    ),
-    "Korean": (["NotoSansKR", "Malgun", "NanumGothic", "AppleSD", "Batang", "Gulim"], "Noto Sans KR"),
-    "Arabic": (
-        ["NotoNaskhArabic", "NotoSansArabic", "Amiri", "Scheherazade", "trado", "arabtype", "majalla"],
-        "Noto Naskh Arabic",
-    ),
-}  # fmt: skip
-_GENERIC_FONTS = ["Arial", "Georgia", "Verdana", "Consolas", "Times New Roman", "Courier New"]
-
-
-def _font_files() -> tuple[int, list[Path]]:
-    """(number of font folders, font files in them) for this OS."""
-    if IS_WIN:
-        dirs = [Path(os.environ.get("WINDIR", "C:\\Windows")) / "Fonts"]
-    elif IS_MAC:
-        dirs = [Path("/Library/Fonts"), Path.home() / "Library/Fonts", Path("/System/Library/Fonts")]
-    else:
-        dirs = [Path("/usr/share/fonts"), Path.home() / ".local/share/fonts", Path("/usr/local/share/fonts")]
-    files = [f for d in dirs if d.exists() for f in d.rglob("*") if f.suffix.lower() in _FONT_EXTENSIONS]
-    return len(dirs), files
-
-
-def _matching(files: list[Path], patterns: list[str]) -> list[str]:
-    """Names of the font files whose name contains one of the patterns (case and spaces ignored)."""
-    pats = [p.lower().replace(" ", "") for p in patterns]
-    return sorted({f.name for f in files if any(p in f.stem.lower().replace(" ", "") for p in pats)}, key=str.lower)
-
-
-def _show_bundled_fonts() -> None:
-    ext_fonts = EXT_DIR / "fonts"
-    if not ext_fonts.exists():
-        warn(f"Extension fonts folder missing: {ext_fonts}")
-        info("Create it and add .ttf/.otf files for custom subtitle fonts")
-        return
-    bundled = [f.name for f in ext_fonts.iterdir() if f.suffix.lower() in _FONT_EXTENSIONS]
-    if not bundled:
-        info(f"Extension fonts folder: empty (add .ttf/.otf files to {ext_fonts})")
-        return
-    section("Bundled Fonts (extension/fonts/)")
-    for f in bundled:
-        bullet(f)
-
-
-_FONT_HELP = [
-    "How to use fonts in Yume:",
-    "  1. Yume automatically detects your system fonts",
-    "  2. Pick a font in the extension popup (Settings > Appearance)",
-    "",
-    "To add a custom font that isn't installed system-wide:",
-    "  1. Copy the .ttf or .otf file into the extension/fonts/ folder",
-    "  2. Open extension/js/bundled-fonts.js and find the BUNDLED_FONTS list",
-    "  3. Add your font: { file: 'MyFont.ttf', name: 'My Font' }",
-    "  4. Reload the extension in chrome://extensions",
-    "  The font will appear with '(bundled)' next to its name in the dropdown",
-]
-
-
-def detect_fonts() -> None:
-    """Detect CJK and common fonts available on this system."""
-    header("Font Detection")
-    info("Scanning for subtitle-compatible fonts (Chinese, Japanese, Korean, Arabic)...")
-    print()
-    n_dirs, files = _font_files()
-    info(f"Scanned {n_dirs} font directories, found {len(files)} font files")
-    print()
-
-    for script, (patterns, suggestion) in _SCRIPT_FONTS.items():
-        matches = _matching(files, patterns)
-        if not matches:
-            warn(f"{script}: No dedicated fonts found")
-            info(f"  Install: {suggestion} from Google Fonts")
-            continue
-        success(f"{script}: {len(matches)} font(s) found")
-        for m in matches[:5]:
-            bullet(m)
-        if len(matches) > 5:
-            info(f"  ... and {len(matches) - 5} more")
-    print()
-
-    generic = [g for g in _GENERIC_FONTS if _matching(files, [g])]
-    info(f"Generic fonts: {', '.join(sorted(generic)) if generic else 'none detected'}")
-    _show_bundled_fonts()
-    print()
-    for line in _FONT_HELP:
-        info(line)
+    return not fails

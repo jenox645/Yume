@@ -36,7 +36,7 @@ except ImportError:
     sys.modules["faster_whisper"] = types.SimpleNamespace(WhisperModel=None)
 import _api, _state
 
-_api._audio.check_ytdlp = lambda: True  # no yt-dlp subprocess
+_api._ytdlp.check_ytdlp = lambda: True  # no yt-dlp subprocess
 _state.model = object()  # Whisper "loaded": /health answers ready
 client = _api.app.test_client()
 

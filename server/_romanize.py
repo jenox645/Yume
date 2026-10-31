@@ -171,12 +171,18 @@ def _counter_reading(m, after_month):
         return _JA_TSU.get(n, f"{m.group(1)} tsu")
     if counter == "人":
         return {1: "hitori", 2: "futari"}.get(n, f"{m.group(1)} nin")
+    return _day_reading(m.group(1), counter, after_month)
+
+
+def _day_reading(number, counter, after_month):
+    """日 or 日間 after a number."""
+    n = int(number)
     day = _JA_DAYS.get(n)
     if n == 1 and not after_month:  # 1日: "one day", not "the 1st"
         day = "ichinichi"
     if counter == "日間":
-        return f"{day}kan" if day and n != 1 else f"{m.group(1)} nichikan"
-    return day or f"{m.group(1)} nichi"
+        return f"{day}kan" if day and n != 1 else f"{number} nichikan"
+    return day or f"{number} nichi"
 
 
 def _hold_counter(m, hold):
@@ -237,28 +243,37 @@ def _romanize_japanese_kakasi(text):
     if not kakasi:
         return None
     try:
-        result = kakasi.convert(text)
-        parts = []
-        sokuon = False  # the previous piece ended in a small っ
-        prev = ""  # previous piece's original text
-        for item in result:
-            r = item.get("hepburn", "") or item.get("passport", "") or item.get("orig", "")
-            r = _particles(item.get("orig", ""), r, prev)
-            prev = item.get("orig", "") or prev
-            if sokuon and parts and r[:1].isalpha() and r[:1] not in "aeiou":
-                # っ doubles the next consonant (ch → tch): 走っ + て = hashitte, one word
-                parts[-1] += ("t" if r.startswith("ch") else r[0]) + r
-            else:
-                parts.append(r)
-            # pykakasi writes a piece-final っ as "tsu" ("hashitsu" for 走っ)
-            sokuon = item.get("hira", "").endswith("っ") and r.endswith("tsu")
-            if sokuon:
-                parts[-1] = parts[-1][:-3]
+        parts = _kakasi_pieces(kakasi.convert(text))
         # a space in the line is a piece of its own: collapse the runs it leaves
         return " ".join(_GREETINGS.get(p, p) for p in " ".join(parts).split())
     except Exception as e:
         print(f"[Yume] pykakasi error: {e}")
         return None
+
+
+def _starts_with_consonant(r):
+    return r[:1].isalpha() and r[:1] not in "aeiou"
+
+
+def _kakasi_pieces(items):
+    """pykakasi's pieces as romaji, particles read as said, っ doubling the next consonant."""
+    parts = []
+    sokuon = False  # the previous piece ended in a small っ
+    prev = ""  # previous piece's original text
+    for item in items:
+        orig = item.get("orig", "")
+        r = _particles(orig, item.get("hepburn", "") or item.get("passport", "") or orig, prev)
+        prev = orig or prev
+        if sokuon and _starts_with_consonant(r):
+            # っ doubles the next consonant (ch → tch): 走っ + て = hashitte, one word
+            parts[-1] += ("t" if r.startswith("ch") else r[0]) + r
+        else:
+            parts.append(r)
+        # pykakasi writes a piece-final っ as "tsu" ("hashitsu" for 走っ)
+        sokuon = item.get("hira", "").endswith("っ") and r.endswith("tsu")
+        if sokuon:
+            parts[-1] = parts[-1][:-3]
+    return parts
 
 
 def romanize_chinese(text):
@@ -269,9 +284,7 @@ def romanize_chinese(text):
         _load_zh_phrases()
         result = pinyin(text, style=Style.TONE)
         return " ".join(p[0] for p in result).strip()
-    except ImportError:
-        return None
-    except Exception:
+    except Exception:  # ImportError: pypinyin is not installed
         return None
 
 
@@ -350,7 +363,12 @@ def _load_zh_phrases():
         from pypinyin import load_phrases_dict
     except ImportError:  # a pypinyin without it still romanizes, only less well
         return
-    phrases = {
+    load_phrases_dict({k: [[s] for s in v.split()] for k, v in _zh_phrases().items()})
+
+
+def _zh_phrases():
+    """Every phrase pypinyin gets wrong: {phrase: its pinyin}. Later entries win."""
+    return {
         **{f"{c}{c}地": f"{p} {p} de" for c, p in _ZH_AA_DE.items()},
         **{f"{n}只": f"{p} zhī" for n, p in _ZH_NUMBERS.items()},
         **{f"重{v}": f"chóng {p}" for v, p in _ZH_CHONG.items()},
@@ -364,7 +382,6 @@ def _load_zh_phrases():
         **_ZH_PHRASES,
         **{f"{v}著": f"{p} zhe" for v, p in _ZH_ZHE_VERBS.items()},
     }
-    load_phrases_dict({k: [[s] for s in v.split()] for k, v in phrases.items()})
 
 
 # ── Korean (Revised Romanization, as pronounced) ─────────────────────────────
@@ -431,15 +448,18 @@ def _ko_nasalize(f, i):
         for finals, new in ((_KO_K, 21), (_KO_T, 4), (_KO_P, 16)):  # 작년 jangnyeon, 있는 inneun, 합니다 hamnida
             if f in finals:
                 return new, i
-    if i == _R:
-        if f == 4:
-            return 8, _R  # 신라 silla
-        if f in (16, 21):
-            return f, _N  # 심리 simni, 종로 jongno
-        if f in _KO_K:
-            return 21, _N  # 독립 dongnip
-        if f in _KO_P:
-            return 16, _N  # 협력 hyeomnyeok
+    return _ko_before_r(f) if i == _R else None
+
+
+def _ko_before_r(f):
+    if f == 4:
+        return 8, _R  # 신라 silla
+    if f in (16, 21):
+        return f, _N  # 심리 simni, 종로 jongno
+    if f in _KO_K:
+        return 21, _N  # 독립 dongnip
+    if f in _KO_P:
+        return 16, _N  # 협력 hyeomnyeok
     return None
 
 

@@ -10,7 +10,7 @@ Yume is a browser extension + local server system for AI-powered video subtitles
 - **Browser extension** (`extension/`) — one MV3 manifest for Chrome/Edge/Brave and Firefox 121+, no build step. A thin client: creates a job on the server and polls it.
 - **Yume server** (`server/faster_whisper_server.py` + `server/_*.py`) — Flask on port 5001. Runs the whole pipeline (jobs, Whisper, translation, romanization, SQLite cache, blacklist).
 - **Translation LLM** — llama.cpp (port 5000) / Ollama / LM Studio / any OpenAI-compatible API. Only the server talks to it.
-- **CLI** (`pocket_yume.py`) — thin entry point (Python version check, then `yume.cli.main`); all logic lives in the `yume/` package (cli, constants, benchmark, guides, hardware, health, installers, launch, menus, network, ports, servers, service, setup, ui, utils).
+- **CLI** (`pocket_yume.py`) — thin entry point (Python version check, then `yume.cli.main`); all logic lives in the `yume/` package (cli, constants, benchmark, guides, hardware, health, installers, launch, llama_python, llama_server, menus, native_host, network, po_token, ports, resource_check, runtime_menu, servers, service, setup, status, ui, utils, vocals).
 
 ## Code Review Policy
 
@@ -130,20 +130,26 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 | `yume/constants.py` | Version, paths, platform flags, translation backends (`BACKEND_INFO`, `backend_info()`), download URLs |
 | `config.py` | Config load/save/validate, `DEFAULT_CONFIG` |
 | `yume/servers.py` | Server processes, shared by the launcher and `serve`: commands/env (`whisper_command`, `llamacpp_command`, `build_server_env`, `LLAMA_SERVER_DEPS`), rotating logs, `Processes` (spawn/stop), `start_whisper`/`start_llamacpp`/`start_ollama` → `StartResult`, crash `diagnose()` |
-| `yume/launch.py` | Interactive launcher: port/install prompts, spinner and crash advice around `yume.servers`, then the runtime menu |
+| `yume/launch.py` | Interactive launcher: port/install prompts, spinner and crash advice around `yume.servers` |
+| `yume/resource_check.py` | Pre-launch check: Whisper and the GGUF against free VRAM/RAM |
+| `yume/runtime_menu.py` | The menu while the servers run: status panel, stats, model, logs, stop |
 | `yume/llama_server.py` | Installs/locates llama.cpp's prebuilt `llama-server` (tools/llama.cpp/); `launch.llamacpp_command` prefers it over llama-cpp-python |
 | `yume/service.py` | Headless `serve` supervisor on `yume.servers`: `config/service.json` state (errors carry the crash diagnosis), idle auto-stop (`auto_stop_minutes`), detached spawn that survives the browser's job object |
 | `yume/vocals.py` | Vocal isolation from the CLI: status, install (PyTorch CUDA build matched to the driver + demucs), on/off |
 | `yume/native_host.py` | Native messaging host `com.pocketyume.yume` (status/start/stop) + registration; allowed extension ID must match the manifest `key` |
 | `yume/setup.py` | Setup wizard, extension guide, uninstall |
-| `yume/menus/` | Interactive menus, split by area: `server.py` (CLI commands, blacklist, Whisper model), `hf_browser.py`, `tools.py`, `settings.py` |
+| `yume/menus/` | Interactive menus, split by area: `server.py` (`stats` command), `blacklist.py` (`blacklist` command, subtitle filter), `whisper_model.py` (`model` command, hot swap), `hf_browser.py`, `tools.py` (installers, translation engine, Python dependencies), `translation.py` (backend, address, model, test sentence), `youtube_auth.py`, `one_click.py`, `prompts.py` (translation and romanization prompts), `settings.py` |
 | `yume/guides.py` | Help & Guides menu: in-CLI cookbook of task-oriented recipes |
-| `yume/health.py` | Health check (incl. end-to-end translation), system status, font detection |
+| `yume/health.py` | Health check (incl. end-to-end translation) |
+| `yume/fonts.py` | Subtitle font detection |
+| `yume/status.py` | `status` report: hardware, tools, packages, servers, models, ports |
 | `yume/benchmark.py` | Whisper speed benchmark across models |
 | `yume/network.py` | HTTP helpers (`server_get`, `server_post`), downloads (`.part` + rename), health checks |
 | `yume/ports.py` | Port availability checks, conflict resolution, status display |
 | `yume/hardware.py` | GPU/CPU detection (NVIDIA, AMD), `WHISPER_MODELS`, model recommendation |
-| `yume/installers.py` | Tool download/install: yt-dlp, ffmpeg, Deno + PO-token plugin, llama.cpp, Ollama |
+| `yume/installers.py` | Tool download/install: yt-dlp, ffmpeg, Deno, Ollama, Python packages, llama-cpp-python entry point |
+| `yume/llama_python.py` | llama-cpp-python pip builds per GPU/OS, build tools |
+| `yume/po_token.py` | YouTube PO-token plugin (bgutil) and its token server |
 | `yume/ui.py` | ANSI colour helpers, `header()`, `panel()`, `pause()`, `error()` |
 | `yume/utils.py` | `_run()`, `find_tool()`, update checker, shared path constants |
 | `server/faster_whisper_server.py` | Entry point: `main()` runs the startup sequence |
@@ -151,12 +157,18 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 | `server/_settings.py` | Config file load + live reload, the switched model written back, the user blacklist |
 | `server/_model.py` | Whisper model: load at startup (CUDA warm-up, CPU fallback), hot swap, load-error advice |
 | `server/_startup.py` | Startup chores: args, logging, banner, yt-dlp self-update, Deno auth, token file, web server thread, pipeline |
-| `server/_jobs.py` | Job manager, transcription + LLM workers, export |
+| `server/_jobs.py` | Job manager: download and preview, transcription + LLM workers |
+| `server/_job.py` | One job's state: regions, lines, revisions, what the workers do next |
+| `server/_lines.py` | A region's raw lines cleaned, regions joined at a cut (shared by jobs and exports) |
+| `server/_export.py` | SRT/VTT export, also of cached videos without a job |
 | `server/_regions.py` | Quiet-point region planning |
 | `server/_separate.py` | Optional vocal isolation (Demucs htdemucs, CUDA only); falls back to the mix |
 | `server/_translate.py` | LLM client with structured output |
 | `server/_store.py` | SQLite cache |
-| `server/_audio.py` | yt-dlp/ffmpeg download strategies, WAV loading |
+| `server/_download.py` | Full-audio download: yt-dlp strategies, ffmpeg fallbacks, custom stream URLs |
+| `server/_stream.py` | Stream URL (cached) and single segments cut from the stream |
+| `server/_ytdlp.py` | yt-dlp: command, browser cookies and auth arguments, friendly errors |
+| `server/_audio.py` | WAV loading, temp cleanup |
 | `extension/js/session.js` | Job creation, polling, cue lookup |
 | `extension/js/background.js` | Authenticated server proxy |
 | `extension/js/content.js` | Page lifecycle, SPA navigation, popup messages |

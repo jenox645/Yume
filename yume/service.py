@@ -22,8 +22,8 @@ import sys
 import time
 
 from yume import servers
-from yume.constants import BASE_DIR, IS_WIN, backend_info
-from yume.servers import console_python, windowless_python  # noqa: F401 (spawn_detached, native host)
+from yume.constants import BASE_DIR, CREATE_NO_WINDOW, IS_WIN, backend_info
+from yume.servers import windowless_python
 
 _log = logging.getLogger("pocket_yume.service")
 
@@ -41,11 +41,22 @@ TRANSLATION_START_TIMEOUT_S = 300
 # Windows process creation flags (subprocess exposes most, not all, of them)
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
 _DETACHED_PROCESS = 0x00000008
-_CREATE_NO_WINDOW = 0x08000000
 _CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 
 # ── Process helpers ──────────────────────────────────────────────────────────
+
+
+def _kernel32():
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    return k32
 
 
 def pid_alive(pid: int | None) -> bool:
@@ -60,12 +71,9 @@ def pid_alive(pid: int | None) -> bool:
         import ctypes
         from ctypes import wintypes
 
-        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        k32.OpenProcess.restype = wintypes.HANDLE
-        k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        k32 = _kernel32()
         k32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
-        k32.CloseHandle.argtypes = (wintypes.HANDLE,)
-        h = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        h = k32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
         if not h:
             return ctypes.get_last_error() == 5  # access denied: exists, not ours
         try:
@@ -106,7 +114,7 @@ def _spawn_detached_cmd(cmd: list[str]) -> int:
     if not IS_WIN:
         return subprocess.Popen(cmd, start_new_session=True, **common).pid  # nosec B603 — fixed argv
 
-    flags = _DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP | _CREATE_NO_WINDOW
+    flags = _DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
     try:
         p = subprocess.Popen(cmd, creationflags=flags | _CREATE_BREAKAWAY_FROM_JOB, **common)  # nosec B603
         # A breakaway can "succeed" and still leave the child in a job: a venv's
@@ -131,12 +139,9 @@ def _in_job(pid: int) -> bool:
     import ctypes
     from ctypes import wintypes
 
-    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    k32.OpenProcess.restype = wintypes.HANDLE
-    k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    k32 = _kernel32()
     k32.IsProcessInJob.argtypes = (wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL))
-    k32.CloseHandle.argtypes = (wintypes.HANDLE,)
-    h = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    h = k32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not h:
         return False
     try:
@@ -158,7 +163,7 @@ def _spawn_wmi(cmd: list[str]) -> int:
     from yume.utils import _run
 
     out = _run(
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], timeout=30, creationflags=_CREATE_NO_WINDOW
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], timeout=30, creationflags=CREATE_NO_WINDOW
     )
     parts = (out.stdout or "").split()
     if len(parts) != 2 or parts[0] != "0":
@@ -302,7 +307,8 @@ class _Supervisor:
         stats = server_get(self.cfg["whisper_host"], self.cfg["whisper_port"], "/stats", timeout=5)
         return bool(stats and stats.get("active"))
 
-    def run(self) -> int:
+    def _start_servers(self) -> str | None:
+        """Start what Yume runs here; the error, if a server did not come up."""
         from yume.utils import missing_requirements
 
         env = servers.build_server_env()
@@ -314,15 +320,10 @@ class _Supervisor:
         if err is None:
             self._state("starting", "Loading the speech model…")
             err = self._start_whisper(env)
-        if err:
-            if not self._stop_requested():
-                self._state("error", err)
-            return 1
-        if not self.procs:
-            _log.info("servers were already running (started elsewhere) — nothing to supervise")
-            return 0
+        return err
 
-        self._state("running")
+    def _supervise(self) -> int:
+        """Watch the servers until stopped, idle for too long, or one of them dies."""
         idle_limit = max(0.0, float(self.cfg.get("auto_stop_minutes", 30))) * 60
         last_active = time.time()
         while not self._stop_requested():
@@ -337,6 +338,18 @@ class _Supervisor:
                 _log.info("idle for %g min — stopping", idle_limit / 60)
                 break
         return 0
+
+    def run(self) -> int:
+        err = self._start_servers()
+        if err:
+            if not self._stop_requested():
+                self._state("error", err)
+            return 1
+        if not self.procs:
+            _log.info("servers were already running (started elsewhere) — nothing to supervise")
+            return 0
+        self._state("running")
+        return self._supervise()
 
     def shutdown(self) -> None:
         whisper_was_ours = "Whisper" in self.procs.names()

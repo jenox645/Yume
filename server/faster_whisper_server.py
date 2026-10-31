@@ -10,8 +10,8 @@ in SQLite. The extension creates a job and polls it (see _jobs.py).
 Flask starts before the model loads; /health reports loading/ready/error.
 
 Modules: _api (Flask app, routes, security), _settings (config, blacklist),
-_model (Whisper), _startup (startup chores), _jobs (the pipeline), _audio,
-_regions, _filter, _translate, _romanize, _separate, _store.
+_model (Whisper), _startup (startup chores), _jobs (the pipeline), _download,
+_stream, _ytdlp, _audio, _regions, _filter, _translate, _romanize, _separate, _store.
 """
 
 import signal

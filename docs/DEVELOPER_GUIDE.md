@@ -33,28 +33,40 @@ python server/faster_whisper_server.py --model tiny --device cpu --compute-type 
 | `yume/llama_server.py` | llama.cpp's prebuilt `llama-server`: picks the build for the GPU/driver from GitHub releases, verified download, command line (preferred over llama-cpp-python) |
 | `yume/native_host.py` | Native messaging host + browser registration (`autostart on/off`) |
 | `yume/setup.py` | Setup wizard, extension install guide, uninstall |
-| `yume/menus/` | `server.py` CLI commands (stats, blacklist, model) + blacklist / Whisper model menus; `hf_browser.py` GGUF browser; `tools.py` Tools & Fonts (installers, backend, engine, YouTube auth, one-click start); `settings.py` Settings menu. `__init__` re-exports the entry points |
-| `yume/health.py` | Health check (incl. end-to-end translation), status, fonts |
-| `yume/installers.py` | yt-dlp, FFmpeg, Deno + PO-token plugin, llama-cpp-python, Ollama |
+| `yume/menus/` | `server.py` `stats` command; `blacklist.py` `blacklist` command + subtitle filter menu; `whisper_model.py` `model` command + hot-swap menu; `hf_browser.py` GGUF browser; `tools.py` Tools & Fonts (installers, translation engine, Python dependencies); `translation.py` backend, address, model, test sentence; `youtube_auth.py` cookies or Deno; `one_click.py` one-click start; `prompts.py` translation and romanization prompt editors; `settings.py` Settings menu. `__init__` re-exports the entry points |
+| `yume/health.py` | Health check (incl. end-to-end translation) |
+| `yume/fonts.py` | Subtitle font detection |
+| `yume/status.py` | `status` report: hardware, tools, packages, servers, models, ports |
+| `yume/installers.py` | yt-dlp, FFmpeg, Deno, Ollama, Python packages, llama-cpp-python entry point |
+| `yume/llama_python.py` | llama-cpp-python pip builds per GPU/OS, build tools |
+| `yume/po_token.py` | YouTube PO-token plugin (bgutil) and its token server |
 | `yume/hardware.py` | GPU/CPU/RAM detection, **`WHISPER_MODELS` (the one model table)**, recommendation |
 | `yume/network.py` | Downloads (`.part` + rename), server health checks, authenticated server calls |
 | `yume/ports.py` | Port checks; kills only Yume's own processes without asking |
 | `yume/servers.py` | Server processes for both the launcher and `serve`: commands, logs, start/wait/stop, crash diagnosis |
-| `yume/launch.py` | Interactive launcher (prompts, spinner, crash advice) + runtime menu |
+| `yume/launch.py` | Interactive launcher (prompts, spinner, crash advice) |
+| `yume/resource_check.py` | Pre-launch check: Whisper and the GGUF against free VRAM/RAM |
+| `yume/runtime_menu.py` | The menu while the servers run: status panel, stats, model, logs, stop |
 | `yume/service.py` | Headless `serve` supervisor (one-click start), detached spawn, idle auto-stop |
 | `server/faster_whisper_server.py` | Entry point: `main()` runs the startup sequence |
 | `server/_api.py` | Flask app: Host/token/CORS checks and every route |
 | `server/_settings.py` | Config file load + live reload, switched model written back, blacklist |
 | `server/_model.py` | Whisper model load (CUDA warm-up, CPU fallback), hot swap, load-error advice |
 | `server/_startup.py` | Args, logging, banner, yt-dlp self-update, Deno auth, token file, web server |
-| `server/_jobs.py` | Job manager, transcription + LLM workers, SRT/VTT export |
+| `server/_jobs.py` | Job manager: download and preview, transcription + LLM workers |
+| `server/_job.py` | One job's state: regions, lines, revisions, what the workers do next |
+| `server/_lines.py` | A region's raw lines cleaned, regions joined at a cut |
+| `server/_export.py` | SRT/VTT export, also of cached videos without a job |
 | `server/_regions.py` | Quiet-point region planning (pure numpy) |
 | `server/_transcribe.py` | Whisper call with the music-tuned parameters |
 | `server/_translate.py` | LLM client: structured output, fallbacks, retries |
 | `server/_romanize.py` | Deterministic romanization; `None` = needs the LLM |
 | `server/_store.py` | SQLite cache |
 | `server/_filter.py` | Hallucination / credits patterns, user blacklist |
-| `server/_audio.py` | yt-dlp/ffmpeg download strategies, stream URLs, WAV loading |
+| `server/_download.py` | Full-audio download: yt-dlp strategies, ffmpeg fallbacks |
+| `server/_stream.py` | Stream URL (cached), single segments from the stream |
+| `server/_ytdlp.py` | yt-dlp command, cookies and auth arguments, friendly errors |
+| `server/_audio.py` | WAV loading, temp cleanup |
 | `extension/js/session.js` | Job creation, polling, cue lookup |
 | `extension/js/content.js` | Page lifecycle, SPA navigation, popup messages |
 | `extension/js/subtitle-window.js` | Shadow-DOM overlay |

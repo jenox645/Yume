@@ -5,6 +5,7 @@ No GPU, model, network or LLM needed: Whisper and the LLM are faked.
 
 from __future__ import annotations
 
+import io
 import json
 import sys
 import tempfile
@@ -21,13 +22,19 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "server"))
 
 import _audio  # noqa: E402
+import _download  # noqa: E402
+import _export  # noqa: E402
+import _job  # noqa: E402
 import _jobs  # noqa: E402
+import _lines  # noqa: E402
 import _regions  # noqa: E402
 import _romanize  # noqa: E402
 import _separate  # noqa: E402
 import _state  # noqa: E402
 import _store  # noqa: E402
+import _stream  # noqa: E402
 import _translate  # noqa: E402
+import _ytdlp  # noqa: E402
 
 SR = 16000
 
@@ -391,9 +398,9 @@ def pipeline(tmp_path):
     translator = _FakeTranslator()
     _state.jobs = _jobs.JobManager(translator)
     with (
-        patch.object(_audio, "download_full_audio", return_value=(str(wav), None)) as dl,
-        patch.object(_audio, "download_audio_segment", return_value=None),
-        patch.object(_audio, "get_stream_url", return_value=None),
+        patch.object(_download, "download_full_audio", return_value=(str(wav), None)) as dl,
+        patch.object(_stream, "download_audio_segment", return_value=None),
+        patch.object(_stream, "get_stream_url", return_value=None),
         patch.object(_audio, "remove_temp"),
     ):
         yield types.SimpleNamespace(jobs=_state.jobs, translator=translator, download=dl)
@@ -432,7 +439,7 @@ def test_job_transcribes_filters_translates_romanizes(pipeline):
     assert seg["text"] == "こんにちは" and seg["translation"] == "EN(こんにちは)"
     # hallucinations are never sent on a fresh snapshot
     assert all("視聴" not in s["text"] for s in snap["segments"])
-    srt, n = _jobs.export_subtitles(list(_state.jobs.get(snap["id"]).segments.values()))
+    srt, n = _export.export_subtitles(list(_state.jobs.get(snap["id"]).segments.values()))
     assert n == p["lines"] and "EN(こんにちは)" in srt
 
 
@@ -473,7 +480,7 @@ def test_stream_preview_covers_a_region_0_cut_before_30s(pipeline):
     # The preview hears [0, 30); the plan cuts region 0 at a quiet point, here
     # 21.5 s. Lines it heard after the cut are region 1's, which transcribes them
     # whole: a fixed cut at 30 s split the first sung line.
-    job = _jobs.Job(("pv", "ja", "English"), PARAMS)
+    job = _job.Job(("pv", "ja", "English"), PARAMS)
     raw = [_raw(1.0, 6.0, "最初の行"), _raw(24.0, 30.0, "半分の行")]
     with job.lock:
         job.show_preview(raw)  # shown before the plan exists
@@ -561,7 +568,7 @@ def test_stereo_downloads_are_read_for_the_separator(tmp_path):
 
 
 def test_no_stream_preview_of_the_start_for_a_resumed_video(pipeline):
-    with patch.object(_audio, "download_audio_segment", return_value=None) as seg:
+    with patch.object(_stream, "download_audio_segment", return_value=None) as seg:
         job = pipeline.jobs.create({**PARAMS, "video_id": "resumed", "playhead": 60.0})
         assert job.playhead == 60.0  # transcribed first, before the first poll
         _run(pipeline.jobs, job, playhead=60.0)
@@ -572,7 +579,7 @@ def test_no_stream_preview_of_the_start_for_a_resumed_video(pipeline):
 
 def test_stream_preview_shown_before_a_plan_that_keeps_its_region(pipeline):
     # Plans cached before the quiet cut (and stream mode) keep region 0 = [0, 30)
-    job = _jobs.Job(("pv30", "ja", "English"), PARAMS)
+    job = _job.Job(("pv30", "ja", "English"), PARAMS)
     raw = [_raw(1.0, 6.0, "最初の行"), _raw(24.0, 29.0, "次の行")]
     with job.lock:
         job.show_preview(raw)
@@ -586,7 +593,7 @@ def test_stream_preview_shown_before_a_plan_that_keeps_its_region(pipeline):
 
 
 def test_lines_end_with_their_region_and_window_fillers_are_hidden(pipeline):
-    job = _jobs.Job(("clip", "ko", "English"), {**PARAMS, "language": "ko"})
+    job = _job.Job(("clip", "ko", "English"), {**PARAMS, "language": "ko"})
     with job.lock:
         job.regions = [(0.0, 24.5), (24.5, 52.0), (52.0, 60.3)]
         job.region_state = ["pending"] * 3
@@ -625,16 +632,16 @@ def test_library_export_follows_the_plan_and_the_filters(pipeline):
     store.put_transcript("lib", "ja", "m", 20.0, 40.0, [_raw(21.0, 25.0, "二行目"), _raw(36.0, 52.0, "三行目")])
     store.put_video("lib2", "https://x", "t", 30.0, [[0.0, 30.0]])
     store.put_transcript("lib2", "ja", "m", 0.0, 30.0, [_raw(0.0, 30.0, "字幕")])  # fills the window
-    srt, n = _jobs.library_export("lib", "ja", "m", None)
+    srt, n = _export.library_export("lib", "ja", "m", None)
     assert n == 3 and "古い計画" not in srt
     assert "00:00:36,000 --> 00:00:40,000" in srt  # ends with the video, not at 52 s
-    assert _jobs.library_export("lib2", "ja", "m", None)[1] == 0
+    assert _export.library_export("lib2", "ja", "m", None)[1] == 0
 
 
 def test_download_failure_reports_error(pipeline):
     with (
-        patch.object(_audio, "download_full_audio", return_value=(None, "Video unavailable")),
-        patch.object(_audio, "get_stream_url", return_value=None),
+        patch.object(_download, "download_full_audio", return_value=(None, "Video unavailable")),
+        patch.object(_stream, "get_stream_url", return_value=None),
     ):
         snap = _run(pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "other"}))
     assert snap["status"] == "error" and "unavailable" in snap["error"]
@@ -642,8 +649,8 @@ def test_download_failure_reports_error(pipeline):
 
 def test_failed_download_streams_each_region_when_the_stream_is_reachable(pipeline):
     with (
-        patch.object(_audio, "download_full_audio", return_value=(None, "HTTP Error 403")),
-        patch.object(_audio, "get_stream_url", return_value="https://rr1.googlevideo.com/a"),
+        patch.object(_download, "download_full_audio", return_value=(None, "HTTP Error 403")),
+        patch.object(_stream, "get_stream_url", return_value="https://rr1.googlevideo.com/a"),
     ):
         job = pipeline.jobs.create({**PARAMS, "video_id": "streamed", "duration": 61})
         deadline = time.time() + 10
@@ -655,7 +662,7 @@ def test_failed_download_streams_each_region_when_the_stream_is_reachable(pipeli
 
 
 def test_a_pasted_stream_url_is_downloaded_directly(pipeline, tmp_path):
-    with patch.object(_audio, "download_direct", return_value=(None, "403")) as direct:
+    with patch.object(_download, "download_direct", return_value=(None, "403")) as direct:
         snap = _run(
             pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "pasted", "stream_url": "https://cdn/x.m3u8"})
         )
@@ -732,7 +739,7 @@ def test_enable_again_retries_failed_regions(pipeline):
 
 @pytest.mark.parametrize("bad", [float("inf"), float("nan"), -5, "x", 10**12])
 def test_job_duration_and_playhead_are_sane(bad):
-    job = _jobs.Job(("k", "ja", "", "m"), {"duration": bad, "playhead": bad})
+    job = _job.Job(("k", "ja", "", "m"), {"duration": bad, "playhead": bad})
     assert job.duration == 0.0 and job.playhead == 0.0
     manager = _jobs.JobManager.__new__(_jobs.JobManager)
     manager._notify = lambda: None
@@ -812,11 +819,11 @@ def test_live_stream_is_reported_not_recorded(monkeypatch):
         )
         return types.SimpleNamespace(returncode=1, stderr=err, stdout="")
 
-    monkeypatch.setattr(_audio.subprocess, "run", fake_run)
-    monkeypatch.setattr(_audio, "get_stream_url", lambda url: pytest.fail("fallback must not run"))
+    monkeypatch.setattr(_download.subprocess, "run", fake_run)
+    monkeypatch.setattr(_stream, "get_stream_url", lambda url: pytest.fail("fallback must not run"))
     monkeypatch.setattr(_state, "youtube_auth_method", "none")
-    path, err = _audio.download_full_audio("https://www.youtube.com/watch?v=6PNb0Jv6qbU")
-    assert path is None and err == _audio.LIVE_ERROR
+    path, err = _download.download_full_audio("https://www.youtube.com/watch?v=6PNb0Jv6qbU")
+    assert path is None and err == _download.LIVE_ERROR
     assert len(calls) == 1
 
 
@@ -830,17 +837,17 @@ def test_unreadable_browser_cookies_are_skipped(monkeypatch):
             err = "ERROR: [youtube] x: HTTP Error 403: Forbidden"
         return types.SimpleNamespace(returncode=1, stderr=err, stdout="")
 
-    monkeypatch.setattr(_audio.subprocess, "run", fake_run)
-    monkeypatch.setattr(_audio, "_cookies_failed_at", 0.0)
-    monkeypatch.setattr(_audio, "get_stream_url", lambda url: None)
+    monkeypatch.setattr(_download.subprocess, "run", fake_run)
+    monkeypatch.setattr(_ytdlp, "_cookies_failed_at", 0.0)
+    monkeypatch.setattr(_stream, "get_stream_url", lambda url: None)
     monkeypatch.setattr(_state, "youtube_auth_method", "cookies")
     monkeypatch.setattr(_state, "cookies_browser", "brave")
-    path, err = _audio.download_full_audio("https://www.youtube.com/watch?v=0OIVIkmBdL8")
+    path, err = _download.download_full_audio("https://www.youtube.com/watch?v=0OIVIkmBdL8")
     assert path is None
     with_cookies = [c for c in calls if "--cookies-from-browser" in c]
     assert len(with_cookies) == 1  # was 6: every cookie strategy x 2 format passes
     assert "Brave" in err and "switch to browser cookies" not in err  # they are what failed
-    assert _audio.build_auth_args("https://www.youtube.com/watch?v=x") == []
+    assert _ytdlp.build_auth_args("https://www.youtube.com/watch?v=x") == []
 
 
 def test_download_errors_point_to_the_settings_menu_not_the_config_file():
@@ -852,7 +859,7 @@ def test_download_errors_point_to_the_settings_menu_not_the_config_file():
         "ERROR: [youtube] x: age-restricted",
         "ERROR: deno: not found",
     ):
-        msg = _audio.friendlify_ytdlp_error(raw)
+        msg = _ytdlp.friendlify_ytdlp_error(raw)
         assert msg != raw and "yume_config.json" not in msg, msg
         assert "python pocket_yume.py settings" in msg, msg
 
@@ -865,15 +872,15 @@ def test_a_failed_custom_stream_url_gives_advice_not_raw_output(monkeypatch, tmp
             returncode=1, stdout="", stderr="[generic] x: Downloading\nERROR: [generic] x: HTTP Error 403: Forbidden\n"
         )
 
-    monkeypatch.setattr(_audio.subprocess, "run", fake_run)
-    monkeypatch.setattr(_audio.tempfile, "mkdtemp", lambda prefix: str(tmp_path))
-    path, err = _audio.download_direct("https://cdn.example.com/a.m3u8")
+    monkeypatch.setattr(_download.subprocess, "run", fake_run)
+    monkeypatch.setattr(_download.tempfile, "mkdtemp", lambda prefix: str(tmp_path))
+    path, err = _download.download_direct("https://cdn.example.com/a.m3u8")
     assert path is None
     # was the raw stderr tail ("[generic] x: Downloading ERROR: …"), and the generic 403 advice
     # would say "use the Custom Stream URL option", which is what failed
     assert err.startswith("Could not download the custom stream URL ([generic] x: HTTP Error 403"), err
     assert "Downloading" not in err and "copy a fresh one" in err
-    assert _audio.download_direct("-o x")[1].startswith("Invalid URL")
+    assert _download.download_direct("-o x")[1].startswith("Invalid URL")
 
 
 def test_old_ytdlp_self_updates_once_a_day(tmp_path, monkeypatch):
@@ -959,7 +966,7 @@ def test_missing_server_requirements_are_reported(tmp_path, monkeypatch):
 
 
 def test_region_0_waits_for_whisper_on_the_preview_not_for_its_download(pipeline):
-    job = _jobs.Job(("v", "ja", "", "m"), {"language": "ja"})
+    job = _job.Job(("v", "ja", "", "m"), {"language": "ja"})
     job.status, job.mode, job.audio = "transcribing", "stream", None
     job.regions, job.region_state = [(0.0, 25.0), (25.0, 50.0)], ["pending", "pending"]
     with pipeline.jobs.lock:
@@ -974,13 +981,13 @@ def test_region_0_waits_for_whisper_on_the_preview_not_for_its_download(pipeline
 
 
 def test_a_preview_fetched_after_the_worker_took_region_0_is_not_transcribed(pipeline):
-    job = _jobs.Job(("v", "ja", "", "m"), {"language": "ja"})
+    job = _job.Job(("v", "ja", "", "m"), {"language": "ja"})
     job.regions, job.region_state = [(0.0, 25.0)], ["running"]
     job.preview_started = time.time()
     with pipeline.jobs.lock:
         pipeline.jobs.jobs[job.id] = job
     with (
-        patch.object(_audio, "download_audio_segment", return_value="p.wav"),
+        patch.object(_stream, "download_audio_segment", return_value="p.wav"),
         patch.object(_jobs, "transcribe_audio") as heard,
     ):
         pipeline.jobs._preview(job)
@@ -989,7 +996,7 @@ def test_a_preview_fetched_after_the_worker_took_region_0_is_not_transcribed(pip
 
 
 def test_vocals_are_separated_after_the_preview_not_during_it(pipeline):
-    job = _jobs.Job(("v", "ja", "", "m+htdemucs"), {"language": "ja", "url": "https://x/a"})
+    job = _job.Job(("v", "ja", "", "m+htdemucs"), {"language": "ja", "url": "https://x/a"})
     job.preview_started = time.time()
     with pipeline.jobs.lock:
         pipeline.jobs.jobs[job.id] = job
@@ -1005,23 +1012,36 @@ def test_vocals_are_separated_after_the_preview_not_during_it(pipeline):
     [("News & Politics", False), ("Education", False), ("Music", True), ("Entertainment", True), ("", True)],
 )
 def test_videos_filed_as_talk_are_not_separated(pipeline, category, separated):
-    job = _jobs.Job(("v", "ar", "", "m+htdemucs"), {"language": "ar", "url": "https://x/a"})
+    job = _job.Job(("v", "ar", "", "m+htdemucs"), {"language": "ar", "url": "https://x/a"})
     with (
-        patch.object(_audio, "stream_category", return_value=category),
+        patch.object(_stream, "stream_category", return_value=category),
         patch.object(_separate, "read_stereo", return_value=None) as read,
     ):
         assert pipeline.jobs._isolate(job, "a.wav") is None
     assert read.called is separated
 
 
+@pytest.mark.parametrize(("isolate", "looked_up"), [(True, 1), (False, 0)])
+def test_a_video_with_no_preview_still_gets_its_category(pipeline, isolate, looked_up):
+    # Yume starting takes ~35 s: the playhead is then past the preview's 30 s
+    job = _job.Job(("v", "ar", "", "m"), {"language": "ar", "url": "https://x/a", "playhead": 40})
+    job.isolate = isolate
+    with patch.object(_stream, "get_stream_url") as url:
+        pipeline.jobs._start_preview(job, {})
+        for t in threading.enumerate():
+            if t.name.startswith("preview-"):
+                t.join(timeout=5)
+    assert url.call_count == looked_up
+
+
 def test_stream_url_keeps_the_category(monkeypatch):
     url = "https://www.youtube.com/watch?v=cat"
     monkeypatch.setattr(_state, "stream_url_cache", {})
     reply = types.SimpleNamespace(returncode=0, stdout="https://s/a\nNews & Politics\n", stderr="")
-    with patch.object(_audio.subprocess, "run", return_value=reply):
-        assert _audio.get_stream_url(url) == "https://s/a"
-    assert _audio.stream_category(url) == "News & Politics"
-    assert _audio.stream_category("https://elsewhere") == ""
+    with patch.object(_stream.subprocess, "run", return_value=reply):
+        assert _stream.get_stream_url(url) == "https://s/a"
+    assert _stream.stream_category(url) == "News & Politics"
+    assert _stream.stream_category("https://elsewhere") == ""
 
 
 def test_stream_preview_retries_without_unreadable_cookies(monkeypatch):
@@ -1035,11 +1055,11 @@ def test_stream_preview_retries_without_unreadable_cookies(monkeypatch):
             )
         return types.SimpleNamespace(returncode=0, stdout="https://cdn.example/audio", stderr="")
 
-    monkeypatch.setattr(_audio.subprocess, "run", fake_run)
-    monkeypatch.setattr(_audio, "_cookies_failed_at", 0.0)
+    monkeypatch.setattr(_stream.subprocess, "run", fake_run)
+    monkeypatch.setattr(_ytdlp, "_cookies_failed_at", 0.0)
     monkeypatch.setattr(_state, "youtube_auth_method", "cookies")
     monkeypatch.setattr(_state, "stream_url_cache", {})
-    assert _audio.get_stream_url("https://www.youtube.com/watch?v=abc") == "https://cdn.example/audio"
+    assert _stream.get_stream_url("https://www.youtube.com/watch?v=abc") == "https://cdn.example/audio"
     assert [("--cookies-from-browser" in c) for c in calls] == [True, False]
 
 
@@ -1085,7 +1105,7 @@ def test_lines_at_the_playhead_are_translated_first_in_a_small_batch(pipeline):
     pipeline.translator.translate_batch = record
     job = pipeline.jobs.create({**PARAMS, "video_id": "near"})
     _run(pipeline.jobs, job)
-    assert pipeline.translator.batches[0] <= _jobs.NEAR_BATCH
+    assert pipeline.translator.batches[0] <= _job.NEAR_BATCH
 
 
 def test_system_prompt_is_the_same_for_every_batch():
@@ -1116,7 +1136,7 @@ def test_first_translation_batch_is_small_even_when_nothing_is_near_the_playhead
     while time.time() < deadline and job.status not in ("done", "error"):
         pipeline.jobs.poll(job, 500)  # playhead far past every line (an instrumental intro, say)
         time.sleep(0.05)
-    assert pipeline.translator.batches[0] <= _jobs.NEAR_BATCH
+    assert pipeline.translator.batches[0] <= _job.NEAR_BATCH
 
 
 def test_japanese_particles_are_written_as_pronounced():
@@ -1213,11 +1233,11 @@ def test_cookie_hint_only_where_cookies_could_help(monkeypatch):
             err = "ERROR: [youtube] x: Video unavailable"
         return types.SimpleNamespace(returncode=1, stderr=err, stdout="")
 
-    monkeypatch.setattr(_audio.subprocess, "run", fake_run)
-    monkeypatch.setattr(_audio, "_cookies_failed_at", 0.0)
-    monkeypatch.setattr(_audio, "get_stream_url", lambda url: None)
+    monkeypatch.setattr(_download.subprocess, "run", fake_run)
+    monkeypatch.setattr(_ytdlp, "_cookies_failed_at", 0.0)
+    monkeypatch.setattr(_stream, "get_stream_url", lambda url: None)
     monkeypatch.setattr(_state, "youtube_auth_method", "cookies")
-    _path, err = _audio.download_full_audio("https://www.youtube.com/watch?v=gone")
+    _path, err = _download.download_full_audio("https://www.youtube.com/watch?v=gone")
     assert "unavailable" in err and "cookies" not in err.lower()
 
 
@@ -1390,7 +1410,7 @@ def test_the_same_line_twice_becomes_one_line():
 
 def test_a_fragment_at_a_region_cut_is_hidden_whichever_region_finishes_first(pipeline):
     for order in ((0, 1), (1, 0)):
-        job = _jobs.Job(("frag", "ko", "", "m"), {"language": "ko"})
+        job = _job.Job(("frag", "ko", "", "m"), {"language": "ko"})
         job.regions, job.region_state = [(0.0, 28.8), (28.8, 55.0)], ["pending", "pending"]
         raw = {
             0: [_seg(20.0, 24.0, "주요 뉴스입니다."), _seg(28.5, 28.8, "호주 최고한")],
@@ -1522,7 +1542,7 @@ def test_an_unexpected_translation_error_does_not_stop_the_worker(pipeline):
     ],
 )
 def test_the_user_is_told_when_the_video_sounds_like_another_language(heard, notice):
-    job = _jobs.Job(("v", "ar", "", "m"), {"language": "ar"})
+    job = _job.Job(("v", "ar", "", "m"), {"language": "ar"})
     for lang, prob in heard:
         job.check_language(lang, prob)
     assert (notice in job.notice) if notice else job.notice == ""
@@ -1532,7 +1552,7 @@ def test_language_is_checked_while_transcribing_and_shown_in_the_snapshot(pipeli
     with patch.object(_jobs, "detect_language", return_value=("en", 0.97)) as det:
         snap = _run(pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "wrong-lang"}))
     assert "sounds like English, but Yume is set to Japanese" in snap["notice"]
-    assert det.call_count <= _jobs.LANG_CHECKS
+    assert det.call_count <= _job.LANG_CHECKS
     with patch.object(_jobs, "detect_language", return_value=("ja", 0.99)) as det:
         snap = _run(pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "right-lang"}))
     assert snap["notice"] == "" and det.call_count == 1
@@ -1562,14 +1582,14 @@ def test_a_sung_stutter_is_a_lyric_not_a_loop():
 
 def test_thanks_for_watching_in_chinese_is_hidden():
     for line in ("谢谢观看", "謝謝觀看", "谢谢收看"):
-        assert _jobs._hidden(line), line
-    assert not _jobs._hidden("谢谢你")  # "thank you" in a lyric
+        assert _lines.is_unwanted(line), line
+    assert not _lines.is_unwanted("谢谢你")  # "thank you" in a lyric
 
 
 def test_a_line_heard_by_both_regions_at_a_cut_is_shown_once(pipeline):
     line = "وظننت أنا أني بذلك حست غنى"
     for order in ((0, 1), (1, 0)):
-        job = _jobs.Job(("twice", "ar", "", "m"), {"language": "ar"})
+        job = _job.Job(("twice", "ar", "", "m"), {"language": "ar"})
         job.regions, job.region_state = [(0.0, 20.4), (20.4, 43.2)], ["pending", "pending"]
         raw = {
             0: [_seg(14.3, 19.5, "فبدوت شخصا آخر كي أتفخر"), _seg(19.5, 24.8, line)],  # cut at 20.4
@@ -1594,7 +1614,7 @@ def test_a_long_line_heard_by_both_regions_at_a_cut_is_shown_once(pipeline):
     # are timed differently, so the last piece of one region never equalled the
     # first piece of the next, and the whole line was shown twice.
     for order in ((0, 1), (1, 0)):
-        job = _jobs.Job(("long", "ru", "", "m"), {"language": "ru"})
+        job = _job.Job(("long", "ru", "", "m"), {"language": "ru"})
         job.regions, job.region_state = [(0.0, 20.4), (20.4, 50.0)], ["pending", "pending"]
         raw = {
             0: [_seg(3.0, 11.0, "Я помню."), _seg(12.0, 26.0, LONG)],
@@ -1610,12 +1630,21 @@ def test_a_long_line_heard_by_both_regions_at_a_cut_is_shown_once(pipeline):
         assert all(a[1] == b[0] for a, b in zip(shown[1:-1], shown[2:-1])), order
 
 
+def test_library_export_shows_cached_translations_as_a_live_job_does(pipeline):
+    store = _state.store
+    store.put_video("caps", "u", "t", 30.0, [[0.0, 30.0]])
+    store.put_transcript("caps", "ja", "m", 0.0, 30.0, [_raw(1.0, 2.0, "くらさきに")])
+    store.put_translation("ja", "English", "old-model", "くらさきに", "IN THE PROVINCE")  # cached before _unshout
+    srt, n = _export.library_export("caps", "ja", "m", "English")
+    assert n == 1 and "In the province" in srt and "IN THE PROVINCE" not in srt
+
+
 def test_library_export_shows_a_long_line_heard_by_both_regions_once(pipeline):
     store = _state.store
     store.put_video("long", "https://x", "t", 50.0, [[0.0, 20.4], [20.4, 50.0]])
     store.put_transcript("long", "ru", "m", 0.0, 20.4, [_raw(12.0, 26.0, LONG)])
     store.put_transcript("long", "ru", "m", 20.4, 50.0, [_raw(20.4, 34.0, LONG), _raw(35.0, 40.0, "Шли годы.")])
-    srt, n = _jobs.library_export("long", "ru", "m", None)
+    srt, n = _export.library_export("long", "ru", "m", None)
     assert srt.count("Я помню чудное мгновенье") == 1, srt
     assert "00:00:12,000 -->" in srt and "--> 00:00:34,000" in srt
 
@@ -1624,7 +1653,7 @@ def test_a_long_line_is_kept_in_the_pieces_of_the_region_that_held_more_of_it(pi
     # Region 0 holds 2.5 s of the line: one 157-column piece. Region 1 holds
     # 19.5 s and cuts it in two: those two are kept, over both regions' share.
     for order in ((0, 1), (1, 0)):
-        job = _jobs.Job(("more", "ru", "", "m"), {"language": "ru"})
+        job = _job.Job(("more", "ru", "", "m"), {"language": "ru"})
         job.regions, job.region_state = [(0.0, 14.5), (14.5, 50.0)], ["pending", "pending"]
         raw = {
             0: [_seg(3.0, 11.0, "Я помню."), _seg(12.0, 26.0, LONG)],
@@ -1653,7 +1682,7 @@ def test_the_end_of_a_line_heard_again_after_the_cut_is_shown_once(pipeline):
     # SBS Korean news: region 0 wrote its last line on past the cut, region 1
     # wrote what it heard after the cut; both were shown
     for order in ((0, 1), (1, 0)):
-        job = _jobs.Job(("tail", "ko", "", "m"), {"language": "ko"})
+        job = _job.Job(("tail", "ko", "", "m"), {"language": "ko"})
         job.regions, job.region_state = [(0.0, 20.7), (20.7, 45.0)], ["pending", "pending"]
         for idx in order:
             job.add_region(idx, (TAIL_LEFT, TAIL_RIGHT)[idx])
@@ -1673,7 +1702,7 @@ def test_the_end_of_a_line_heard_again_after_the_cut_is_shown_once(pipeline):
     ],
 )
 def test_a_line_that_only_ends_like_the_next_one_is_kept(pipeline, left, right):
-    job = _jobs.Job(("tail", "ko", "", "m"), {"language": "ko"})
+    job = _job.Job(("tail", "ko", "", "m"), {"language": "ko"})
     job.regions, job.region_state = [(0.0, 20.7), (20.7, 45.0)], ["pending", "pending"]
     job.add_region(0, [left])
     job.add_region(1, [right])
@@ -1685,7 +1714,7 @@ def test_library_export_shows_the_end_of_a_line_heard_again_once(pipeline):
     store.put_video("tail", "https://x", "t", 45.0, [[0.0, 20.7], [20.7, 45.0]])
     store.put_transcript("tail", "ko", "m", 0.0, 20.7, [_raw(s["start"], s["end"], s["text"]) for s in TAIL_LEFT])
     store.put_transcript("tail", "ko", "m", 20.7, 45.0, [_raw(s["start"], s["end"], s["text"]) for s in TAIL_RIGHT])
-    srt, n = _jobs.library_export("tail", "ko", "m", None)
+    srt, n = _export.library_export("tail", "ko", "m", None)
     assert n == 3 and srt.count("로고가 보입니다") == 1
     assert "00:00:19,480 --> 00:00:23,700" in srt
 
@@ -1696,7 +1725,7 @@ def test_library_export_shows_a_line_heard_by_both_regions_once(pipeline):
     store.put_video("twice", "https://x", "t", 43.2, [[0.0, 20.4], [20.4, 43.2]])
     store.put_transcript("twice", "ar", "m", 0.0, 20.4, [_raw(19.5, 24.8, line)])
     store.put_transcript("twice", "ar", "m", 20.4, 43.2, [_raw(20.4, 24.8, line), _raw(24.8, 30.4, "مظاهر")])
-    srt, n = _jobs.library_export("twice", "ar", "m", None)
+    srt, n = _export.library_export("twice", "ar", "m", None)
     assert n == 2 and srt.count(line) == 1
     assert "00:00:19,500 --> 00:00:24,800" in srt
 
@@ -1742,12 +1771,12 @@ def test_a_short_or_quick_line_is_not_cut():
 
 
 def test_a_long_line_reaches_the_job_in_pieces_each_judged_by_the_filter(pipeline):
-    job = _jobs.Job(("rap", "ru", "", "m"), {"language": "ru"})
+    job = _job.Job(("rap", "ru", "", "m"), {"language": "ru"})
     job.regions, job.region_state = [(101.75, 123.3)], ["pending"]
     job.add_region(0, [_seg(101.75, 123.2, RAP)])
     assert len(job.segments) == 5 and not any(s["hidden"] for s in job.segments.values())
 
-    job = _jobs.Job(("credits", "ru", "", "m"), {"language": "ru"})
+    job = _job.Job(("credits", "ru", "", "m"), {"language": "ru"})
     job.regions, job.region_state = [(0.0, 30.0)], ["pending"]
     job.add_region(0, [_seg(0.0, 25.0, "Субтитры создавал DimaTorzok. " + RAP)])
     hidden = [s["text"] for s in job.segments.values() if s["hidden"]]
@@ -1767,7 +1796,7 @@ def _picker(*jobs):
 
 
 def _llm_job(params, lines, playhead=0.0):
-    job = _jobs.Job(("pick", "ja", "", "m"), {"language": "ja", **params, "playhead": playhead})
+    job = _job.Job(("pick", "ja", "", "m"), {"language": "ja", **params, "playhead": playhead})
     for i, (start, translation, romaji) in enumerate(lines):
         job.segments[i] = {
             "id": i, "start": start, "end": start + 2, "text": f"行{i}", "hidden": False,
@@ -1789,7 +1818,7 @@ def test_the_llm_works_on_what_is_on_screen_first():
     # ...and with nothing due soon, a full batch, then the lines behind the playhead
     job.playhead = 200.0
     _j, kind, batch = _picker(job)._pick_llm_batch()
-    assert len(batch) == _jobs.BATCH_SIZE and batch[0]["start"] == 5.0
+    assert len(batch) == _job.BATCH_SIZE and batch[0]["start"] == 5.0
     for s in job.segments.values():
         s["translation"] = s["translation"] or "x"
     # translations done: LLM romanization (Arabic, or no romanizer) when asked for
@@ -1837,6 +1866,28 @@ def test_json_cut_off_in_a_numbered_reply_never_becomes_a_subtitle():
     assert _translate.parse_numbered("One\nTwo", 2) == ["One", "Two"]
 
 
+@pytest.mark.parametrize(
+    "line, read_as",
+    [
+        ("it\\'s fine", "it's fine"),  # JSON has no \'
+        ("one\ntwo", "one\ntwo"),  # a raw newline inside a string
+        ('a\\"b', 'a"b'),
+        ("a\\u12", "a\\u12"),  # cut short
+    ],
+    ids=["bad escape", "raw newline", "good escape", "short unicode escape"],
+)
+def test_a_broken_json_reply_keeps_its_lines(line, read_as):
+    """One such line used to fail the whole batch ("unparseable plain output")."""
+    assert _translate.parse_numbered(f'{{"translations": ["{line}", "next"', 2) == [read_as, "next"]
+
+
+def test_a_failed_single_line_retry_keeps_the_batch_line():
+    tr = _translator()
+    with patch.object(tr, "_single", side_effect=_translate.TranslationError("HTTP 500: x")):
+        assert tr._checked("拉斯", "smile in拉斯", "", "ja", "English") == "smile in"
+        assert tr._checked("拉斯", None, "", "ja", "English") == ""
+
+
 def test_a_garbled_first_reply_does_not_leave_the_endpoint_on_plain():
     """The first batch after a start, cut off at max_tokens, walked down to "plain"
     and remembered it: every later batch was asked for lines, and answered in JSON."""
@@ -1854,6 +1905,43 @@ def test_a_garbled_first_reply_does_not_leave_the_endpoint_on_plain():
         assert tr.translate_batch(["あ"], "ja", "English") == ["Plain"]
         assert tr.translate_batch(["い"], "ja", "English") == ["Later"]
     assert seen == ["json_schema", "json_object", "plain", "json_schema"]
+
+
+@pytest.mark.parametrize(
+    "backend, url, reply, models",
+    [
+        (
+            "ollama",
+            "http://127.0.0.1:5000/api/tags",
+            {"models": [{"name": "qwen3", "size": 7}, {"name": "gemma"}]},
+            [{"id": "qwen3", "name": "qwen3", "size": 7}, {"id": "gemma", "name": "gemma", "size": 0}],
+        ),
+        (
+            "llamacpp",
+            "http://127.0.0.1:5000/v1/models",
+            {"data": [{"id": "a.gguf"}, {}]},
+            [{"id": "a.gguf", "name": "a.gguf"}, {"id": "?", "name": "?"}],
+        ),
+    ],
+)
+def test_translation_models_are_asked_of_the_backend(monkeypatch, backend, url, reply, models):
+    import _api
+
+    asked = []
+
+    def urlopen(req, timeout=0):
+        asked.append(getattr(req, "full_url", req))
+        return io.BytesIO(json.dumps(reply).encode())
+
+    monkeypatch.setattr(_api, "jsonify", lambda d: d)
+    monkeypatch.setattr(_api._settings, "reload_config", lambda: None)
+    monkeypatch.setattr(_state, "translation_backend", backend)
+    monkeypatch.setattr(_state, "translation_host", "127.0.0.1")
+    monkeypatch.setattr(_state, "translation_port", 5000)
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    out = _api.list_translation_models()
+    assert asked == [url]
+    assert out["models"] == models and out["translation_url"] == "http://127.0.0.1:5000"
 
 
 def test_plain_mode_does_not_ask_for_json():
