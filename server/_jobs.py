@@ -20,9 +20,11 @@ import threading
 import time
 
 import _audio
+import _download
 import _regions
 import _separate
 import _state
+import _stream
 from _job import LANG_CHECKS, Job, job_model, seconds
 from _lines import is_unwanted
 from _transcribe import detect_language, transcribe_audio
@@ -200,14 +202,14 @@ class JobManager:
             job.event("Downloading audio...")
         self._start_preview(job, cached)
         if job.stream_url:
-            path, err = _audio.download_direct(job.stream_url)
+            path, err = _download.download_direct(job.stream_url)
         else:
-            path, err = _audio.download_full_audio(job.url, stereo=job.isolate)
+            path, err = _download.download_full_audio(job.url, stereo=job.isolate)
         if not self._alive(job):
             _audio.remove_temp(path)
         elif path:
             self._use_audio(job, path, video, cached)
-        elif job.duration > 0 and not job.stream_url and _audio.get_stream_url(job.url):
+        elif job.duration > 0 and not job.stream_url and _stream.get_stream_url(job.url):
             self._stream_regions(job, err, cached)
         else:
             self._fail(job, err or "Audio download failed")
@@ -263,7 +265,7 @@ class JobManager:
     def _isolate(self, job, path):
         """The song's vocals (16 kHz mono), or None to transcribe the mix."""
         self._wait_for_preview(job)
-        if _audio.stream_category(job.url) in _separate.SPOKEN_CATEGORIES:
+        if _stream.stream_category(job.url) in _separate.SPOKEN_CATEGORIES:
             with job.lock:
                 job.isolate = False
             return None
@@ -299,7 +301,7 @@ class JobManager:
         download + whisper."""
         path = None
         try:
-            path = _audio.download_audio_segment(job.url, 0, _regions.FIRST_REGION_S)
+            path = _stream.download_audio_segment(job.url, 0, _regions.FIRST_REGION_S)
             with job.lock:
                 # After a 403 the fetch can outlast the full download: the worker took region 0
                 hear = path and self._alive(job) and (not job.region_state or job.region_state[0] == "pending")
@@ -384,7 +386,7 @@ class JobManager:
             if job.mode == "full":
                 audio = job.audio[int(start * SR) : int(end * SR)]
             else:
-                path = _audio.download_audio_segment(job.url, start, end - start)
+                path = _stream.download_audio_segment(job.url, start, end - start)
                 if not path:
                     raise RuntimeError("stream segment download failed")
                 audio = _audio.load_audio(path)
