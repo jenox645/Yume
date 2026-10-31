@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import sys
 import types
 import urllib.error
@@ -60,6 +61,12 @@ def test_the_preview_range_is_only_for_youtube_streams_and_failures_fall_through
     forbidden = urllib.error.HTTPError(GV, 403, "Forbidden", None, None)
     assert _stream_fetch(tmp_path, GV, http_error=forbidden)[0] is False
     assert _stream_fetch(tmp_path, GV, ffmpeg_rc=1)[0] is False
+    assert not list(tmp_path.glob("*.part"))
+
+
+def test_a_broken_http_answer_falls_through_too(tmp_path):
+    """http.client's errors are no OSErrors: the whole segment failed, with two ways left to try."""
+    assert _stream_fetch(tmp_path, GV, http_error=http.client.BadStatusLine("garbage"))[0] is False
     assert not list(tmp_path.glob("*.part"))
 
 

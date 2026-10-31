@@ -3,6 +3,7 @@ and single segments cut from it. The stream preview and streamed regions use
 these; a full download goes through _download.
 """
 
+import http.client
 import os
 import shutil
 import subprocess
@@ -227,7 +228,7 @@ def _fetch_stream_start(stream_url, duration, output_path):
             capture_output=True,
             timeout=30,
         )
-    except (OSError, subprocess.TimeoutExpired) as e:  # urllib's errors are OSErrors
+    except (OSError, http.client.HTTPException, subprocess.TimeoutExpired) as e:  # urllib's errors are OSErrors
         print(f"[Yume] Could not fetch the start of the stream: {e}")
         return False
     finally:
