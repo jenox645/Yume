@@ -20,9 +20,9 @@ from yume.ui import (
     table,
 )
 
-from yume.menus.server import _menu_whisper_model
 from yume.menus.one_click import menu_one_click
 from yume.menus.translation import _change_addr, _menu_backend
+from yume.menus.whisper_model import _menu_whisper_model
 from yume.menus.youtube_auth import _menu_yt_auth
 
 _log = logging.getLogger("pocket_yume")

@@ -14,7 +14,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import yume.benchmark  # noqa: E402
+import yume.menus.blacklist as bl_menu  # noqa: E402
 import yume.menus.server as srv  # noqa: E402
+import yume.menus.whisper_model as wm  # noqa: E402
 
 MODELS = [name for name, *_ in yume.benchmark.WHISPER_MODELS_INFO]
 
@@ -56,11 +58,11 @@ class WhisperMenu:
         }
         with ExitStack() as stack:
             for name, fake in fakes.items():
-                stack.enter_context(patch.object(srv, name, fake))
+                stack.enter_context(patch.object(wm, name, fake))
             stack.enter_context(patch("builtins.input", side_effect=self.inputs))
             stack.enter_context(patch.object(yume.benchmark, "_is_whisper_model_cached", lambda m: m == "small"))
             stack.enter_context(patch("config.save_config", self.saved))
-            srv._menu_whisper_model(cfg)
+            wm._menu_whisper_model(cfg)
         return self
 
 
@@ -417,7 +419,7 @@ class Blacklist:
         }
         with ExitStack() as stack:
             for name, fake in fakes.items():
-                stack.enter_context(patch.object(srv, name, fake))
+                stack.enter_context(patch.object(bl_menu, name, fake))
             fn({"whisper_host": "127.0.0.1", "whisper_port": 5001}, *args)
         return self
 
@@ -431,49 +433,49 @@ def test_an_unknown_autostart_command_exits_2():
 
 def test_blacklist_command_add_remove_clear_on_the_server(tmp_path):
     b = Blacklist(tmp_path, server=["Subscribe"])
-    b.run(srv.cli_blacklist, ["add", "Thank", "you"])
+    b.run(bl_menu.cli_blacklist, ["add", "Thank", "you"])
     assert b.saved() == ["Subscribe", "Thank you"]
-    b.run(srv.cli_blacklist, ["add", "thank you"])
+    b.run(bl_menu.cli_blacklist, ["add", "thank you"])
     assert b.saved() == ["Subscribe", "Thank you"] and any("Already blocked" in s for s in b.said)
-    b.run(srv.cli_blacklist, ["rm", "SUBSCRIBE"])
+    b.run(bl_menu.cli_blacklist, ["rm", "SUBSCRIBE"])
     assert b.saved() == ["Thank you"]
-    b.run(srv.cli_blacklist, ["clear"])
+    b.run(bl_menu.cli_blacklist, ["clear"])
     assert b.saved() == []
 
 
 def test_blacklist_command_edits_the_saved_file_when_the_server_is_down(tmp_path):
     b = Blacklist(tmp_path, saved_file=["Subscribe"])
-    b.run(srv.cli_blacklist, ["add", "Thanks"])
+    b.run(bl_menu.cli_blacklist, ["add", "Thanks"])
     assert b.saved() == ["Subscribe", "Thanks"]
-    b.run(srv.cli_blacklist, ["list"])
+    b.run(bl_menu.cli_blacklist, ["list"])
     assert any("server not running" in s for s in b.said)
-    b.run(srv.cli_blacklist, ["remove", "nope"])
+    b.run(bl_menu.cli_blacklist, ["remove", "nope"])
     assert any("Not in blacklist" in s for s in b.said)
 
 
 def test_blacklist_menu_add_remove_clear(tmp_path):
     b = Blacklist(tmp_path, server=["Subscribe"])
-    b.run(srv._menu_blacklist, choices=[0, 3], inputs=["Thank you"])
+    b.run(bl_menu._menu_blacklist, choices=[0, 3], inputs=["Thank you"])
     assert b.saved() == ["Subscribe", "Thank you"]
-    b.run(srv._menu_blacklist, choices=[1, 0, 3])  # remove the first
+    b.run(bl_menu._menu_blacklist, choices=[1, 0, 3])  # remove the first
     assert b.saved() == ["Thank you"]
-    b.run(srv._menu_blacklist, choices=[2, 3], yns=[False])
+    b.run(bl_menu._menu_blacklist, choices=[2, 3], yns=[False])
     assert b.saved() == ["Thank you"]
-    b.run(srv._menu_blacklist, choices=[2, 3], yns=[True])
+    b.run(bl_menu._menu_blacklist, choices=[2, 3], yns=[True])
     assert b.saved() == []
 
 
 def test_blacklist_menu_offline_and_back_from_remove(tmp_path):
     items = [f"phrase {i}" for i in range(25)]
     b = Blacklist(tmp_path, saved_file=items)
-    b.run(srv._menu_blacklist, choices=[1, 20, 3])  # index 20 is "Back" (20 shown), not phrase 20
+    b.run(bl_menu._menu_blacklist, choices=[1, 20, 3])  # index 20 is "Back" (20 shown), not phrase 20
     assert b.saved() == items
     assert any("Server not running" in s for s in b.said)
 
 
 def test_blacklist_menu_ignores_case_like_the_command(tmp_path):
     b = Blacklist(tmp_path, server=["Subscribe"])
-    b.run(srv._menu_blacklist, choices=[0, 3], inputs=["subscribe"])  # the menu used to add it twice
+    b.run(bl_menu._menu_blacklist, choices=[0, 3], inputs=["subscribe"])  # the menu used to add it twice
     assert b.saved() == ["Subscribe"] and "Already blocked" in b.said
 
 
@@ -518,13 +520,13 @@ def test_stats_and_model_say_how_to_start_a_stopped_server(capsys):
     import yume.cli as cli
 
     cfg = {"whisper_host": "127.0.0.1", "whisper_port": 5999, "whisper_model": "small"}
-    with patch.object(srv, "_server_get", return_value=None):
+    with patch.object(srv, "_server_get", return_value=None), patch.object(wm, "_server_get", return_value=None):
         assert srv.cli_server_stats(cfg) is False
         out = capsys.readouterr().out
         assert "not reachable" in out and "pocket_yume.py launch" in out
         with pytest.raises(SystemExit) as e:
             cli._stats(cfg, [])
         assert e.value.code == 1
-        srv.cli_model(cfg, [])
+        wm.cli_model(cfg, [])
         out = capsys.readouterr().out
         assert "pocket_yume.py launch" in out and "small" in out
