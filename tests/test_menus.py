@@ -608,3 +608,19 @@ def test_blacklist_menu_says_when_a_change_was_not_saved(tmp_path):
     b.run(bl_menu._menu_blacklist, choices=[1, 0, 3])
     b.run(bl_menu._menu_blacklist, choices=[2, 3], yns=[True])
     assert b.said.count("Failed to save") == 2
+
+
+@pytest.mark.parametrize("answer", [3, -1])
+def test_keeping_the_current_device_saves_nothing(answer):
+    saved, said = MagicMock(), MagicMock()
+    with (
+        patch.object(st, "ask_arrow", MagicMock(side_effect=[1, answer])),
+        patch.object(st, "detect_gpu", lambda: {"has_nvidia": False, "vram_mb": 0}),
+        patch.object(st, "header", MagicMock()),
+        patch.object(st, "pause", MagicMock()),
+        patch.object(st, "success", said),
+        patch("config.save_config", saved),
+    ):
+        st._set_whisper({"whisper_model": "small", "whisper_device": "auto", "whisper_compute_type": "auto"})
+    saved.assert_not_called()
+    said.assert_not_called()

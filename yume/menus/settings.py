@@ -149,16 +149,16 @@ def settings_menu(cfg: dict) -> None:
 
 
 def _pick_setting(cfg: dict, key: str, prompt: str, choices: list) -> None:
-    """Ask for one of (value, label, description), with "Keep current" last, and save."""
+    """Ask for one of (value, label, description), with "Keep current" last; save a new choice."""
     from config import save_config
 
     opts = [(label, desc) for _, label, desc in choices] + [("Keep current", cfg[key])]
     ch = ask_arrow(prompt, opts, default=len(choices))
     if 0 <= ch < len(choices):
         cfg[key] = choices[ch][0]
-    save_config(cfg)
-    success("Saved!")
-    pause()
+        save_config(cfg)
+        success("Saved!")
+        pause()
 
 
 def _set_whisper(cfg: dict) -> None:
