@@ -123,7 +123,7 @@ def _say_failed(label: str, e: BaseException) -> None:
         print(f"\r  {C.RED}✗{C.RESET}  {label} — Connection failed: {e.reason}" + " " * 20)
         info("Check your internet connection and try again")
     else:
-        print(f"\r  {C.RED}✗{C.RESET}  {label} — FAILED: {e or type(e).__name__}" + " " * 20)
+        print(f"\r  {C.RED}✗{C.RESET}  {label} — FAILED: {str(e) or type(e).__name__}" + " " * 20)
 
 
 def download_file(url: str, dest, label: str = "Downloading", sha256: str | None = None) -> bool:

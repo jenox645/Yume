@@ -223,3 +223,7 @@ class TestDownloadFailures:
         with pytest.raises(KeyboardInterrupt):
             net.download_file("http://x/y", tmp_path / "x.bin", "File")
         assert list(tmp_path.iterdir()) == []
+
+    def test_a_failure_without_a_message_is_named(self, monkeypatch, tmp_path, capsys):
+        ok, out, _, _ = self._download(monkeypatch, tmp_path, TimeoutError(), capsys)
+        assert ok is False and "FAILED: TimeoutError" in out
