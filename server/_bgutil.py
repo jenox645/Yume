@@ -40,8 +40,6 @@ def start_bgutil_server():
 
     Returns True if the server starts and is ready within 30 s.
     """
-    global _bgutil_proc
-
     if is_bgutil_server_ready():
         print(f"  bgutil server:    already running on port {BGUTIL_PORT}")
         return True
@@ -67,52 +65,64 @@ def start_bgutil_server():
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / "bgutil_server.log"
     try:
-        log = open(log_path, "w", encoding="utf-8", errors="replace")  # noqa: SIM115 — owned by the child
-        _bgutil_proc = subprocess.Popen(
-            [
-                "deno",
-                "run",
-                "--no-prompt",
-                "--allow-env",
-                "--allow-net",
-                "--allow-ffi=.",
-                "--allow-read=.",
-                "--allow-sys",
-                main_rel,
-                "--port",
-                str(BGUTIL_PORT),
-            ],
-            cwd=cwd,
-            stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        log.close()  # the child has its own handle
-
-        for _i in range(30):
-            time.sleep(1)
-            if is_bgutil_server_ready():
-                print(f"  bgutil server:    ready on port {BGUTIL_PORT} (PO token generation active)")
-                return True
-            if _bgutil_proc.poll() is not None:
-                tail = ""
-                try:
-                    tail = log_path.read_text(encoding="utf-8", errors="replace")[-300:]
-                except OSError:
-                    pass
-                print(f"  bgutil server:    process exited with code {_bgutil_proc.returncode}")
-                if tail:
-                    print(f"  bgutil server:    output: {tail}")
-                _bgutil_proc = None
-                return False
-
-        print(f"  bgutil server:    timed out waiting for port {BGUTIL_PORT}")
-        return False
-
+        _spawn(cwd, main_rel, log_path)
+        return _wait_until_ready(log_path)
     except Exception as e:
         print(f"  bgutil server:    start failed: {e}")
         return False
+
+
+def _spawn(cwd, main_rel, log_path):
+    global _bgutil_proc
+    log = open(log_path, "w", encoding="utf-8", errors="replace")  # noqa: SIM115 — owned by the child
+    _bgutil_proc = subprocess.Popen(
+        [
+            "deno",
+            "run",
+            "--no-prompt",
+            "--allow-env",
+            "--allow-net",
+            "--allow-ffi=.",
+            "--allow-read=.",
+            "--allow-sys",
+            main_rel,
+            "--port",
+            str(BGUTIL_PORT),
+        ],  # fmt: skip
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    log.close()  # the child has its own handle
+
+
+def _wait_until_ready(log_path):
+    global _bgutil_proc
+    for _i in range(30):
+        time.sleep(1)
+        if is_bgutil_server_ready():
+            print(f"  bgutil server:    ready on port {BGUTIL_PORT} (PO token generation active)")
+            return True
+        if _bgutil_proc.poll() is not None:
+            _report_exit(log_path)
+            _bgutil_proc = None
+            return False
+
+    print(f"  bgutil server:    timed out waiting for port {BGUTIL_PORT}")
+    return False
+
+
+def _report_exit(log_path):
+    tail = ""
+    try:
+        tail = log_path.read_text(encoding="utf-8", errors="replace")[-300:]
+    except OSError:
+        pass
+    print(f"  bgutil server:    process exited with code {_bgutil_proc.returncode}")
+    if tail:
+        print(f"  bgutil server:    output: {tail}")
 
 
 def stop_bgutil_server():
