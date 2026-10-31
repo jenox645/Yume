@@ -15,13 +15,13 @@ import threading
 import time
 from pathlib import Path
 
-import _audio
 import _bgutil
 import _jobs
 import _settings
 import _state
 import _store
 import _translate
+import _ytdlp
 
 
 def force_utf8_output():
@@ -179,10 +179,10 @@ def print_startup_banner(args):
     def _check_tool_versions():
         results = []
         try:
-            if not _audio.check_ytdlp():
+            if not _ytdlp.check_ytdlp():
                 results.append(("yt-dlp", None, ["  WARNING: yt-dlp not found in PATH!"]))
             else:
-                v = subprocess.run([*_audio.ytdlp_cmd(), "--version"], capture_output=True, text=True, timeout=10)
+                v = subprocess.run([*_ytdlp.ytdlp_cmd(), "--version"], capture_output=True, text=True, timeout=10)
                 version = v.stdout.strip() or "?"
                 results.append(("yt-dlp", maybe_update_ytdlp(version), None))
         except Exception as exc:
@@ -222,24 +222,37 @@ def maybe_update_ytdlp(version):
     """Self-update the standalone yt-dlp when it is older than a month (YouTube
     changes break old versions: a 7-month-old one got HTTP 403 on every video).
     pip installs (Deno auth) are left to the CLI. Returns the version to show."""
+    age = _release_age(version)
+    exe = shutil.which("yt-dlp")
+    if age is None or age <= YTDLP_MAX_AGE_DAYS or not exe or _state.youtube_auth_method == "deno":
+        return version
+    # Releases can be weeks apart: ask at most once a day, not on every start
+    stamp = Path(exe).with_name(".yt-dlp-update-check")
+    if _stamped_today(stamp):
+        return version
+    print(f"  yt-dlp:           {version} is {age} days old — checking for an update...")
+    return _update_ytdlp(exe, version, stamp)
+
+
+def _release_age(version):
+    """Days since the release of a yt-dlp version ("2026.08.19"), None if it is not a date."""
     import datetime
 
     try:
         released = datetime.date(*map(int, version.split(".")[:3]))
     except ValueError:
-        return version
-    age = (datetime.date.today() - released).days
-    exe = shutil.which("yt-dlp")
-    if age <= YTDLP_MAX_AGE_DAYS or not exe or _state.youtube_auth_method == "deno":
-        return version
-    # Releases can be weeks apart: ask at most once a day, not on every start
-    stamp = Path(exe).with_name(".yt-dlp-update-check")
+        return None
+    return (datetime.date.today() - released).days
+
+
+def _stamped_today(stamp):
     try:
-        if time.time() - stamp.stat().st_mtime < 86400:
-            return version
+        return time.time() - stamp.stat().st_mtime < 86400
     except OSError:
-        pass
-    print(f"  yt-dlp:           {version} is {age} days old — checking for an update...")
+        return False
+
+
+def _update_ytdlp(exe, version, stamp):
     try:
         r = subprocess.run([exe, "-U"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
         v = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=10).stdout.strip()
@@ -258,30 +271,46 @@ def setup_deno_auth(args):
     if _state.youtube_auth_method != "deno":
         return
 
-    deno_found = False
-    try:
-        r = subprocess.run(["deno", "--version"], capture_output=True, text=True, timeout=5)
-        deno_found = r.returncode == 0
-        if deno_found:
-            print(f"  Deno:             {r.stdout.split(chr(10))[0].strip()}")
-    except Exception:
-        pass
-
-    if not deno_found:
-        print("")
-        print("  WARNING: youtube_auth_method is 'deno' but Deno is not installed.")
-        print("  Auto-switching to 'cookies' auth.")
-        print("  To fix: install Deno (https://deno.land), or set youtube_auth_method='cookies'.")
-        _state.youtube_auth_method = "cookies"
-        if _state.cookies_browser == "chrome" and platform.system() != "Windows":
-            _state.cookies_browser = "firefox"
-        print(f"  Now using: cookies ({_state.cookies_browser})")
-        print("")
+    if not _deno_runs():
+        _switch_to_cookies()
         return
 
     # The server never installs packages or downloads code at startup (that used
     # to happen silently, unpinned, on every launch). Setup is the CLI's job:
     # Tools -> Deno installs Deno, pip yt-dlp, the PO-token plugin and its server.
+    missing = _missing_deno_packages()
+    if missing:
+        print(f"  WARNING: Deno auth needs {', '.join(missing)} — run: python pocket_yume.py (Tools -> Deno)")
+
+    atexit.register(_bgutil.stop_bgutil_server)  # after a timeout too: deno is still running
+    if not _bgutil.start_bgutil_server():
+        print("  bgutil server:    not running — YouTube downloads will fall back to cookies")
+
+
+def _deno_runs():
+    try:
+        r = subprocess.run(["deno", "--version"], capture_output=True, text=True, timeout=5)
+    except Exception:
+        return False
+    if r.returncode != 0:
+        return False
+    print(f"  Deno:             {r.stdout.split(chr(10))[0].strip()}")
+    return True
+
+
+def _switch_to_cookies():
+    print("")
+    print("  WARNING: youtube_auth_method is 'deno' but Deno is not installed.")
+    print("  Auto-switching to 'cookies' auth.")
+    print("  To fix: install Deno (https://deno.land), or set youtube_auth_method='cookies'.")
+    _state.youtube_auth_method = "cookies"
+    if _state.cookies_browser == "chrome" and platform.system() != "Windows":
+        _state.cookies_browser = "firefox"
+    print(f"  Now using: cookies ({_state.cookies_browser})")
+    print("")
+
+
+def _missing_deno_packages():
     missing = []
     try:
         import yt_dlp  # noqa: F401 — pip yt-dlp is what discovers the plugin
@@ -291,13 +320,7 @@ def setup_deno_auth(args):
         import yt_dlp_plugins.extractor.getpot_bgutil  # noqa: F401  # type: ignore[import-not-found]
     except ImportError:
         missing.append("bgutil-ytdlp-pot-provider")
-    if missing:
-        print(f"  WARNING: Deno auth needs {', '.join(missing)} — run: python pocket_yume.py (Tools -> Deno)")
-
-    if _bgutil.start_bgutil_server():
-        atexit.register(_bgutil.stop_bgutil_server)
-    else:
-        print("  bgutil server:    not running — YouTube downloads will fall back to cookies")
+    return missing
 
 
 def write_token_file(args):

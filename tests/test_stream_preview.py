@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import sys
 import types
 import urllib.error
@@ -10,9 +11,9 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "server"))
 
-import _audio  # noqa: E402
 import _separate  # noqa: E402
 import _state  # noqa: E402
+import _stream  # noqa: E402
 
 
 def _stream_fetch(tmp_path, url, *, body=b"audio", http_error=None, ffmpeg_rc=0):
@@ -39,8 +40,8 @@ def _stream_fetch(tmp_path, url, *, body=b"audio", http_error=None, ffmpeg_rc=0)
         Path(cmd[-1]).write_bytes(b"RIFF")
         return types.SimpleNamespace(returncode=ffmpeg_rc, stderr=b"", stdout=b"")
 
-    with patch.object(_audio.urllib.request, "urlopen", urlopen), patch.object(_audio.subprocess, "run", run):
-        return _audio._fetch_stream_start(url, 30.0, str(tmp_path / "a.wav")), asked
+    with patch.object(_stream.urllib.request, "urlopen", urlopen), patch.object(_stream.subprocess, "run", run):
+        return _stream._fetch_stream_start(url, 30.0, str(tmp_path / "a.wav")), asked
 
 
 GV = "https://rr3---sn-x.googlevideo.com/videoplayback?itag=251"
@@ -63,14 +64,20 @@ def test_the_preview_range_is_only_for_youtube_streams_and_failures_fall_through
     assert not list(tmp_path.glob("*.part"))
 
 
+def test_a_broken_http_answer_falls_through_too(tmp_path):
+    """http.client's errors are no OSErrors: the whole segment failed, with two ways left to try."""
+    assert _stream_fetch(tmp_path, GV, http_error=http.client.BadStatusLine("garbage"))[0] is False
+    assert not list(tmp_path.glob("*.part"))
+
+
 def test_a_stream_ffmpeg_cannot_read_falls_back_to_yt_dlp(tmp_path, monkeypatch):
     """The fallback ran only when no stream URL was found, never after ffmpeg failed."""
-    monkeypatch.setattr(_audio, "get_stream_url", lambda url: "https://cdn.example.com/a.m4a")
+    monkeypatch.setattr(_stream, "get_stream_url", lambda url: "https://cdn.example.com/a.m4a")
     monkeypatch.setattr(
-        _audio.subprocess, "run", lambda *a, **k: types.SimpleNamespace(returncode=1, stderr=b"403", stdout=b"")
+        _stream.subprocess, "run", lambda *a, **k: types.SimpleNamespace(returncode=1, stderr=b"403", stdout=b"")
     )
-    with patch.object(_audio, "_download_audio_segment_fallback", return_value="seg.wav") as fb:
-        assert _audio.download_audio_segment("https://www.youtube.com/watch?v=abc", 60, 25) == "seg.wav"
+    with patch.object(_stream, "_download_audio_segment_fallback", return_value="seg.wav") as fb:
+        assert _stream.download_audio_segment("https://www.youtube.com/watch?v=abc", 60, 25) == "seg.wav"
     fb.assert_called_once()
 
 

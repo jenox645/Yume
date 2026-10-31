@@ -151,12 +151,18 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 | `server/_settings.py` | Config file load + live reload, the switched model written back, the user blacklist |
 | `server/_model.py` | Whisper model: load at startup (CUDA warm-up, CPU fallback), hot swap, load-error advice |
 | `server/_startup.py` | Startup chores: args, logging, banner, yt-dlp self-update, Deno auth, token file, web server thread, pipeline |
-| `server/_jobs.py` | Job manager, transcription + LLM workers, export |
+| `server/_jobs.py` | Job manager: download and preview, transcription + LLM workers |
+| `server/_job.py` | One job's state: regions, lines, revisions, what the workers do next |
+| `server/_lines.py` | A region's raw lines cleaned, regions joined at a cut (shared by jobs and exports) |
+| `server/_export.py` | SRT/VTT export, also of cached videos without a job |
 | `server/_regions.py` | Quiet-point region planning |
 | `server/_separate.py` | Optional vocal isolation (Demucs htdemucs, CUDA only); falls back to the mix |
 | `server/_translate.py` | LLM client with structured output |
 | `server/_store.py` | SQLite cache |
-| `server/_audio.py` | yt-dlp/ffmpeg download strategies, WAV loading |
+| `server/_download.py` | Full-audio download: yt-dlp strategies, ffmpeg fallbacks, custom stream URLs |
+| `server/_stream.py` | Stream URL (cached) and single segments cut from the stream |
+| `server/_ytdlp.py` | yt-dlp: command, browser cookies and auth arguments, friendly errors |
+| `server/_audio.py` | WAV loading, temp cleanup |
 | `extension/js/session.js` | Job creation, polling, cue lookup |
 | `extension/js/background.js` | Authenticated server proxy |
 | `extension/js/content.js` | Page lifecycle, SPA navigation, popup messages |

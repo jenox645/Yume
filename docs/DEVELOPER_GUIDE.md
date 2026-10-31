@@ -47,14 +47,20 @@ python server/faster_whisper_server.py --model tiny --device cpu --compute-type 
 | `server/_settings.py` | Config file load + live reload, switched model written back, blacklist |
 | `server/_model.py` | Whisper model load (CUDA warm-up, CPU fallback), hot swap, load-error advice |
 | `server/_startup.py` | Args, logging, banner, yt-dlp self-update, Deno auth, token file, web server |
-| `server/_jobs.py` | Job manager, transcription + LLM workers, SRT/VTT export |
+| `server/_jobs.py` | Job manager: download and preview, transcription + LLM workers |
+| `server/_job.py` | One job's state: regions, lines, revisions, what the workers do next |
+| `server/_lines.py` | A region's raw lines cleaned, regions joined at a cut |
+| `server/_export.py` | SRT/VTT export, also of cached videos without a job |
 | `server/_regions.py` | Quiet-point region planning (pure numpy) |
 | `server/_transcribe.py` | Whisper call with the music-tuned parameters |
 | `server/_translate.py` | LLM client: structured output, fallbacks, retries |
 | `server/_romanize.py` | Deterministic romanization; `None` = needs the LLM |
 | `server/_store.py` | SQLite cache |
 | `server/_filter.py` | Hallucination / credits patterns, user blacklist |
-| `server/_audio.py` | yt-dlp/ffmpeg download strategies, stream URLs, WAV loading |
+| `server/_download.py` | Full-audio download: yt-dlp strategies, ffmpeg fallbacks |
+| `server/_stream.py` | Stream URL (cached), single segments from the stream |
+| `server/_ytdlp.py` | yt-dlp command, cookies and auth arguments, friendly errors |
+| `server/_audio.py` | WAV loading, temp cleanup |
 | `extension/js/session.js` | Job creation, polling, cue lookup |
 | `extension/js/content.js` | Page lifecycle, SPA navigation, popup messages |
 | `extension/js/subtitle-window.js` | Shadow-DOM overlay |

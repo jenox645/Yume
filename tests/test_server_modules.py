@@ -6,7 +6,7 @@ Coverage targets:
   _filter.py      — Hallucination + credits detection (100%)
   _romanize.py    — Lazy-load romanizers, fallback behaviour (70%)
   _transcribe.py  — transcribe_file() with mock model (90%)
-  _audio.py       — Pure helpers + mocked subprocess paths (50%+)
+  _ytdlp.py, _stream.py, _download.py, _audio.py — Pure helpers + mocked subprocess paths (50%+)
   _bgutil.py      — Lifecycle helpers (40%)
   faster_whisper_server.py — CLI helpers, config, error messages (20%+)
 """
@@ -92,11 +92,14 @@ _install_faster_whisper_stub()
 # Now safe to import server modules
 import _audio  # noqa: E402
 import _bgutil  # noqa: E402
+import _download  # noqa: E402
 import _filter  # noqa: E402
 import _romanize  # noqa: E402
 import _security  # noqa: E402
 import _state  # noqa: E402
+import _stream  # noqa: E402
 import _transcribe  # noqa: E402
+import _ytdlp  # noqa: E402
 import _api  # noqa: E402
 import _model  # noqa: E402
 import _settings  # noqa: E402
@@ -811,12 +814,12 @@ class TestYtdlpCmd(unittest.TestCase):
 
     def test_default_mode_returns_yt_dlp(self):
         _state.youtube_auth_method = "cookies"
-        cmd = _audio.ytdlp_cmd()
+        cmd = _ytdlp.ytdlp_cmd()
         self.assertEqual(cmd, ["yt-dlp"])
 
     def test_deno_mode_uses_python_module(self):
         _state.youtube_auth_method = "deno"
-        cmd = _audio.ytdlp_cmd()
+        cmd = _ytdlp.ytdlp_cmd()
         self.assertIn("-m", cmd)
         self.assertIn("yt_dlp", cmd)
         self.assertNotEqual(cmd, ["yt-dlp"])
@@ -824,10 +827,10 @@ class TestYtdlpCmd(unittest.TestCase):
 
 class TestIsYoutubeUrl(unittest.TestCase):
     def _yt(self, url):
-        self.assertTrue(_audio.is_youtube_url(url), f"Expected YouTube: {url}")
+        self.assertTrue(_ytdlp.is_youtube_url(url), f"Expected YouTube: {url}")
 
     def _not_yt(self, url):
-        self.assertFalse(_audio.is_youtube_url(url), f"Expected NOT YouTube: {url}")
+        self.assertFalse(_ytdlp.is_youtube_url(url), f"Expected NOT YouTube: {url}")
 
     def test_www_youtube(self):
         self._yt("https://www.youtube.com/watch?v=abc")
@@ -873,40 +876,40 @@ class TestIsYoutubeUrl(unittest.TestCase):
 class TestCheckYtdlp(unittest.TestCase):
     def setUp(self):
         # Reset cache so each test starts fresh
-        _audio._ytdlp_cache["available"] = None
-        _audio._ytdlp_cache["checked_at"] = 0
+        _ytdlp._ytdlp_cache["available"] = None
+        _ytdlp._ytdlp_cache["checked_at"] = 0
 
     def test_returns_true_when_ytdlp_available(self):
-        with patch("_audio.subprocess.run") as mock_run:
+        with patch("_ytdlp.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
-            result = _audio.check_ytdlp()
+            result = _ytdlp.check_ytdlp()
         self.assertTrue(result)
 
     def test_returns_false_when_ytdlp_missing(self):
-        with patch("_audio.subprocess.run") as mock_run:
+        with patch("_ytdlp.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1)
-            result = _audio.check_ytdlp()
+            result = _ytdlp.check_ytdlp()
         self.assertFalse(result)
 
     def test_returns_false_on_exception(self):
-        with patch("_audio.subprocess.run", side_effect=FileNotFoundError("not found")):
-            result = _audio.check_ytdlp()
+        with patch("_ytdlp.subprocess.run", side_effect=FileNotFoundError("not found")):
+            result = _ytdlp.check_ytdlp()
         self.assertFalse(result)
 
     def test_result_cached_for_60_seconds(self):
-        with patch("_audio.subprocess.run") as mock_run:
+        with patch("_ytdlp.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
-            _audio.check_ytdlp()
-            _audio.check_ytdlp()
+            _ytdlp.check_ytdlp()
+            _ytdlp.check_ytdlp()
         # Only called once because second call is cached
         mock_run.assert_called_once()
 
     def test_cache_refreshed_after_expiry(self):
-        with patch("_audio.subprocess.run") as mock_run:
+        with patch("_ytdlp.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
-            _audio._ytdlp_cache["checked_at"] = time.time() - 70  # expired
-            _audio._ytdlp_cache["available"] = True
-            _audio.check_ytdlp()
+            _ytdlp._ytdlp_cache["checked_at"] = time.time() - 70  # expired
+            _ytdlp._ytdlp_cache["available"] = True
+            _ytdlp.check_ytdlp()
         mock_run.assert_called_once()
 
 
@@ -946,7 +949,7 @@ class TestAudioFiles(unittest.TestCase):
 
 class TestFriendlifyYtdlpError(unittest.TestCase):
     def _check(self, raw: str, fragment: str):
-        msg = _audio.friendlify_ytdlp_error(raw)
+        msg = _ytdlp.friendlify_ytdlp_error(raw)
         self.assertIn(fragment.lower(), msg.lower(), f"Expected {fragment!r} in: {msg!r}")
 
     def test_drm_protected_message(self):
@@ -990,7 +993,7 @@ class TestFriendlifyYtdlpError(unittest.TestCase):
 
     def test_unknown_error_returned_as_is(self):
         raw = "some completely unknown random error"
-        msg = _audio.friendlify_ytdlp_error(raw)
+        msg = _ytdlp.friendlify_ytdlp_error(raw)
         self.assertEqual(msg, raw)
 
 
@@ -1009,29 +1012,29 @@ class TestBuildDownloadStrategies(unittest.TestCase):
         # fall back to no-auth so a missing/locked cookie DB doesn't hard-fail a
         # URL that never needed cookies (direct media, cookie-less environments).
         _state.youtube_auth_method = "cookies"
-        with patch.object(_audio, "resolve_browser_cookies", return_value="firefox"):
-            strategies = _audio._build_download_strategies("https://example.com/video", False)
+        with patch.object(_ytdlp, "resolve_browser_cookies", return_value="firefox"):
+            strategies = _download._build_download_strategies(False)
         labels = [label for label, _ in strategies]
         self.assertIn("no-auth", labels)
         self.assertEqual(labels[-1], "no-auth")
 
     def test_youtube_cookies_has_multiple_strategies(self):
         _state.youtube_auth_method = "cookies"
-        with patch.object(_audio, "resolve_browser_cookies", return_value="firefox"):
-            strategies = _audio._build_download_strategies("https://youtube.com/watch", True)
+        with patch.object(_ytdlp, "resolve_browser_cookies", return_value="firefox"):
+            strategies = _download._build_download_strategies(True)
         self.assertGreater(len(strategies), 1)
 
     def test_youtube_deno_has_deno_strategy(self):
         _state.youtube_auth_method = "deno"
-        with patch.object(_audio, "resolve_browser_cookies", return_value="firefox"):
-            strategies = _audio._build_download_strategies("https://youtube.com/watch", True)
+        with patch.object(_ytdlp, "resolve_browser_cookies", return_value="firefox"):
+            strategies = _download._build_download_strategies(True)
         labels = [label for label, _ in strategies]
         self.assertTrue(any("deno" in lb for lb in labels))
 
     def test_all_strategies_are_tuples(self):
         _state.youtube_auth_method = "cookies"
-        with patch.object(_audio, "resolve_browser_cookies", return_value="firefox"):
-            strategies = _audio._build_download_strategies("https://youtube.com/watch", True)
+        with patch.object(_ytdlp, "resolve_browser_cookies", return_value="firefox"):
+            strategies = _download._build_download_strategies(True)
         for item in strategies:
             self.assertIsInstance(item, tuple)
             self.assertEqual(len(item), 2)
@@ -1045,7 +1048,7 @@ class TestGetStreamUrl(unittest.TestCase):
         _state.stream_url_cache.clear()
 
     def test_invalid_url_returns_none(self):
-        result = _audio.get_stream_url("not-a-valid-url")
+        result = _stream.get_stream_url("not-a-valid-url")
         self.assertIsNone(result)
 
     def test_returns_cached_stream_url(self):
@@ -1053,7 +1056,7 @@ class TestGetStreamUrl(unittest.TestCase):
             "stream_url": "https://cdn.example.com/stream.mp4",
             "timestamp": time.time(),
         }
-        result = _audio.get_stream_url("https://youtube.com/watch?v=abc")
+        result = _stream.get_stream_url("https://youtube.com/watch?v=abc")
         self.assertEqual(result, "https://cdn.example.com/stream.mp4")
 
     def test_expired_cache_calls_ytdlp(self):
@@ -1061,18 +1064,18 @@ class TestGetStreamUrl(unittest.TestCase):
             "stream_url": "https://cdn.example.com/stream.mp4",
             "timestamp": time.time() - _state.STREAM_URL_TTL - 1,
         }
-        with patch("_audio.subprocess.run") as mock_run:
+        with patch("_stream.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error")
-            result = _audio.get_stream_url("https://youtube.com/watch?v=abc")
+            result = _stream.get_stream_url("https://youtube.com/watch?v=abc")
         # Cache expired — ytdlp was called; returned None because it failed
         mock_run.assert_called()
         self.assertIsNone(result)
 
     def test_successful_ytdlp_caches_result(self):
         stream = "https://cdn.example.com/live.mp4"
-        with patch("_audio.subprocess.run") as mock_run, patch.object(_audio, "build_auth_args", return_value=[]):
+        with patch("_stream.subprocess.run") as mock_run, patch.object(_ytdlp, "build_auth_args", return_value=[]):
             mock_run.return_value = MagicMock(returncode=0, stdout=f"{stream}\n")
-            result = _audio.get_stream_url("https://youtube.com/watch?v=newvid")
+            result = _stream.get_stream_url("https://youtube.com/watch?v=newvid")
         self.assertEqual(result, stream)
         self.assertIn("https://youtube.com/watch?v=newvid", _state.stream_url_cache)
 
@@ -1435,7 +1438,7 @@ class TestModelLoadFailure(unittest.TestCase):
         with (
             patch.object(_api, "request", req),
             patch.object(_api, "jsonify", lambda d=None, **kw: d),
-            patch.object(_api._audio, "check_ytdlp", return_value=True),
+            patch.object(_api._ytdlp, "check_ytdlp", return_value=True),
         ):
             return _api.health()
 

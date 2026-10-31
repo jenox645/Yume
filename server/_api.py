@@ -12,17 +12,18 @@ import re
 import secrets
 import subprocess
 import time
+import urllib.request
 from pathlib import Path
 
 from flask import Flask, jsonify, request
 
-import _audio
-import _jobs
+import _export
 import _model
 import _separate
 import _settings
 import _state
 import _translate
+import _ytdlp
 from _security import validate_url
 
 # ── Flask app ─────────────────────────────────────────────────────────────────
@@ -130,7 +131,7 @@ def get_gpu_stats():
 def health():
     """Minimal unauthenticated response for discovery; full info for token holders."""
     origin = request.headers.get("Origin", "")
-    safe_caller = (not origin) or origin.startswith("chrome-extension://") or origin.startswith("moz-extension://")
+    safe_caller = not origin or _is_trusted_origin(origin)
 
     is_ready = _state.model is not None
     if _state.load_error:
@@ -141,7 +142,7 @@ def health():
         "status": status,
         "version": _state.SERVER_VERSION,
         "api": 2,  # 2 = job API (/jobs); the old per-chunk API is gone
-        "ytdlp_available": _audio.check_ytdlp(),
+        "ytdlp_available": _ytdlp.check_ytdlp(),
     }
     if _state.load_error:
         base["error"] = _state.load_error
@@ -224,10 +225,14 @@ def _requested_model(name):
     """A model name or local CTranslate2 folder from a switch request → (model, None) or (None, error)."""
     if not name:
         return None, {"error": "Missing 'model' field"}
-    if os.path.sep not in name and "/" not in name:
-        if name not in _VALID_MODELS:
-            return None, {"error": f"Unknown model: {name}", "valid": _VALID_MODELS}
-        return ("large-v3-turbo" if name == "turbo" else name), None
+    if os.path.sep in name or "/" in name:
+        return _local_model(name)
+    if name not in _VALID_MODELS:
+        return None, {"error": f"Unknown model: {name}", "valid": _VALID_MODELS}
+    return ("large-v3-turbo" if name == "turbo" else name), None
+
+
+def _local_model(name):
     raw_path = Path(name)
     if not raw_path.is_absolute() or ".." in raw_path.parts:
         return None, {"error": "Model path must be absolute and must not contain '..'"}
@@ -274,22 +279,16 @@ def list_translation_models():
     models = []
 
     try:
-        if _state.translation_backend == "ollama":
-            import urllib.request
-
-            req = urllib.request.Request(f"http://{_state.translation_host}:{_state.translation_port}/api/tags")  # noqa: S5332 — local LLM backend
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read())
-                for m in data.get("models", []):
-                    models.append({"id": m["name"], "name": m["name"], "size": m.get("size", 0)})
+        ollama = _state.translation_backend == "ollama"
+        path = "/api/tags" if ollama else "/v1/models"
+        with urllib.request.urlopen(url + path, timeout=5) as resp:  # nosec B310 — configured LLM endpoint
+            data = json.loads(resp.read())
+        if ollama:
+            for m in data.get("models", []):
+                models.append({"id": m["name"], "name": m["name"], "size": m.get("size", 0)})
         else:
-            import urllib.request
-
-            req = urllib.request.Request(f"{url}/v1/models")
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read())
-                for m in data.get("data", []):
-                    models.append({"id": m.get("id", "?"), "name": m.get("id", "?")})
+            for m in data.get("data", []):
+                models.append({"id": m.get("id", "?"), "name": m.get("id", "?")})
     except Exception as e:
         print(f"[Yume] Model list query failed: {e}")
 
@@ -316,23 +315,36 @@ def list_translation_models():
 _LANG_RE = re.compile(r"^[a-z]{2,3}$")
 
 
+def _url_error(*urls):
+    for url in urls:
+        valid, err = validate_url(url) if url else (True, "")
+        if not valid:
+            return f"Invalid URL: {err}"
+    return None
+
+
+def _job_language(value):
+    """(Whisper's language, None for auto-detect; error message or None)."""
+    language = str(value or "").lower()
+    if language in ("", "auto"):
+        return None, None
+    if not _LANG_RE.match(language):
+        return None, f"Invalid language code: {language!r}"
+    return language, None
+
+
 def _job_params(data):
     """(params for JobManager.create, None), or (None, error message) for a bad request.
 
-    Durations and the playhead are sanitized by the job itself (_jobs.seconds)."""
+    Durations and the playhead are sanitized by the job itself (_job.seconds)."""
     url = str(data.get("url") or "")
     stream_url = str(data.get("stream_url") or "")
     if not url and not stream_url:
         return None, "Missing url"
-    for u in (url, stream_url):
-        valid, err = validate_url(u) if u else (True, "")
-        if not valid:
-            return None, f"Invalid URL: {err}"
-    language = str(data.get("language") or "").lower()
-    if language in ("", "auto"):
-        language = None
-    elif not _LANG_RE.match(language):
-        return None, f"Invalid language code: {language!r}"
+    language, language_err = _job_language(data.get("language"))
+    err = _url_error(url, stream_url) or language_err
+    if err:
+        return None, err
     return {
         "video_id": data.get("video_id"),
         "url": url,
@@ -405,7 +417,7 @@ def job_export(job_id):
     with job.lock:
         segments = [dict(s) for s in job.segments.values()]
     progress = job.snapshot(0)["progress"]
-    content, count = _jobs.export_subtitles(segments, fmt)
+    content, count = _export.export_subtitles(segments, fmt)
     return jsonify({"content": content, "count": count, "format": fmt, "progress": progress})
 
 
@@ -421,7 +433,7 @@ def library_export():
     if not video_key or not model:
         return jsonify({"error": "video_key and model are required"}), 400
     fmt = "vtt" if a.get("format") == "vtt" else "srt"
-    content, count = _jobs.library_export(video_key, language, model, a.get("target") or None, fmt)
+    content, count = _export.library_export(video_key, language, model, a.get("target") or None, fmt)
     return jsonify({"content": content, "count": count, "format": fmt})
 
 
