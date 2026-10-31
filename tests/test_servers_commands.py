@@ -244,7 +244,7 @@ class TestSpawnAndStop:
         monkeypatch.setattr(servers, "IS_WIN", True)
         servers.Processes(hidden=True).spawn("Whisper", [sys.executable, "s.py"], "w.log", {})
         cmd, kw = calls[0]
-        assert cmd == ["python.exe", "s.py"] and kw["creationflags"] == servers._CREATE_NO_WINDOW
+        assert cmd == ["python.exe", "s.py"] and kw["creationflags"] == servers.CREATE_NO_WINDOW
 
     def test_other_programs_keep_their_command_and_visible_children_their_console(self, logs, monkeypatch):
         calls = self._popen(monkeypatch)

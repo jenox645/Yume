@@ -34,13 +34,18 @@ python server/faster_whisper_server.py --model tiny --device cpu --compute-type 
 | `yume/native_host.py` | Native messaging host + browser registration (`autostart on/off`) |
 | `yume/setup.py` | Setup wizard, extension install guide, uninstall |
 | `yume/menus/` | `server.py` `stats` command; `blacklist.py` `blacklist` command + subtitle filter menu; `whisper_model.py` `model` command + hot-swap menu; `hf_browser.py` GGUF browser; `tools.py` Tools & Fonts (installers, translation engine, Python dependencies); `translation.py` backend, address, model, test sentence; `youtube_auth.py` cookies or Deno; `one_click.py` one-click start; `prompts.py` translation and romanization prompt editors; `settings.py` Settings menu. `__init__` re-exports the entry points |
-| `yume/health.py` | Health check (incl. end-to-end translation), status, fonts |
-| `yume/installers.py` | yt-dlp, FFmpeg, Deno + PO-token plugin, llama-cpp-python, Ollama |
+| `yume/health.py` | Health check (incl. end-to-end translation), fonts |
+| `yume/status.py` | `status` report: hardware, tools, packages, servers, models, ports |
+| `yume/installers.py` | yt-dlp, FFmpeg, Deno, Ollama, Python packages, llama-cpp-python entry point |
+| `yume/llama_python.py` | llama-cpp-python pip builds per GPU/OS, build tools |
+| `yume/po_token.py` | YouTube PO-token plugin (bgutil) and its token server |
 | `yume/hardware.py` | GPU/CPU/RAM detection, **`WHISPER_MODELS` (the one model table)**, recommendation |
 | `yume/network.py` | Downloads (`.part` + rename), server health checks, authenticated server calls |
 | `yume/ports.py` | Port checks; kills only Yume's own processes without asking |
 | `yume/servers.py` | Server processes for both the launcher and `serve`: commands, logs, start/wait/stop, crash diagnosis |
-| `yume/launch.py` | Interactive launcher (prompts, spinner, crash advice) + runtime menu |
+| `yume/launch.py` | Interactive launcher (prompts, spinner, crash advice) |
+| `yume/resource_check.py` | Pre-launch check: Whisper and the GGUF against free VRAM/RAM |
+| `yume/runtime_menu.py` | The menu while the servers run: status panel, stats, model, logs, stop |
 | `yume/service.py` | Headless `serve` supervisor (one-click start), detached spawn, idle auto-stop |
 | `server/faster_whisper_server.py` | Entry point: `main()` runs the startup sequence |
 | `server/_api.py` | Flask app: Host/token/CORS checks and every route |

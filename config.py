@@ -12,8 +12,6 @@ from pathlib import Path
 
 _log = logging.getLogger("pocket_yume.config")
 
-# Use logging for diagnostics — no monkey-patching needed
-
 # Paths
 BASE_DIR = Path(__file__).parent.resolve()
 CONFIG_DIR = BASE_DIR / "config"
@@ -212,7 +210,7 @@ def validate_host(value: str | None) -> str | None:
     if not value:
         print("  x  Host cannot be empty")
         return None
-    if re.match(r"^[a-zA-Z0-9._-]+$", value) or re.match(r"^\d+\.\d+\.\d+\.\d+$", value):
+    if re.match(r"^[a-zA-Z0-9._-]+$", value):
         return value
     print(f"  x  Invalid host: {value!r}")
     return None

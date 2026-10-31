@@ -18,8 +18,6 @@ from config import CONFIG_DIR, config_export, config_import, load_config, save_c
 from yume.constants import BACKEND_INFO, GGUF_DIR, LOGS_DIR, MODELS_DIR, SERVER_DIR, TOOLS_DIR, VERSION
 from yume.ui import C, ask_arrow, enable_ansi, error, header, info, panel, pause
 
-_log = logging.getLogger("pocket_yume")
-
 
 # ── Commands ──────────────────────────────────────────────────────────────────
 
@@ -81,7 +79,7 @@ def _guide(cfg, args):
 
 
 def _status(cfg, args):
-    from yume.health import show_status
+    from yume.status import show_status
 
     show_status(cfg)
 

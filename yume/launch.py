@@ -3,196 +3,40 @@
 The process work (commands, spawn, wait, crash diagnosis, stop) lives in
 yume/servers.py, shared with the headless supervisor (yume/service.py); this
 module adds what needs a person: port and install prompts, a spinner, and the
-crash advice on screen.
+crash advice on screen. yume/resource_check.py and yume/runtime_menu.py hold the
+check before starting and the menu after it.
 """
 
 from __future__ import annotations
 
-import logging
 import os
 import sys
 from pathlib import Path
 
 from yume import servers
-from yume.constants import VERSION, GGUF_DIR, LOGS_DIR, IS_WIN, BACKEND_INFO, backend_info
+from yume.constants import VERSION, GGUF_DIR, LOGS_DIR, IS_WIN, BACKEND_INFO, DEFAULT_OLLAMA_MODEL, backend_info
 from yume.hardware import detect_gpu
-from yume.network import check_ollama_models, check_server, check_translation_server, discover_servers, reset_api_token
+from yume.network import check_ollama_models, check_translation_server, discover_servers, reset_api_token
 from yume.ports import ensure_port_free, find_free_port, is_port_free, kill_port_process
-from yume.ui import (
-    C,
-    Spinner,
-    ask_arrow,
-    ask_yn,
-    clear,
-    error,
-    header,
-    info,
-    panel,
-    pause,
-    section,
-    success,
-    warn,
-)
+from yume.resource_check import check_resources
+from yume.runtime_menu import runtime_menu
+from yume.ui import C, Spinner, ask_yn, clear, error, header, info, pause, success, warn
 from yume.utils import _run
-
-_log = logging.getLogger("pocket_yume")
 
 
 def _offer_llama_server() -> bool:
     """When llama-cpp-python would translate on the CPU although a GPU is
     there, offer llama.cpp's prebuilt GPU server instead (much faster)."""
-    gpu = detect_gpu()
-    if not (gpu["has_nvidia"] or gpu["has_amd"]):
-        return False
-    try:
-        import llama_cpp.llama_cpp as _lib  # type: ignore[import]
+    from yume import llama_server
 
-        if callable(getattr(_lib, "ggml_backend_cuda_reg", None)):
-            return False  # llama-cpp-python already runs on the GPU
-    except ImportError:
-        pass
+    gpu = detect_gpu()
+    if not (gpu["has_nvidia"] or gpu["has_amd"]) or llama_server.python_engine_on_gpu():
+        return False
     warn("The translator would run on the CPU (llama-cpp-python has no GPU support here).")
     info("llama.cpp's own GPU server translates ~10x faster — about 200-700 MB to download.")
     if not ask_yn("Install it now?", True):
         return False
-    from yume import llama_server
-
     return llama_server.install(gpu)
-
-
-# ── Resource detection helpers ────────────────────────────────────────────────
-
-
-def _get_available_ram_mb() -> int:
-    """Return available RAM in MB. Returns 0 if detection fails."""
-    try:
-        import psutil  # type: ignore[import]
-
-        return int(psutil.virtual_memory().available / (1024 * 1024))
-    except ImportError:
-        pass
-    try:
-        with open("/proc/meminfo", encoding="utf-8") as f:
-            for line in f:
-                if line.startswith("MemAvailable:"):
-                    return int(line.split()[1]) // 1024
-    except Exception:
-        pass
-    return 0
-
-
-def _get_available_vram_mb() -> int:
-    """Return free VRAM in MB for the primary NVIDIA GPU. Returns 0 if detection fails."""
-    try:
-        import pynvml  # type: ignore[import]
-
-        pynvml.nvmlInit()
-        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-        mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
-        pynvml.nvmlShutdown()
-        return int(mem.free / (1024 * 1024))
-    except Exception:
-        pass
-    try:
-        out = _run(["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"], timeout=10)
-        if out.returncode == 0 and out.stdout.strip():
-            return int(out.stdout.strip().split("\n")[0].strip())
-    except Exception:
-        pass
-    return 0
-
-
-def _whisper_vram_mb(cfg: dict, gpu: dict) -> int:
-    """VRAM the Whisper model needs on an NVIDIA GPU; 0 when it does not run on one."""
-    if not gpu.get("has_nvidia") or cfg.get("whisper_device", "auto") not in ("auto", "cuda"):
-        return 0
-    from yume.hardware import WHISPER_MODEL_VRAM_MB
-
-    needed = WHISPER_MODEL_VRAM_MB.get(cfg.get("whisper_model", "large-v3-turbo"), 4_500)  # custom: assume large
-    if cfg.get("whisper_compute_type", "auto") in ("int8", "int8_float16"):
-        needed = int(needed * 0.65)
-    return needed
-
-
-def _resource_issues(cfg: dict) -> list[str]:
-    """What will not fit: Whisper in free VRAM, and the GGUF in VRAM (with Whisper) or RAM."""
-    gpu = detect_gpu()
-    issues = []
-    whisper_mb = _whisper_vram_mb(cfg, gpu)
-    free_vram = _get_available_vram_mb() if gpu.get("has_nvidia") or gpu.get("has_amd") else 0
-    if whisper_mb and 0 < free_vram < whisper_mb:
-        issues.append(
-            f"Whisper '{cfg.get('whisper_model', 'large-v3-turbo')}' needs ~{whisper_mb / 1024:.1f} GB VRAM, "
-            f"but only {free_vram / 1024:.1f} GB is free."
-        )
-
-    gp = cfg.get("gguf_model_path", "")
-    if cfg.get("translation_backend", "llamacpp") != "llamacpp" or not gp or not Path(gp).exists():
-        return issues
-    # llama.cpp offloads every layer when there is a GPU, so the model lives in
-    # VRAM next to Whisper; only without a GPU does it need system RAM.
-    gguf_mb = int(Path(gp).stat().st_size / (1024 * 1024) * 1.2)
-    if gpu.get("has_nvidia") or gpu.get("has_amd"):
-        if 0 < free_vram < gguf_mb + whisper_mb:
-            both = f" (plus ~{whisper_mb / 1024:.1f} GB for Whisper)" if whisper_mb else ""
-            issues.append(
-                f"Translation model ({Path(gp).name}) needs ~{gguf_mb / 1024:.1f} GB VRAM{both}, "
-                f"but only {free_vram / 1024:.1f} GB is free."
-            )
-    else:
-        free_ram = _get_available_ram_mb()
-        if 0 < free_ram < gguf_mb:
-            issues.append(
-                f"Translation model ({Path(gp).name}) needs ~{gguf_mb / 1024:.1f} GB RAM, "
-                f"but only {free_ram / 1024:.1f} GB is available."
-            )
-    return issues
-
-
-def _check_resources(cfg: dict) -> bool:
-    """Pre-launch RAM/VRAM check. Returns True to proceed, False to cancel.
-
-    Never hard-blocks — the user can always choose 'Launch anyway'.
-    """
-    while True:
-        issues = _resource_issues(cfg)
-        if not issues:
-            return True
-        print()
-        panel(
-            "\n".join(f"  • {msg}" for msg in issues),
-            title=f"{C.YELLOW}Low Resources Warning{C.RESET}",
-            style=C.YELLOW,
-        )
-        print()
-        info("Launching with low resources may cause crashes or heavy swap usage.")
-        print()
-        ch = ask_arrow(
-            "How would you like to proceed?",
-            [
-                ("Launch anyway", "Override — proceed despite the warning"),
-                ("Retry check", "Close other apps to free resources, then re-check"),
-                ("Switch Whisper model", "Pick a smaller Whisper model that fits available VRAM/RAM"),
-                ("Cancel", "Return to main menu without launching"),
-            ],
-            default=0,
-            allow_back=False,
-        )
-        if ch == 0:
-            warn("Launching with low resources — watch logs if servers crash.")
-            return True
-        if ch == 1:
-            info("Re-checking resources — close unused apps first, then press Enter.")
-            try:
-                input(f"  {C.DIM}Press Enter when ready...{C.RESET}")
-            except (EOFError, KeyboardInterrupt):
-                print()
-        elif ch == 2:
-            from yume.menus import _menu_whisper_model
-
-            _menu_whisper_model(cfg)
-        else:
-            return False
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -228,7 +72,7 @@ def _use_running_servers(cfg: dict, existing: dict) -> bool:
     if existing.get("whisper") and existing.get("translation"):
         info("Both servers are already running!")
         if ask_yn("Open runtime menu with existing servers?", True):
-            _runtime_menu(cfg, servers.Processes(), cfg.get("translation_backend", "llamacpp"))
+            runtime_menu(cfg, servers.Processes(), cfg.get("translation_backend", "llamacpp"))
             return True
     port = existing.get("ollama_found")
     if port:
@@ -310,7 +154,7 @@ def _launch_inner(cfg: dict, procs: servers.Processes) -> None:
     if _use_running_servers(cfg, existing) or not _prepare_ports(cfg, existing):
         return
     _offer_missing_packages()
-    if not _check_resources(cfg):
+    if not check_resources(cfg):
         return
 
     env = servers.build_server_env()
@@ -330,20 +174,10 @@ def _launch_inner(cfg: dict, procs: servers.Processes) -> None:
     print()
     info(f"{C.DIM}Chrome -> Japanese video -> Yume extension -> Enable{C.RESET}")
     print()
-    _runtime_menu(cfg, procs, bk)
+    runtime_menu(cfg, procs, bk)
 
 
-def _report(result: servers.StartResult, spin: Spinner | None, ready_msg: str, slow_msg: list[str]) -> bool:
-    """Show how starting a server went. False = stop launching (after a pause)."""
-    if spin is not None:
-        spin.finish("ok" if result.ok else "timeout" if result.timed_out else "failed")
-    if result.ok:
-        success(ready_msg)
-        return True
-    if result.timed_out:  # a large model can take longer: keep going
-        for i, line in enumerate(slow_msg):
-            (warn if i == 0 else info)(line)
-        return True
+def _show_crash(result: servers.StartResult) -> None:
     error(result.error)
     if result.log_name:
         for line in servers.log_tail(result.log_name)[-10:]:
@@ -355,19 +189,27 @@ def _report(result: servers.StartResult, spin: Spinner | None, ready_msg: str, s
             info(line)
     if result.log_name:
         info(f"Full log: {LOGS_DIR / result.log_name}")
+
+
+def _report(result: servers.StartResult, spin: Spinner, ready_msg: str, slow_msg: list[str]) -> bool:
+    """Show how starting a server went. False = stop launching (after a pause)."""
+    if result.ok:
+        spin.finish("ok")
+        success(ready_msg)
+        return True
+    if result.timed_out:  # a large model can take longer: keep going
+        spin.finish("timeout")
+        for i, line in enumerate(slow_msg):
+            (warn if i == 0 else info)(line)
+        return True
+    spin.finish("failed")
+    _show_crash(result)
     pause()
     return False
 
 
-def _start_llamacpp(cfg: dict, procs: servers.Processes, bi: dict, env: dict) -> bool:
-    """Start the llama.cpp translation server (after the install prompts it may
-    need). False = launching cannot go on."""
-    from yume import llama_server
-    from yume.installers import install_llamacpp_python
-
-    if check_translation_server(cfg["translation_host"], cfg["translation_port"], bi)["up"]:
-        success("llama.cpp server already running!")
-        return True
+def _pick_gguf(cfg: dict) -> str | None:
+    """The model llama.cpp will load; None (said why) without one."""
     configured = cfg.get("gguf_model_path", "")
     gp = servers.resolve_gguf(cfg)
     if gp is None:
@@ -375,38 +217,68 @@ def _start_llamacpp(cfg: dict, procs: servers.Processes, bi: dict, env: dict) ->
         info("Fix: Main Menu → Tools → Download GGUF Model")
         info(f"Or: place a .gguf file in {GGUF_DIR}")
         pause()
-        return False
-    if gp != configured:
+    elif gp != configured:
         info(f"Auto-selected GGUF: {Path(gp).name}")
+    return gp
+
+
+def _install_server_deps(env: dict) -> bool:
+    try:
+        r = _run([sys.executable, "-m", "pip", "install", *servers.LLAMA_SERVER_DEPS, "-q",
+                  "--no-warn-script-location"], timeout=300, env=env)  # fmt: skip
+    except Exception as e:
+        error(f"Failed to install: {e}")
+        return False
+    if r.returncode != 0:
+        error(f"Failed to install: {(r.stderr or '').strip()[-300:]}")
+        return False
+    success("Server dependencies installed!")
+    return True
+
+
+def _ensure_python_engine(env: dict) -> bool:
+    """llama-cpp-python and the packages its server needs. False = launching cannot go on."""
+    from yume.installers import install_llamacpp_python
+
+    try:
+        import llama_cpp  # noqa: F401
+    except ImportError:
+        error("llama-cpp-python not installed! This is the translation engine.")
+        info(f"You can also install it manually: {C.CYAN}pip install llama-cpp-python{C.RESET}")
+        if ask_yn("Install now?"):
+            install_llamacpp_python()
+        else:
+            pause()
+        return False
+    try:
+        import fastapi  # noqa: F401
+        import uvicorn  # noqa: F401
+    except ImportError:
+        warn("Server dependencies missing (uvicorn/fastapi)")
+        info("Installing them now...")
+        if not _install_server_deps(env):
+            pause()
+            return False
+    return True
+
+
+def _start_llamacpp(cfg: dict, procs: servers.Processes, bi: dict, env: dict) -> bool:
+    """Start the llama.cpp translation server (after the install prompts it may
+    need). False = launching cannot go on."""
+    from yume import llama_server
+
+    if check_translation_server(cfg["translation_host"], cfg["translation_port"], bi)["up"]:
+        success("llama.cpp server already running!")
+        return True
+    gp = _pick_gguf(cfg)
+    if gp is None:
+        return False
 
     native = llama_server.server_path() is not None
     if not native and _offer_llama_server():
         native = llama_server.server_path() is not None
-    if not native:
-        try:
-            import llama_cpp  # noqa: F401
-        except ImportError:
-            error("llama-cpp-python not installed! This is the translation engine.")
-            info(f"You can also install it manually: {C.CYAN}pip install llama-cpp-python{C.RESET}")
-            if ask_yn("Install now?"):
-                install_llamacpp_python()
-            else:
-                pause()
-            return False
-        try:
-            import fastapi  # noqa: F401
-            import uvicorn  # noqa: F401
-        except ImportError:
-            warn("Server dependencies missing (uvicorn/fastapi)")
-            info("Installing them now...")
-            try:
-                _run([sys.executable, "-m", "pip", "install", *servers.LLAMA_SERVER_DEPS, "-q",
-                      "--no-warn-script-location"], timeout=300, env=env)  # fmt: skip
-                success("Server dependencies installed!")
-            except Exception as e:
-                error(f"Failed to install: {e}")
-                pause()
-                return False
+    if not native and not _ensure_python_engine(env):
+        return False
 
     if not kill_port_process(cfg["translation_port"]):  # asks before killing another program
         error(f"Port {cfg['translation_port']} is still in use — cannot start the translation server.")
@@ -422,20 +294,13 @@ def _start_llamacpp(cfg: dict, procs: servers.Processes, bi: dict, env: dict) ->
 
 def _describe_engine(native: bool) -> None:
     """Say what will run the translation model (and warn when it is the CPU)."""
+    from yume import llama_server
+
     gpu = detect_gpu()
     if native:
-        from yume import llama_server
-
-        build = llama_server.installed_build()
-        info(f"Engine: llama-server {build.get('tag', '')} ({build.get('variant', '?')})")
+        info(f"Engine: {llama_server.build_label()}")
     elif gpu["has_nvidia"] or (gpu["has_amd"] and not IS_WIN):
-        try:
-            import llama_cpp.llama_cpp as _lib  # type: ignore[import]
-
-            backend_ok = callable(getattr(_lib, "ggml_backend_cuda_reg", None))
-        except Exception:
-            backend_ok = False
-        if backend_ok:
+        if llama_server.python_engine_on_gpu():
             info("GPU offloading enabled (--n_gpu_layers -1)")
         else:
             warn("llama-cpp-python is a CPU-only build — model will load into RAM, not VRAM.")
@@ -465,9 +330,9 @@ def _start_ollama(cfg: dict, procs: servers.Processes, env: dict) -> bool:
         # model name in every request, so pick the default instead of failing later.
         from config import save_config
 
-        cfg["translation_model"] = "qwen2.5:7b"
+        cfg["translation_model"] = DEFAULT_OLLAMA_MODEL
         save_config(cfg)
-        info("Translation model set to qwen2.5:7b (change it in Settings → Translation settings)")
+        info(f"Translation model set to {DEFAULT_OLLAMA_MODEL} (change it in Settings → Translation settings)")
     model = cfg["translation_model"]
     ms = check_ollama_models(cfg["translation_host"], cfg["translation_port"])
     if model not in ms and f"{model}:latest" not in ms:
@@ -507,141 +372,3 @@ def _start_whisper(cfg: dict, procs: servers.Processes, env: dict) -> bool:
             "This is a one-time download. Future launches will start much faster.",
         ],
     )
-
-
-# ── Runtime menu ──────────────────────────────────────────────────────────────
-
-
-def _stop_all(cfg: dict, procs: servers.Processes) -> None:
-    print(f"\n  {C.YELLOW}Shutting down...{C.RESET}")
-    if not procs:
-        # Servers this menu did not start: if the background service runs
-        # them (one-click start), stop it; otherwise leave them alone.
-        from yume.service import read_state, request_stop
-
-        if read_state()["state"] != "stopped":
-            success("Background Yume stopped" if request_stop() else "Asked background Yume to stop")
-        else:
-            info("These servers were started elsewhere — they keep running.")
-        return
-    names = procs.names()
-    procs.stop(cfg, timeout=1)
-    for n in names:
-        success(f"{n} stopped")
-
-
-def _log_excerpt(lines: list[str]) -> list[str]:
-    """The lines of a server log worth showing: Yume's own messages and
-    problems, then requests, then anything else (health checks left out)."""
-    lines = lines[-2000:]  # logs reach 5 MB; only the tail matters
-    yume_lines = [ln for ln in lines if "[Yume]" in ln or any(w in ln.lower() for w in ("error", "fail", "warn"))]
-    access_lines = [ln for ln in lines if "HTTP/" in ln and "/health" not in ln]
-    seen = set(yume_lines) | set(access_lines)
-    other_lines = [ln for ln in lines if ln not in seen and "GET /health" not in ln]
-    shown = yume_lines[-10:] + access_lines[-5:] + other_lines[-5:]
-    return (shown or lines[-15:])[-20:]
-
-
-def _show_logs() -> None:
-    section("Recent Logs")
-    for name in ["whisper_server.log", "translation_server.log"]:
-        lp = LOGS_DIR / name
-        if not lp.exists():
-            continue
-        info(f"{C.BOLD}{name}{C.RESET}")
-        try:
-            with open(lp, encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
-            for line in _log_excerpt(lines):
-                print(f"    {C.DIM}{line.rstrip()}{C.RESET}")
-        except Exception as e:
-            warn(f"Could not read: {e}")
-        print()
-
-
-def _handle_dead_servers(cfg: dict, procs: servers.Processes) -> bool:
-    """Report servers that exited on their own. True: the user chose to stop."""
-    dead = [(n, p) for n, p in procs if p.poll() is not None]
-    if not dead:
-        return False
-    warn("A server has stopped unexpectedly.")
-    for name, p in dead:
-        error(f"{name} exited with code {p.returncode}")
-    info(f"Its log: {C.CYAN}{LOGS_DIR}{C.RESET}")
-    if ask_yn("Stop the other servers and go back to the main menu (choose Launch to restart)?", True):
-        _stop_all(cfg, procs)
-        return True
-    for item in dead:  # keep going with what still runs; don't ask again
-        procs.procs.remove(item)
-    return False
-
-
-def _status_panel(cfg: dict, bi: dict) -> None:
-    ws_up = check_server(cfg["whisper_host"], cfg["whisper_port"], "/health")["up"]
-    ts_up = check_translation_server(cfg["translation_host"], cfg["translation_port"], bi)["up"]
-
-    # Word + colour so status is readable without colour vision
-    def state(up: bool) -> str:
-        return f"{C.GREEN}● up{C.RESET}  " if up else f"{C.RED}● DOWN{C.RESET}"
-
-    print()
-    panel(
-        f"  {state(ws_up)} Whisper     {cfg['whisper_host']}:{cfg['whisper_port']}\n"
-        f"  {state(ts_up)} Translation {cfg['translation_host']}:{cfg['translation_port']}",
-        title=f"{C.GREEN}Yume Running{C.RESET}",
-        style=C.GREEN,
-    )
-
-
-def _runtime_actions() -> list[tuple[str, str, object]]:
-    """(label, description, action(cfg)) for the runtime menu, Stop excluded."""
-    from yume.benchmark import benchmark_whisper
-    from yume.menus import _menu_blacklist, _menu_whisper_model, _test_translation, cli_server_stats
-
-    def stats(cfg: dict) -> None:
-        cli_server_stats(cfg)
-        pause()
-
-    def logs(_cfg: dict) -> None:
-        _show_logs()
-        pause()
-
-    return [
-        ("Server Stats", "GPU usage, memory, how many chunks have been processed", stats),
-        ("Subtitle Filter", "Block phrases Whisper hallucinates (fake 'Subscribe' etc.)", _menu_blacklist),
-        ("Whisper Model", "Switch speech recognition model without restarting", _menu_whisper_model),
-        ("Test Translation", "Send a test sentence to verify the translation pipeline", _test_translation),
-        ("Benchmark Whisper", "Measure how fast each model runs on your hardware", benchmark_whisper),
-        ("View Logs", "Recent server output (for troubleshooting)", logs),
-    ]
-
-
-def _runtime_menu(cfg: dict, procs: servers.Processes, bk: str) -> None:
-    """Live menu: stats, blacklist, model swap, logs."""
-    bi = backend_info(bk)
-    actions = _runtime_actions()
-    stop = len(actions)
-    try:
-        while True:
-            clear()
-            print()
-            if _handle_dead_servers(cfg, procs):
-                return
-            _status_panel(cfg, bi)
-            ch = ask_arrow(
-                "Runtime:",
-                [(label, desc) for label, desc, _ in actions]
-                + [("Stop & Return", "Shut down all servers and go back to main menu")],
-                default=stop,
-                allow_back=False,
-            )
-            if ch is not None and ch < stop:
-                actions[ch][2](cfg)
-            # Default No: this menu opens with Stop highlighted, so two
-            # accidental Enters must not kill running servers.
-            elif ch == stop and ask_yn("Stop all servers?", default=False):
-                _stop_all(cfg, procs)
-                return
-    except KeyboardInterrupt:
-        print()
-        _stop_all(cfg, procs)

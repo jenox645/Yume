@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from yume.constants import LOGS_DIR, IS_WIN
-from yume.hardware import WHISPER_MODELS, detect_gpu, recommend_whisper_model
+from yume.hardware import WHISPER_MODELS, detect_gpu, recommend_whisper_model, whisper_compute_type
 from yume.ui import C, ask_input, ask_yn, error, header, info, pause, section, success, table, warn
 from yume.utils import find_tool, _run
 
@@ -153,8 +153,7 @@ def _device_and_precision(gpu: dict) -> tuple[str, str]:
         info("AMD GPU detected — benchmarking via ROCm/auto")
     else:
         return "cpu", "int8"
-    vram_mb = gpu.get("vram_mb", 0)
-    return device, "float16" if vram_mb >= 8000 else "int8_float16" if vram_mb >= 4000 else "int8"
+    return device, whisper_compute_type(gpu.get("vram_mb", 0))
 
 
 def _time_model(model_name: str, device: str, compute: str, test_wav: Path, where: str = "") -> dict:

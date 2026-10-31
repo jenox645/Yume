@@ -51,7 +51,8 @@ class Check:
 
         ls = MagicMock()
         ls.server_path.return_value = "llama-server.exe" if self.native_llama else None
-        ls.installed_build.return_value = {"tag": "b9000", "variant": "cuda"}
+        ls.build_label.return_value = "llama-server b9000 (cuda)"
+        ls.python_engine_on_gpu = yume.llama_server.python_engine_on_gpu
         fakes = {
             "detect_gpu": MagicMock(return_value=GPU),
             "detect_ram_gb": MagicMock(return_value=32.0),
@@ -120,6 +121,13 @@ def test_an_external_llm_that_is_down_fails():
     assert not any(r[0] == "GGUF model present" for r in c.rows)
 
 
+def test_a_translation_server_on_another_machine_passes():
+    # Its port is free HERE, which read as "nothing listening" although it answered
+    cfg = {"translation_backend": "custom", "translation_host": "192.168.1.5"}
+    c = Check(cfg=cfg, free_ports={5000}).go()
+    assert c.row("Translation port 5000")[1:] == (True, "in use by the running server")
+
+
 def test_a_missing_tool_fails_with_a_download_link():
     c = Check(tools={"ffmpeg", "ffprobe", "deno"}).go()
     assert c.row("yt-dlp installed")[1:] == (False, "not found")
@@ -164,12 +172,13 @@ def test_a_cpu_only_llama_cpp_python_points_at_the_gpu_engine(monkeypatch):
 
 def test_status_without_a_translation_model_says_where_to_get_one(capsys):
     import yume.benchmark
+    import yume.status
 
     with (
-        patch.object(health, "find_gguf_models", return_value=[]),
+        patch.object(yume.status, "find_gguf_models", return_value=[]),
         patch.object(yume.benchmark, "_is_whisper_model_cached", return_value=True),
     ):
-        health._status_models({"whisper_model": "small", "gguf_model_path": ""})
+        yume.status._status_models({"whisper_model": "small", "gguf_model_path": ""})
     out = capsys.readouterr().out
     assert "no GGUF models found" in out and "Download Translation Model" in out
 
@@ -200,8 +209,9 @@ def test_reports_run_as_commands_do_not_wait_for_enter(monkeypatch):
     not wipe the report."""
     import yume.cli as cli
     import yume.menus.tools as tools
+    import yume.status
 
-    for fn in (health.show_status, health.health_check, health.detect_fonts):
+    for fn in (yume.status.show_status, health.health_check, health.detect_fonts):
         assert "pause" not in fn.__code__.co_names, fn.__name__
     waited = []
     monkeypatch.setattr(cli, "pause", lambda *a: waited.append(1))
@@ -211,3 +221,22 @@ def test_reports_run_as_commands_do_not_wait_for_enter(monkeypatch):
         assert menu[label].__closure__[0].cell_contents is command  # the menu waits...
     assert cli.COMMANDS["status"].run is cli._status  # ...the command does not
     assert "pause" in tools._fonts.__code__.co_names
+
+
+def _broken_package(tmp_path, monkeypatch):
+    """What llama_cpp does when its library will not load (a CUDA DLL missing)."""
+    (tmp_path / "broken_pkg_xyz.py").write_text('raise RuntimeError("Failed to load shared library")\n')
+    monkeypatch.syspath_prepend(tmp_path)
+    return "broken_pkg_xyz"
+
+
+def test_a_package_that_fails_to_load_is_a_failed_check_not_a_crash(tmp_path, monkeypatch):
+    pkg = _broken_package(tmp_path, monkeypatch)
+    assert health._chk_pkg(pkg, "Broken") == ("Broken", False, "fails to load: Failed to load shared library")
+    assert health._chk_roma(pkg, "x")[1:] == (True, "optional, not installed — x will use the LLM (slower)")
+
+
+def test_status_survives_a_package_that_fails_to_load(tmp_path, monkeypatch):
+    import yume.utils
+
+    assert yume.utils._try_import(_broken_package(tmp_path, monkeypatch)) is False
