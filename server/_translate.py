@@ -174,6 +174,17 @@ def _drop_copied(texts, out):
 
 _JSON_REPLY_RE = re.compile(r'^\s*(?:```\w*\s*)?[{\[]\s*["{\[]')
 _JSON_STRING_RE = re.compile(r'"((?:[^"\\]|\\.)*)"\s*(?=[,\]}]|$)')
+_ESCAPE_RE = re.compile(r"\\(.)", re.DOTALL)
+
+
+def _json_string(s):
+    """A JSON string as a model wrote it: an escape JSON does not have ("it\\'s")
+    stands for the character itself, and a raw newline is allowed."""
+    valid = _ESCAPE_RE.sub(lambda m: m.group(0) if m.group(1) in '"\\/bfnrtu' else m.group(1), s)
+    try:
+        return json.loads(f'"{valid}"', strict=False)
+    except json.JSONDecodeError:  # a \u escape cut short
+        return valid
 
 
 def _json_like_list(raw, key, n):
@@ -186,7 +197,7 @@ def _json_like_list(raw, key, n):
         return parse_json_list(raw, key, n)
     except (ValueError, json.JSONDecodeError):
         pass
-    found = [json.loads(f'"{m}"') for m in _JSON_STRING_RE.findall(raw) if m != key]
+    found = [_json_string(m) for m in _JSON_STRING_RE.findall(raw) if m != key]
     return ([clean_translation(x) or None for x in found[:n]] + [None] * n)[:n]
 
 

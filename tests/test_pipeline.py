@@ -1843,6 +1843,28 @@ def test_json_cut_off_in_a_numbered_reply_never_becomes_a_subtitle():
     assert _translate.parse_numbered("One\nTwo", 2) == ["One", "Two"]
 
 
+@pytest.mark.parametrize(
+    "line, read_as",
+    [
+        ("it\\'s fine", "it's fine"),  # JSON has no \'
+        ("one\ntwo", "one\ntwo"),  # a raw newline inside a string
+        ('a\\"b', 'a"b'),
+        ("a\\u12", "a\\u12"),  # cut short
+    ],
+    ids=["bad escape", "raw newline", "good escape", "short unicode escape"],
+)
+def test_a_broken_json_reply_keeps_its_lines(line, read_as):
+    """One such line used to fail the whole batch ("unparseable plain output")."""
+    assert _translate.parse_numbered(f'{{"translations": ["{line}", "next"', 2) == [read_as, "next"]
+
+
+def test_a_failed_single_line_retry_keeps_the_batch_line():
+    tr = _translator()
+    with patch.object(tr, "_single", side_effect=_translate.TranslationError("HTTP 500: x")):
+        assert tr._checked("拉斯", "smile in拉斯", "", "ja", "English") == "smile in"
+        assert tr._checked("拉斯", None, "", "ja", "English") == ""
+
+
 def test_a_garbled_first_reply_does_not_leave_the_endpoint_on_plain():
     """The first batch after a start, cut off at max_tokens, walked down to "plain"
     and remembered it: every later batch was asked for lines, and answered in JSON."""
