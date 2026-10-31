@@ -219,12 +219,13 @@ def _select_gguf(cfg: dict, ggufs: list) -> None:
     ch = ask_arrow("Select:", opts, default=len(opts) - 1)
     if 0 <= ch < len(ggufs):
         cfg["gguf_model_path"] = str(ggufs[ch])
-        cfg["translation_model"] = ggufs[ch].stem
-        save_config(cfg)
         success(f"Selected: {ggufs[ch].name}")
         if cfg["translation_backend"] != "llamacpp" and ask_yn("Switch to llama.cpp backend?"):
             use_backend(cfg, "llamacpp")
-            save_config(cfg)
+        # Other backends send translation_model with every request: it must stay theirs
+        if cfg["translation_backend"] == "llamacpp":
+            cfg["translation_model"] = ggufs[ch].stem
+        save_config(cfg)
     pause()
 
 

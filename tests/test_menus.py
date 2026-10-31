@@ -290,6 +290,14 @@ def test_model_manager_select_a_gguf_and_switch_to_llamacpp(tmp_path):
     )
 
 
+def test_selecting_a_gguf_keeps_the_model_of_a_backend_that_stays(tmp_path):
+    gguf = tmp_path / "qwen-7b.gguf"
+    gguf.write_bytes(b"x")
+    cfg = {"translation_backend": "ollama", "translation_model": "qwen2.5:7b"}
+    manage([3, 0, 4], cfg, yns=[False], ggufs=[gguf])
+    assert (cfg["gguf_model_path"], cfg["translation_model"]) == (str(gguf), "qwen2.5:7b")
+
+
 def test_model_manager_without_ggufs_and_browse():
     r = manage([3, 2, -1], {"translation_backend": "llamacpp"})
     r.browsed.assert_called_once()
