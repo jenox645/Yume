@@ -32,10 +32,13 @@ except ImportError:  # never used here: CI installs the server's packages withou
 
 import _api  # noqa: E402
 import _audio  # noqa: E402
+import _download  # noqa: E402
 import _jobs  # noqa: E402
 import _settings  # noqa: E402
 import _state  # noqa: E402
 import _store  # noqa: E402
+import _stream  # noqa: E402
+import _ytdlp  # noqa: E402
 
 SR = 16000
 DURATION_S = 120
@@ -99,11 +102,11 @@ def main():
         patch.object(_jobs, "transcribe_audio", fake_transcribe),
         # Whisper hears Japanese: a job set to another language gets the notice
         patch.object(_jobs, "detect_language", lambda audio: ("ja", 0.99)),
-        patch.object(_audio, "download_full_audio", lambda *a, **k: (wav, None)),
-        patch.object(_audio, "download_audio_segment", lambda *a, **k: None),
-        patch.object(_audio, "get_stream_url", lambda *a, **k: None),
+        patch.object(_download, "download_full_audio", lambda *a, **k: (wav, None)),
+        patch.object(_stream, "download_audio_segment", lambda *a, **k: None),
+        patch.object(_stream, "get_stream_url", lambda *a, **k: None),
         patch.object(_audio, "remove_temp", lambda *a, **k: None),
-        patch.object(_audio, "check_ytdlp", lambda: True),
+        patch.object(_ytdlp, "check_ytdlp", lambda: True),
         patch.object(_settings, "reload_config", lambda: None),  # never the user's config
     ]
     for p in patches:

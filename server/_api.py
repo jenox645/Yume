@@ -16,13 +16,13 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request
 
-import _audio
 import _export
 import _model
 import _separate
 import _settings
 import _state
 import _translate
+import _ytdlp
 from _security import validate_url
 
 # ── Flask app ─────────────────────────────────────────────────────────────────
@@ -141,7 +141,7 @@ def health():
         "status": status,
         "version": _state.SERVER_VERSION,
         "api": 2,  # 2 = job API (/jobs); the old per-chunk API is gone
-        "ytdlp_available": _audio.check_ytdlp(),
+        "ytdlp_available": _ytdlp.check_ytdlp(),
     }
     if _state.load_error:
         base["error"] = _state.load_error

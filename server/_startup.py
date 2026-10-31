@@ -15,13 +15,13 @@ import threading
 import time
 from pathlib import Path
 
-import _audio
 import _bgutil
 import _jobs
 import _settings
 import _state
 import _store
 import _translate
+import _ytdlp
 
 
 def force_utf8_output():
@@ -179,10 +179,10 @@ def print_startup_banner(args):
     def _check_tool_versions():
         results = []
         try:
-            if not _audio.check_ytdlp():
+            if not _ytdlp.check_ytdlp():
                 results.append(("yt-dlp", None, ["  WARNING: yt-dlp not found in PATH!"]))
             else:
-                v = subprocess.run([*_audio.ytdlp_cmd(), "--version"], capture_output=True, text=True, timeout=10)
+                v = subprocess.run([*_ytdlp.ytdlp_cmd(), "--version"], capture_output=True, text=True, timeout=10)
                 version = v.stdout.strip() or "?"
                 results.append(("yt-dlp", maybe_update_ytdlp(version), None))
         except Exception as exc:

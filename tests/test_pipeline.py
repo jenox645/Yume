@@ -21,6 +21,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "server"))
 
 import _audio  # noqa: E402
+import _download  # noqa: E402
 import _export  # noqa: E402
 import _job  # noqa: E402
 import _jobs  # noqa: E402
@@ -30,7 +31,9 @@ import _romanize  # noqa: E402
 import _separate  # noqa: E402
 import _state  # noqa: E402
 import _store  # noqa: E402
+import _stream  # noqa: E402
 import _translate  # noqa: E402
+import _ytdlp  # noqa: E402
 
 SR = 16000
 
@@ -394,9 +397,9 @@ def pipeline(tmp_path):
     translator = _FakeTranslator()
     _state.jobs = _jobs.JobManager(translator)
     with (
-        patch.object(_audio, "download_full_audio", return_value=(str(wav), None)) as dl,
-        patch.object(_audio, "download_audio_segment", return_value=None),
-        patch.object(_audio, "get_stream_url", return_value=None),
+        patch.object(_download, "download_full_audio", return_value=(str(wav), None)) as dl,
+        patch.object(_stream, "download_audio_segment", return_value=None),
+        patch.object(_stream, "get_stream_url", return_value=None),
         patch.object(_audio, "remove_temp"),
     ):
         yield types.SimpleNamespace(jobs=_state.jobs, translator=translator, download=dl)
@@ -564,7 +567,7 @@ def test_stereo_downloads_are_read_for_the_separator(tmp_path):
 
 
 def test_no_stream_preview_of_the_start_for_a_resumed_video(pipeline):
-    with patch.object(_audio, "download_audio_segment", return_value=None) as seg:
+    with patch.object(_stream, "download_audio_segment", return_value=None) as seg:
         job = pipeline.jobs.create({**PARAMS, "video_id": "resumed", "playhead": 60.0})
         assert job.playhead == 60.0  # transcribed first, before the first poll
         _run(pipeline.jobs, job, playhead=60.0)
@@ -636,8 +639,8 @@ def test_library_export_follows_the_plan_and_the_filters(pipeline):
 
 def test_download_failure_reports_error(pipeline):
     with (
-        patch.object(_audio, "download_full_audio", return_value=(None, "Video unavailable")),
-        patch.object(_audio, "get_stream_url", return_value=None),
+        patch.object(_download, "download_full_audio", return_value=(None, "Video unavailable")),
+        patch.object(_stream, "get_stream_url", return_value=None),
     ):
         snap = _run(pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "other"}))
     assert snap["status"] == "error" and "unavailable" in snap["error"]
@@ -645,8 +648,8 @@ def test_download_failure_reports_error(pipeline):
 
 def test_failed_download_streams_each_region_when_the_stream_is_reachable(pipeline):
     with (
-        patch.object(_audio, "download_full_audio", return_value=(None, "HTTP Error 403")),
-        patch.object(_audio, "get_stream_url", return_value="https://rr1.googlevideo.com/a"),
+        patch.object(_download, "download_full_audio", return_value=(None, "HTTP Error 403")),
+        patch.object(_stream, "get_stream_url", return_value="https://rr1.googlevideo.com/a"),
     ):
         job = pipeline.jobs.create({**PARAMS, "video_id": "streamed", "duration": 61})
         deadline = time.time() + 10
@@ -658,7 +661,7 @@ def test_failed_download_streams_each_region_when_the_stream_is_reachable(pipeli
 
 
 def test_a_pasted_stream_url_is_downloaded_directly(pipeline, tmp_path):
-    with patch.object(_audio, "download_direct", return_value=(None, "403")) as direct:
+    with patch.object(_download, "download_direct", return_value=(None, "403")) as direct:
         snap = _run(
             pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "pasted", "stream_url": "https://cdn/x.m3u8"})
         )
@@ -815,11 +818,11 @@ def test_live_stream_is_reported_not_recorded(monkeypatch):
         )
         return types.SimpleNamespace(returncode=1, stderr=err, stdout="")
 
-    monkeypatch.setattr(_audio.subprocess, "run", fake_run)
-    monkeypatch.setattr(_audio, "get_stream_url", lambda url: pytest.fail("fallback must not run"))
+    monkeypatch.setattr(_download.subprocess, "run", fake_run)
+    monkeypatch.setattr(_stream, "get_stream_url", lambda url: pytest.fail("fallback must not run"))
     monkeypatch.setattr(_state, "youtube_auth_method", "none")
-    path, err = _audio.download_full_audio("https://www.youtube.com/watch?v=6PNb0Jv6qbU")
-    assert path is None and err == _audio.LIVE_ERROR
+    path, err = _download.download_full_audio("https://www.youtube.com/watch?v=6PNb0Jv6qbU")
+    assert path is None and err == _download.LIVE_ERROR
     assert len(calls) == 1
 
 
@@ -833,17 +836,17 @@ def test_unreadable_browser_cookies_are_skipped(monkeypatch):
             err = "ERROR: [youtube] x: HTTP Error 403: Forbidden"
         return types.SimpleNamespace(returncode=1, stderr=err, stdout="")
 
-    monkeypatch.setattr(_audio.subprocess, "run", fake_run)
-    monkeypatch.setattr(_audio, "_cookies_failed_at", 0.0)
-    monkeypatch.setattr(_audio, "get_stream_url", lambda url: None)
+    monkeypatch.setattr(_download.subprocess, "run", fake_run)
+    monkeypatch.setattr(_ytdlp, "_cookies_failed_at", 0.0)
+    monkeypatch.setattr(_stream, "get_stream_url", lambda url: None)
     monkeypatch.setattr(_state, "youtube_auth_method", "cookies")
     monkeypatch.setattr(_state, "cookies_browser", "brave")
-    path, err = _audio.download_full_audio("https://www.youtube.com/watch?v=0OIVIkmBdL8")
+    path, err = _download.download_full_audio("https://www.youtube.com/watch?v=0OIVIkmBdL8")
     assert path is None
     with_cookies = [c for c in calls if "--cookies-from-browser" in c]
     assert len(with_cookies) == 1  # was 6: every cookie strategy x 2 format passes
     assert "Brave" in err and "switch to browser cookies" not in err  # they are what failed
-    assert _audio.build_auth_args("https://www.youtube.com/watch?v=x") == []
+    assert _ytdlp.build_auth_args("https://www.youtube.com/watch?v=x") == []
 
 
 def test_download_errors_point_to_the_settings_menu_not_the_config_file():
@@ -855,7 +858,7 @@ def test_download_errors_point_to_the_settings_menu_not_the_config_file():
         "ERROR: [youtube] x: age-restricted",
         "ERROR: deno: not found",
     ):
-        msg = _audio.friendlify_ytdlp_error(raw)
+        msg = _ytdlp.friendlify_ytdlp_error(raw)
         assert msg != raw and "yume_config.json" not in msg, msg
         assert "python pocket_yume.py settings" in msg, msg
 
@@ -868,15 +871,15 @@ def test_a_failed_custom_stream_url_gives_advice_not_raw_output(monkeypatch, tmp
             returncode=1, stdout="", stderr="[generic] x: Downloading\nERROR: [generic] x: HTTP Error 403: Forbidden\n"
         )
 
-    monkeypatch.setattr(_audio.subprocess, "run", fake_run)
-    monkeypatch.setattr(_audio.tempfile, "mkdtemp", lambda prefix: str(tmp_path))
-    path, err = _audio.download_direct("https://cdn.example.com/a.m3u8")
+    monkeypatch.setattr(_download.subprocess, "run", fake_run)
+    monkeypatch.setattr(_download.tempfile, "mkdtemp", lambda prefix: str(tmp_path))
+    path, err = _download.download_direct("https://cdn.example.com/a.m3u8")
     assert path is None
     # was the raw stderr tail ("[generic] x: Downloading ERROR: …"), and the generic 403 advice
     # would say "use the Custom Stream URL option", which is what failed
     assert err.startswith("Could not download the custom stream URL ([generic] x: HTTP Error 403"), err
     assert "Downloading" not in err and "copy a fresh one" in err
-    assert _audio.download_direct("-o x")[1].startswith("Invalid URL")
+    assert _download.download_direct("-o x")[1].startswith("Invalid URL")
 
 
 def test_old_ytdlp_self_updates_once_a_day(tmp_path, monkeypatch):
@@ -983,7 +986,7 @@ def test_a_preview_fetched_after_the_worker_took_region_0_is_not_transcribed(pip
     with pipeline.jobs.lock:
         pipeline.jobs.jobs[job.id] = job
     with (
-        patch.object(_audio, "download_audio_segment", return_value="p.wav"),
+        patch.object(_stream, "download_audio_segment", return_value="p.wav"),
         patch.object(_jobs, "transcribe_audio") as heard,
     ):
         pipeline.jobs._preview(job)
@@ -1010,7 +1013,7 @@ def test_vocals_are_separated_after_the_preview_not_during_it(pipeline):
 def test_videos_filed_as_talk_are_not_separated(pipeline, category, separated):
     job = _job.Job(("v", "ar", "", "m+htdemucs"), {"language": "ar", "url": "https://x/a"})
     with (
-        patch.object(_audio, "stream_category", return_value=category),
+        patch.object(_stream, "stream_category", return_value=category),
         patch.object(_separate, "read_stereo", return_value=None) as read,
     ):
         assert pipeline.jobs._isolate(job, "a.wav") is None
@@ -1021,10 +1024,10 @@ def test_stream_url_keeps_the_category(monkeypatch):
     url = "https://www.youtube.com/watch?v=cat"
     monkeypatch.setattr(_state, "stream_url_cache", {})
     reply = types.SimpleNamespace(returncode=0, stdout="https://s/a\nNews & Politics\n", stderr="")
-    with patch.object(_audio.subprocess, "run", return_value=reply):
-        assert _audio.get_stream_url(url) == "https://s/a"
-    assert _audio.stream_category(url) == "News & Politics"
-    assert _audio.stream_category("https://elsewhere") == ""
+    with patch.object(_stream.subprocess, "run", return_value=reply):
+        assert _stream.get_stream_url(url) == "https://s/a"
+    assert _stream.stream_category(url) == "News & Politics"
+    assert _stream.stream_category("https://elsewhere") == ""
 
 
 def test_stream_preview_retries_without_unreadable_cookies(monkeypatch):
@@ -1038,11 +1041,11 @@ def test_stream_preview_retries_without_unreadable_cookies(monkeypatch):
             )
         return types.SimpleNamespace(returncode=0, stdout="https://cdn.example/audio", stderr="")
 
-    monkeypatch.setattr(_audio.subprocess, "run", fake_run)
-    monkeypatch.setattr(_audio, "_cookies_failed_at", 0.0)
+    monkeypatch.setattr(_stream.subprocess, "run", fake_run)
+    monkeypatch.setattr(_ytdlp, "_cookies_failed_at", 0.0)
     monkeypatch.setattr(_state, "youtube_auth_method", "cookies")
     monkeypatch.setattr(_state, "stream_url_cache", {})
-    assert _audio.get_stream_url("https://www.youtube.com/watch?v=abc") == "https://cdn.example/audio"
+    assert _stream.get_stream_url("https://www.youtube.com/watch?v=abc") == "https://cdn.example/audio"
     assert [("--cookies-from-browser" in c) for c in calls] == [True, False]
 
 
@@ -1216,11 +1219,11 @@ def test_cookie_hint_only_where_cookies_could_help(monkeypatch):
             err = "ERROR: [youtube] x: Video unavailable"
         return types.SimpleNamespace(returncode=1, stderr=err, stdout="")
 
-    monkeypatch.setattr(_audio.subprocess, "run", fake_run)
-    monkeypatch.setattr(_audio, "_cookies_failed_at", 0.0)
-    monkeypatch.setattr(_audio, "get_stream_url", lambda url: None)
+    monkeypatch.setattr(_download.subprocess, "run", fake_run)
+    monkeypatch.setattr(_ytdlp, "_cookies_failed_at", 0.0)
+    monkeypatch.setattr(_stream, "get_stream_url", lambda url: None)
     monkeypatch.setattr(_state, "youtube_auth_method", "cookies")
-    _path, err = _audio.download_full_audio("https://www.youtube.com/watch?v=gone")
+    _path, err = _download.download_full_audio("https://www.youtube.com/watch?v=gone")
     assert "unavailable" in err and "cookies" not in err.lower()
 
 

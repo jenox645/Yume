@@ -57,7 +57,10 @@ python server/faster_whisper_server.py --model tiny --device cpu --compute-type 
 | `server/_romanize.py` | Deterministic romanization; `None` = needs the LLM |
 | `server/_store.py` | SQLite cache |
 | `server/_filter.py` | Hallucination / credits patterns, user blacklist |
-| `server/_audio.py` | yt-dlp/ffmpeg download strategies, stream URLs, WAV loading |
+| `server/_download.py` | Full-audio download: yt-dlp strategies, ffmpeg fallbacks |
+| `server/_stream.py` | Stream URL (cached), single segments from the stream |
+| `server/_ytdlp.py` | yt-dlp command, cookies and auth arguments, friendly errors |
+| `server/_audio.py` | WAV loading, temp cleanup |
 | `extension/js/session.js` | Job creation, polling, cue lookup |
 | `extension/js/content.js` | Page lifecycle, SPA navigation, popup messages |
 | `extension/js/subtitle-window.js` | Shadow-DOM overlay |

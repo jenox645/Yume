@@ -159,7 +159,10 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 | `server/_separate.py` | Optional vocal isolation (Demucs htdemucs, CUDA only); falls back to the mix |
 | `server/_translate.py` | LLM client with structured output |
 | `server/_store.py` | SQLite cache |
-| `server/_audio.py` | yt-dlp/ffmpeg download strategies, WAV loading |
+| `server/_download.py` | Full-audio download: yt-dlp strategies, ffmpeg fallbacks, custom stream URLs |
+| `server/_stream.py` | Stream URL (cached) and single segments cut from the stream |
+| `server/_ytdlp.py` | yt-dlp: command, browser cookies and auth arguments, friendly errors |
+| `server/_audio.py` | WAV loading, temp cleanup |
 | `extension/js/session.js` | Job creation, polling, cue lookup |
 | `extension/js/background.js` | Authenticated server proxy |
 | `extension/js/content.js` | Page lifecycle, SPA navigation, popup messages |
