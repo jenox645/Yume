@@ -184,9 +184,11 @@ def _model_switch(cfg: dict, new_model: str) -> None:
 
     if not _server_get(cfg["whisper_host"], cfg["whisper_port"], "/stats"):
         # Server down: like the menu, remember it for the next start
-        if new_model not in {m[0] for m in WHISPER_MODELS} and not Path(new_model).is_dir():
-            error(f"Unknown model: {new_model}  (see: python pocket_yume.py model list)")
-            return
+        if new_model not in {m[0] for m in WHISPER_MODELS}:
+            if not Path(new_model).is_dir():
+                error(f"Unknown model: {new_model}  (see: python pocket_yume.py model list)")
+                return
+            new_model = str(Path(new_model).resolve())  # the server may start in another folder
         _use_model(cfg, new_model)
         success(f"Config set to {new_model} (applies on next launch)")
         return

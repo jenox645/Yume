@@ -637,3 +637,13 @@ def test_a_typo_in_blacklist_or_model_exits_2(fn, args, capsys):
         getattr(yume.menus, fn)(cfg, args)
     assert e.value.code == 2
     assert "Usage:" in capsys.readouterr().out
+
+
+def test_model_switch_with_the_server_down_saves_a_full_path(tmp_path, monkeypatch):
+    # A relative path only worked when the server started in the same folder
+    (tmp_path / "ft").mkdir()
+    monkeypatch.chdir(tmp_path)
+    cfg = _cfg()
+    with patch.object(wm, "_server_get", return_value=None), patch("config.save_config"):
+        wm.cli_model(cfg, ["switch", "ft"])
+    assert cfg["whisper_model"] == str((tmp_path / "ft").resolve())
