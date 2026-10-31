@@ -1617,6 +1617,15 @@ def test_a_long_line_heard_by_both_regions_at_a_cut_is_shown_once(pipeline):
         assert all(a[1] == b[0] for a, b in zip(shown[1:-1], shown[2:-1])), order
 
 
+def test_library_export_shows_cached_translations_as_a_live_job_does(pipeline):
+    store = _state.store
+    store.put_video("caps", "u", "t", 30.0, [[0.0, 30.0]])
+    store.put_transcript("caps", "ja", "m", 0.0, 30.0, [_raw(1.0, 2.0, "くらさきに")])
+    store.put_translation("ja", "English", "old-model", "くらさきに", "IN THE PROVINCE")  # cached before _unshout
+    srt, n = _export.library_export("caps", "ja", "m", "English")
+    assert n == 1 and "In the province" in srt and "IN THE PROVINCE" not in srt
+
+
 def test_library_export_shows_a_long_line_heard_by_both_regions_once(pipeline):
     store = _state.store
     store.put_video("long", "https://x", "t", 50.0, [[0.0, 20.4], [20.4, 50.0]])

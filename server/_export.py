@@ -3,6 +3,7 @@
 import _romanize
 import _state
 from _lines import clean_region, cut_drop, is_unwanted
+from _translate import _unshout
 
 
 def _ts(sec, sep):
@@ -57,6 +58,7 @@ def library_export(video_key, language, model, target, fmt="srt"):
     raw, hide = _library_lines(store, video_key, language, model)
     # Any translation model: the library outlives model switches
     translations = store.get_translations(language, target, None, [s["text"] for s in raw]) if target else {}
+    translations = {text: _unshout(tr, text) for text, tr in translations.items()}  # cached before that fix
     lang = None if language == "auto" else language
     segments = []
     for s in raw:
