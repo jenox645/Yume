@@ -96,10 +96,12 @@ def _tool_lines(cmd: list[str], timeout: int = 10) -> list[str]:
 
 
 def _windows_listening_pid(port: int) -> int | None:
-    on_port = re.compile(rf":{port}(?:\s|$)")
+    # The state column is translated: a listener is the row with no remote port
     for line in _tool_lines(["netstat", "-ano"]):
         parts = line.split()
-        if on_port.search(line) and "LISTENING" in line and parts[-1].isdigit() and int(parts[-1]):
+        if len(parts) < 5 or parts[0] != "TCP":
+            continue
+        if parts[1].endswith(f":{port}") and parts[2].endswith(":0") and parts[-1].isdigit() and int(parts[-1]):
             return int(parts[-1])
     return None
 

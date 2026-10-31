@@ -46,6 +46,22 @@ def test_windows_listening_socket_and_its_name():
     assert calls[1][:3] == ["tasklist", "/FI", "PID eq 4242"]
 
 
+def test_windows_in_another_language():
+    # netstat translates its state column: on German Windows no row said LISTENING,
+    # so Yume could never free a port from its own stale server
+    german = """
+Aktive Verbindungen
+
+  Proto  Lokale Adresse         Remoteadresse          Status           PID
+  TCP    127.0.0.1:5001         127.0.0.1:61000        HERGESTELLT     7777
+  TCP    127.0.0.1:5001         0.0.0.0:0              ABHOEREN        4242
+  TCP    [::]:5002              [::]:0                 ABHOEREN        5252
+  UDP    0.0.0.0:5001           *:*                                    9999
+"""
+    assert owner({"netstat": german, "tasklist": TASKLIST}, win=True)[0][0] == 4242
+    assert owner({"netstat": german}, win=True, port=5002)[0][0] == 5252
+
+
 def test_windows_name_unknown_when_tasklist_fails():
     (pid, name), _ = owner({"netstat": NETSTAT}, win=True)
     assert (pid, name) == (4242, "unknown")
