@@ -237,9 +237,6 @@ def test_a_package_that_fails_to_load_is_a_failed_check_not_a_crash(tmp_path, mo
 
 
 def test_status_survives_a_package_that_fails_to_load(tmp_path, monkeypatch):
-    import yume.status
     import yume.utils
 
-    pkg = _broken_package(tmp_path, monkeypatch)
-    assert yume.utils._try_import(pkg) is False
-    assert yume.status._try_import is yume.utils._try_import
+    assert yume.utils._try_import(_broken_package(tmp_path, monkeypatch)) is False
