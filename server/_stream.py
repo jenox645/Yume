@@ -73,26 +73,11 @@ def _forget_stream_url(url):
 
 
 def _ask_ytdlp(url, fmt_args, auth_args):
-    return subprocess.run(
-        [
-            *_ytdlp.ytdlp_cmd(),
-            "--print",
-            "urls",
-            "--print",
-            "%(categories.0)s",
-            *fmt_args,
-            "--no-playlist",
-            "--no-exec",
-            *auth_args,
-            "--",
-            url,
-        ],  # fmt: skip
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=30,
-    )
+    cmd = [
+        *_ytdlp.ytdlp_cmd(), "--print", "urls", "--print", "%(categories.0)s", *fmt_args,
+        "--no-playlist", "--no-exec", *auth_args, "--", url,
+    ]  # fmt: skip
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
 
 
 def get_stream_url(url):
@@ -175,24 +160,11 @@ def _segment_from_stream(url, start_time, duration, output_path):
 
 def _ffmpeg_segment(stream_url, start_time, duration, output_path):
     print(f"[Yume] Extracting {duration}s from {start_time}s via ffmpeg...")
-    result = subprocess.run(
-        [
-            "ffmpeg",
-            "-protocol_whitelist",
-            _state.FFMPEG_PROTOCOL_WHITELIST,
-            "-ss",
-            str(start_time),
-            "-i",
-            stream_url,
-            "-t",
-            str(duration),
-            *_WAV_16K_MONO,
-            "-y",
-            output_path,
-        ],  # fmt: skip
-        capture_output=True,
-        timeout=60,
-    )
+    cmd = [
+        "ffmpeg", "-protocol_whitelist", _state.FFMPEG_PROTOCOL_WHITELIST, "-ss", str(start_time),
+        "-i", stream_url, "-t", str(duration), *_WAV_16K_MONO, "-y", output_path,
+    ]  # fmt: skip
+    result = subprocess.run(cmd, capture_output=True, timeout=60)
     if result.returncode == 0 and os.path.exists(output_path):
         size = os.path.getsize(output_path)
         print(f"[Yume] Audio segment downloaded: {size / 1024:.1f} KB")
@@ -244,28 +216,13 @@ def _download_audio_segment_fallback(url, start_time, duration, output_path, _re
         tmp_template = output_path.replace(".wav", ".%(ext)s")
         auth_args = _ytdlp.build_auth_args(url)
 
-        result = subprocess.run(
-            [
-                *_ytdlp.ytdlp_cmd(),
-                "--download-sections",
-                f"*{start_time}-{start_time + duration}",
-                "--force-keyframes-at-cuts",
-                "-x",
-                "--audio-format",
-                "wav",
-                "--postprocessor-args",
-                _state.FFMPEG_AUDIO_OPTS,
-                "--no-playlist",
-                "--no-exec",
-                *auth_args,
-                "-o",
-                tmp_template,
-                "--",
-                url,
-            ],  # fmt: skip
-            capture_output=True,
-            timeout=90,
-        )
+        cmd = [
+            *_ytdlp.ytdlp_cmd(), "--download-sections", f"*{start_time}-{start_time + duration}",
+            "--force-keyframes-at-cuts", "-x", "--audio-format", "wav",
+            "--postprocessor-args", _state.FFMPEG_AUDIO_OPTS, "--no-playlist", "--no-exec", *auth_args,
+            "-o", tmp_template, "--", url,
+        ]  # fmt: skip
+        result = subprocess.run(cmd, capture_output=True, timeout=90)
 
         if result.returncode == 0 and os.path.exists(output_path):
             return output_path

@@ -34,25 +34,11 @@ def _run_tool(cmd, timeout=DOWNLOAD_TIMEOUT_S):
 
 def _ffmpeg_to_wav(src, out_path, rate, channels, timeout=DOWNLOAD_TIMEOUT_S):
     """ffmpeg `src` (a URL) into a WAV; returns (ok, stderr)."""
-    result = _run_tool(
-        [
-            "ffmpeg",
-            "-y",
-            "-protocol_whitelist",
-            _state.FFMPEG_PROTOCOL_WHITELIST,
-            "-i",
-            src,
-            "-vn",
-            "-ar",
-            rate,
-            "-ac",
-            channels,
-            "-f",
-            "wav",
-            out_path,
-        ],  # fmt: skip
-        timeout,
-    )
+    cmd = [
+        "ffmpeg", "-y", "-protocol_whitelist", _state.FFMPEG_PROTOCOL_WHITELIST, "-i", src,
+        "-vn", "-ar", rate, "-ac", channels, "-f", "wav", out_path,
+    ]  # fmt: skip
+    result = _run_tool(cmd, timeout)
     ok = result.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 10000
     return ok, (result.stderr or "")
 

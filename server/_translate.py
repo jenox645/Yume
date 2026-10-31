@@ -43,7 +43,7 @@ _ROMA_EXAMPLES = {
 
 # Kana, CJK ideographs (+ext A, compatibility), half-width katakana
 _CJK_RE = re.compile("[぀-ヿ㐀-鿿豈-﫿ｦ-ﾟ]")
-_CJK_RUN_RE = re.compile("[぀-ヿ㐀-鿿豈-﫿ｦ-ﾟ]+")
+_CJK_RUN_RE = re.compile(_CJK_RE.pattern + "+")
 
 _MARKER_ONLY_RE = re.compile(r"^(?:\[?\d+[\].)]+\s*)+$")
 _MARKER_PREFIX_RE = re.compile(r"^(?:\s*\[?\d+[\].)]+\s*)+")
