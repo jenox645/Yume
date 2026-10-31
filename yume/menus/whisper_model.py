@@ -21,10 +21,12 @@ def _short_name(model: str) -> str:
     return Path(model).name if _is_path(model) else model
 
 
-def _use_model(cfg: dict, model: str) -> None:
+def _use_model(cfg: dict, model: str, name: str = "") -> None:
+    """Point the config at a model. Its friendly name goes with it: the old one described the old model."""
     from config import save_config
 
     cfg["whisper_model"] = model
+    cfg["whisper_model_name"] = name
     save_config(cfg)
 
 
@@ -36,8 +38,8 @@ def _post_switch(cfg: dict, model: str) -> dict:
 # ── Menu ──────────────────────────────────────────────────────────────────────
 
 
-def _ask_custom_model(cfg: dict) -> str | None:
-    """Ask for a CTranslate2 model folder (+ a friendly name); None when cancelled or invalid."""
+def _ask_custom_model() -> tuple[str, str] | None:
+    """Ask for a CTranslate2 model folder and a friendly name; None when cancelled or invalid."""
     print()
     info(f"{C.DIM}Paste the path to a CTranslate2 Whisper model directory.{C.RESET}")
     info(f"{C.DIM}The folder must contain: {', '.join(_CT2_FILES)}{C.RESET}")
@@ -62,8 +64,7 @@ def _ask_custom_model(cfg: dict) -> str | None:
         return None
     print()
     info("Give this model a friendly name (shown in menus and popup).")
-    cfg["whisper_model_name"] = input(f"  {C.CYAN}>{C.RESET} Name [{folder.name}]: ").strip() or folder.name
-    return str(folder)
+    return str(folder), input(f"  {C.CYAN}>{C.RESET} Name [{folder.name}]: ").strip() or folder.name
 
 
 def _download_tag(name: str) -> str:
@@ -105,11 +106,11 @@ def _show_active(cfg: dict, data: dict | None, cur: str) -> None:
         info(f"GPU: {g['gpu_name']} ({g['vram_used_mb']}/{g['vram_total_mb']} MB)")
 
 
-def _apply_model(cfg: dict, new_model: str, cur: str, online: bool) -> None:
+def _apply_model(cfg: dict, new_model: str, name: str, cur: str, online: bool) -> None:
     if new_model == cur:
         info("Already active")
     elif not online:
-        _use_model(cfg, new_model)
+        _use_model(cfg, new_model, name)
         success(f"Config set to {_short_name(new_model)} (applies on next launch)")
     else:
         info(f"Switching to {_short_name(new_model)}...")
@@ -119,7 +120,7 @@ def _apply_model(cfg: dict, new_model: str, cur: str, online: bool) -> None:
             error(f"Failed: {result['error']}")
         else:
             success(f"Switched to {result.get('model', new_model)}")
-            _use_model(cfg, result.get("model", new_model))
+            _use_model(cfg, result.get("model", new_model), name)
 
 
 def _menu_whisper_model(cfg: dict) -> None:
@@ -134,15 +135,9 @@ def _menu_whisper_model(cfg: dict) -> None:
     ch = _pick_whisper_model(cur)
     if ch == -1:
         return
-    if ch == len(WHISPER_MODELS_INFO):
-        new_model = _ask_custom_model(cfg)
-        if new_model is None:
-            pause()
-            return
-    else:
-        new_model = WHISPER_MODELS_INFO[ch][0]
-        cfg["whisper_model_name"] = ""
-    _apply_model(cfg, new_model, cur, bool(data))
+    picked = _ask_custom_model() if ch == len(WHISPER_MODELS_INFO) else (WHISPER_MODELS_INFO[ch][0], "")
+    if picked:
+        _apply_model(cfg, *picked, cur, bool(data))
     pause()
 
 
@@ -190,7 +185,6 @@ def _model_switch(cfg: dict, new_model: str) -> None:
         if new_model not in {m[0] for m in WHISPER_MODELS} and not Path(new_model).is_dir():
             error(f"Unknown model: {new_model}  (see: python pocket_yume.py model list)")
             return
-        cfg["whisper_model_name"] = ""
         _use_model(cfg, new_model)
         success(f"Config set to {new_model} (applies on next launch)")
         return

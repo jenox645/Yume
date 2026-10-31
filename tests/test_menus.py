@@ -530,3 +530,34 @@ def test_stats_and_model_say_how_to_start_a_stopped_server(capsys):
         wm.cli_model(cfg, [])
         out = capsys.readouterr().out
         assert "pocket_yume.py launch" in out and "small" in out
+
+
+def test_model_switch_command_clears_the_old_friendly_name():
+    # The server clears it in the config file; saving the stale cfg wrote it back
+    cfg = {**_cfg(str(Path("D:/models/ft"))), "whisper_model_name": "Fine-tuned"}
+    saved = MagicMock()
+    with (
+        patch.object(wm, "_server_get", return_value={"model": cfg["whisper_model"]}),
+        patch.object(wm, "_server_post", return_value={"status": "ok", "model": "medium"}),
+        patch("config.save_config", saved),
+    ):
+        wm.cli_model(cfg, ["switch", "medium"])
+    saved.assert_called_once()
+    assert cfg["whisper_model"] == "medium" and cfg["whisper_model_name"] == ""
+
+
+def test_a_failed_switch_keeps_the_friendly_name():
+    path = str(Path("D:/models/ft"))
+    cfg = {**_cfg(path), "whisper_model_name": "Fine-tuned"}
+    WhisperMenu(MODELS.index("medium"), stats={"model": path}, switch={"error": "CUDA out of memory"}).go(cfg)
+    assert cfg["whisper_model_name"] == "Fine-tuned"
+
+
+def test_a_failed_switch_to_a_custom_model_does_not_rename_the_active_one(tmp_path):
+    for f in ("model.bin", "config.json", "tokenizer.json", "vocabulary.txt"):
+        (tmp_path / f).write_text("x")
+    cfg = _cfg()
+    WhisperMenu(len(MODELS), stats={"model": "small"}, inputs=[str(tmp_path), "My Whisper"], switch={"error": "x"}).go(
+        cfg
+    )
+    assert cfg["whisper_model"] == "small" and not cfg.get("whisper_model_name")
