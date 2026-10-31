@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 
 from yume.network import server_get as _server_get, server_post as _server_post
 from yume.ui import (
@@ -177,3 +178,4 @@ def cli_blacklist(cfg: dict, args: list) -> None:
         _said(bl.save([]), f"Blacklist cleared{where}")
     else:
         print("  Usage: pocket_yume.py blacklist [list|add <text>|remove <text>|clear]")
+        sys.exit(2)

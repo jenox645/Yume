@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from yume.menus.server import _server_down
@@ -160,6 +161,7 @@ def cli_model(cfg: dict, args: list) -> None:
             info(f"  {name:22s} {vram}{cur_marker}")
     else:
         print("  Usage: pocket_yume.py model [switch <name>|list]")
+        sys.exit(2)
 
 
 def _model_status(cfg: dict) -> None:

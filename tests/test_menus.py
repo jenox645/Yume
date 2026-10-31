@@ -624,3 +624,16 @@ def test_keeping_the_current_device_saves_nothing(answer):
         st._set_whisper({"whisper_model": "small", "whisper_device": "auto", "whisper_compute_type": "auto"})
     saved.assert_not_called()
     said.assert_not_called()
+
+
+@pytest.mark.parametrize("fn, args", [("cli_blacklist", ["lsit"]), ("cli_blacklist", ["add"]), ("cli_model", ["lsit"])])
+def test_a_typo_in_blacklist_or_model_exits_2(fn, args, capsys):
+    cfg = {"whisper_host": "127.0.0.1", "whisper_port": 5999}
+    with (
+        patch.object(bl_menu, "_server_get", return_value=None),
+        patch.object(bl_menu, "_bl_read_offline", return_value=[]),
+        pytest.raises(SystemExit) as e,
+    ):
+        getattr(yume.menus, fn)(cfg, args)
+    assert e.value.code == 2
+    assert "Usage:" in capsys.readouterr().out
