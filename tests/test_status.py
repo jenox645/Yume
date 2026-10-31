@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import yume.health as status  # noqa: E402
+import yume.status as status  # noqa: E402
 import yume.ports as ports  # noqa: E402
 
 NVIDIA = {"has_nvidia": True, "has_amd": False, "vram_mb": 12288, "name": "RTX 3060"}

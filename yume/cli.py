@@ -81,7 +81,7 @@ def _guide(cfg, args):
 
 
 def _status(cfg, args):
-    from yume.health import show_status
+    from yume.status import show_status
 
     show_status(cfg)
 

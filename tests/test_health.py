@@ -164,12 +164,13 @@ def test_a_cpu_only_llama_cpp_python_points_at_the_gpu_engine(monkeypatch):
 
 def test_status_without_a_translation_model_says_where_to_get_one(capsys):
     import yume.benchmark
+    import yume.status
 
     with (
-        patch.object(health, "find_gguf_models", return_value=[]),
+        patch.object(yume.status, "find_gguf_models", return_value=[]),
         patch.object(yume.benchmark, "_is_whisper_model_cached", return_value=True),
     ):
-        health._status_models({"whisper_model": "small", "gguf_model_path": ""})
+        yume.status._status_models({"whisper_model": "small", "gguf_model_path": ""})
     out = capsys.readouterr().out
     assert "no GGUF models found" in out and "Download Translation Model" in out
 
@@ -200,8 +201,9 @@ def test_reports_run_as_commands_do_not_wait_for_enter(monkeypatch):
     not wipe the report."""
     import yume.cli as cli
     import yume.menus.tools as tools
+    import yume.status
 
-    for fn in (health.show_status, health.health_check, health.detect_fonts):
+    for fn in (yume.status.show_status, health.health_check, health.detect_fonts):
         assert "pause" not in fn.__code__.co_names, fn.__name__
     waited = []
     monkeypatch.setattr(cli, "pause", lambda *a: waited.append(1))
