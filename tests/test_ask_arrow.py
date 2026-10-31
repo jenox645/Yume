@@ -114,6 +114,63 @@ def test_no_options():
     assert ui.ask_arrow("Pick", []) == -1
 
 
+def test_a_terminal_without_raw_mode_falls_back_to_numbered_input():
+    termios = types.SimpleNamespace(tcgetattr=MagicMock(side_effect=OSError("not a tty")))
+    with (
+        patch.dict(sys.modules, {"termios": termios, "tty": types.SimpleNamespace(setraw=MagicMock())}),
+        patch.object(ui, "IS_WIN", False),
+        patch.object(ui.sys.stdin, "isatty", return_value=True),
+        patch.object(ui.sys.stdin, "fileno", return_value=0),
+        patch.object(ui.sys, "stdout", MagicMock()),
+        patch.object(ui, "ask_choice", return_value=2) as ac,
+    ):
+        assert ui.ask_arrow("Pick", OPTS, default=1, allow_back=False) == 2
+    ac.assert_called_once_with("Pick", OPTS, 1, False)
+
+
+def choose(replies, **kw):
+    """ask_choice with scripted typed lines (an exception to raise at that prompt)."""
+    replies = iter(replies)
+
+    def typed(prompt):
+        reply = next(replies)
+        if isinstance(reply, BaseException):
+            raise reply
+        return reply
+
+    with patch("builtins.input", typed):
+        return ui.ask_choice("Pick", OPTS, **kw)
+
+
+@pytest.mark.parametrize(
+    ("replies", "kw", "expected"),
+    [
+        ([""], {}, 0),
+        ([""], {"default": 2}, 2),
+        (["2"], {}, 1),
+        ([" 3 "], {}, 2),
+        (["b"], {}, -1),
+        (["B"], {}, -1),
+        (["x", "9", "0", "2"], {}, 1),  # asked again until the answer is valid
+        (["b", "1"], {"allow_back": False}, 0),
+        ([EOFError()], {}, -1),
+        ([KeyboardInterrupt()], {"default": 1, "allow_back": False}, 1),
+    ],
+)
+def test_ask_choice(replies, kw, expected, capsys):
+    assert choose(replies, **kw) == expected
+
+
+def test_ask_choice_marks_the_default_and_shows_descriptions(capsys):
+    prompts = []
+    with patch("builtins.input", lambda prompt: prompts.append(prompt) or ""):
+        ui.ask_choice("Pick", OPTS, default=1, allow_back=False)
+    out = capsys.readouterr().out
+    assert ">" in out.split("2.")[0].splitlines()[-1]  # the marker sits on the default
+    assert "first" in out and "third" in out
+    assert "default=2" in prompts[0] and "b=back" not in prompts[0]
+
+
 def test_the_selected_description_is_shown():
     out = []
     stdout = MagicMock(write=out.append)
