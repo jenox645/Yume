@@ -61,9 +61,10 @@ def _autostart(cfg, args):
 def _setup(cfg, args):
     from yume.setup import setup_wizard
 
+    rerun = bool(cfg.get("first_run_complete"))
     cfg["first_run_complete"] = False
     save_config(cfg)
-    return setup_wizard(cfg)
+    return setup_wizard(cfg, rerun=rerun)
 
 
 def _settings(cfg, args):

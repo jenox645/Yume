@@ -166,7 +166,7 @@ def test_no_engine_offers_llama_cpp_python(said, monkeypatch):
         installed = MagicMock()
         monkeypatch.setattr(yume.installers, "install_llamacpp_python", installed)
         assert llama.go() is False
-        assert installed.called is yes and ("pause" in said) is not yes  # nothing to wait for after an install
+        assert installed.called is yes and "pause" in said  # still not there: say so, not a silent stop
         assert has(said, "llama-cpp-python not installed") and llama.spawned == []
 
 

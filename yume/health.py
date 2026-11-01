@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import datetime
 import re
 import sys
 
@@ -16,6 +17,8 @@ from yume.utils import _try_import, find_gguf_models, find_tool
 
 # ── Health check ──────────────────────────────────────────────────────────────
 # Each check returns one (name, passed, detail) row, a list of rows, or None.
+
+YTDLP_STALE_DAYS = 60
 
 
 def _chk_system():
@@ -38,6 +41,27 @@ def _chk_tool(t):
     r = _run([p, "--version" if t == "yt-dlp" else "-version"], timeout=5)
     ok = r.returncode == 0
     return (f"{t} installed", ok, p if ok else f"found at {p} but fails to run")
+
+
+def _chk_ytdlp_age(cfg):
+    """The yt-dlp downloads go through: an old one gets HTTP 403 on every video
+    (2026.03.17 did in October), and with Deno auth nothing updates it."""
+    from yume.utils import _run
+
+    deno = cfg.get("youtube_auth_method") == "deno"
+    tool = find_tool("yt-dlp")
+    if not deno and not tool:
+        return ("yt-dlp version", True, "skipped: not installed")
+    r = _run([sys.executable, "-m", "yt_dlp", "--version"] if deno else [tool, "--version"], timeout=10)
+    version = r.stdout.strip()
+    try:
+        age = (datetime.date.today() - datetime.date(*map(int, version.split(".")[:3]))).days
+    except ValueError:
+        return ("yt-dlp version", True, version or "unknown")
+    if age <= YTDLP_STALE_DAYS:
+        return ("yt-dlp version", True, version)
+    fix = "pip install -U yt-dlp" if deno else "Tools → yt-dlp"
+    return ("yt-dlp version", False, f"{version} is {age} days old, YouTube may refuse it: {fix}")
 
 
 def _chk_deno(cfg):
@@ -180,6 +204,7 @@ def _check_list(cfg: dict, c: dict, wp: int, tp: int) -> list:
     return [
         (_chk_system,),
         (_chk_tool, "yt-dlp"),
+        (_chk_ytdlp_age, cfg),
         (_chk_tool, "ffmpeg"),
         (_chk_tool, "ffprobe"),
         (_chk_deno, cfg),

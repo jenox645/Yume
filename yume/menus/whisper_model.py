@@ -183,8 +183,10 @@ def _model_switch(cfg: dict, new_model: str) -> None:
     from yume.hardware import WHISPER_MODELS
 
     if not _server_get(cfg["whisper_host"], cfg["whisper_port"], "/stats"):
-        # Server down: like the menu, remember it for the next start
-        if new_model not in {m[0] for m in WHISPER_MODELS}:
+        # Server down: like the menu, remember it for the next start. The names
+        # the server also takes count too: only a typo should be refused.
+        new_model = {"turbo": "large-v3-turbo"}.get(new_model, new_model)
+        if new_model not in {m[0] for m in WHISPER_MODELS} | {"large-v1"}:
             if not Path(new_model).is_dir():
                 error(f"Unknown model: {new_model}  (see: python pocket_yume.py model list)")
                 return

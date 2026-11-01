@@ -196,18 +196,25 @@ def _show_hardware(gpu: dict, rocm: bool, ram: float, disk: float) -> None:
     (success if disk >= 10 else warn)(f"Disk: {disk:.1f} GB free" + ("" if disk >= 10 else " -- need ~8 GB"))
 
 
-def _pick_whisper_model(cfg: dict, gpu: dict) -> None:
+def _pick_whisper_model(cfg: dict, gpu: dict, rerun: bool = False) -> None:
     existing_model = cfg.get("whisper_model", "")
+    rec_model, rec_reason = recommend_whisper_model(gpu)
     if existing_model and (os.path.sep in existing_model or "/" in existing_model):
         info(f"Custom Whisper model preserved: {C.BOLD}{Path(existing_model).name}{C.RESET}")
         info(f"{C.DIM}{existing_model}{C.RESET}")
+    elif rerun and existing_model:
+        info(f"Whisper model kept: {C.BOLD}{existing_model}{C.RESET}")
+        if existing_model != rec_model:
+            info(f"{C.DIM}Recommended here: {rec_reason} Change it in Settings.{C.RESET}")
     else:
-        rec_model, rec_reason = recommend_whisper_model(gpu)
         info(f"Recommendation: {rec_reason}")
         cfg["whisper_model"] = rec_model
 
 
-def _pick_whisper_device(cfg: dict, gpu: dict, rocm: bool) -> None:
+def _pick_whisper_device(cfg: dict, gpu: dict, rocm: bool, rerun: bool = False) -> None:
+    # A saved GPU device stays only while that GPU is still there
+    if rerun and (cfg.get("whisper_device") != "cuda" or gpu["has_nvidia"]):
+        return
     if gpu["has_nvidia"]:
         cfg["whisper_device"] = "cuda"
         cfg["whisper_compute_type"] = whisper_compute_type(gpu["vram_mb"])
@@ -220,8 +227,9 @@ def _pick_whisper_device(cfg: dict, gpu: dict, rocm: bool) -> None:
         cfg["whisper_compute_type"] = "int8"
 
 
-def _scan_hardware(cfg: dict) -> dict:
-    """Step 1: show GPU, RAM and disk; pick the Whisper model, device and precision."""
+def _scan_hardware(cfg: dict, rerun: bool = False) -> dict:
+    """Step 1: show GPU, RAM and disk; pick the Whisper model, device and precision,
+    or keep the ones chosen before when Setup runs again."""
     _step(1, "Detecting Hardware")
     info(f"{C.DIM}Scanning GPU, RAM, and disk to recommend the best settings...{C.RESET}")
     print()
@@ -231,8 +239,8 @@ def _scan_hardware(cfg: dict) -> dict:
     _warn_new_python()
     rocm = bool(gpu.get("has_amd")) and not IS_WIN
     _show_hardware(gpu, rocm, ram, disk)
-    _pick_whisper_model(cfg, gpu)
-    _pick_whisper_device(cfg, gpu, rocm)
+    _pick_whisper_model(cfg, gpu, rerun)
+    _pick_whisper_device(cfg, gpu, rocm, rerun)
     return gpu
 
 
@@ -358,8 +366,11 @@ def _choose_youtube_auth(cfg: dict) -> None:
         cfg["cookies_browser"] = browsers[bc]
         success(f"Using cookies from: {browsers[bc]}")
     elif ch == 1:
-        _install_with_retry("Deno", install_deno, f"Download Deno manually: {C.CYAN}https://deno.land{C.RESET}")
-        cfg["youtube_auth_method"] = "deno"
+        hint = f"Download Deno manually: {C.CYAN}https://deno.land{C.RESET}"
+        if _install_with_retry("Deno", install_deno, hint):
+            cfg["youtube_auth_method"] = "deno"
+        else:  # the server would only switch back to cookies at every start
+            warn(f"Keeping {cfg.get('youtube_auth_method', 'cookies')} for YouTube: change it in Settings.")
 
 
 def _install_missing(missing: list[str], ask_each: bool) -> None:
@@ -491,12 +502,12 @@ def _closing_offers() -> None:
     pause()
 
 
-def setup_wizard(cfg: dict) -> dict:
+def setup_wizard(cfg: dict, rerun: bool = False) -> dict:
     """Scan, check, then (only if something is missing) authenticate, install and pick a model."""
     from config import config_export, save_config
 
     _welcome()
-    gpu = _scan_hardware(cfg)
+    gpu = _scan_hardware(cfg, rerun)
     pause()
     missing, ready = _check_components(cfg, gpu)
 
