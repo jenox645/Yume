@@ -69,7 +69,7 @@ function _fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
 
 // Server paths the extension may call. Anything else is refused, so a content
 // script (running on arbitrary pages) cannot be turned into a generic proxy.
-const _ALLOWED_PATH = /^\/(health|stats|jobs(\/[a-f0-9]{32}(\/(options|export))?)?|library(\/(export|delete))?|blacklist(\/(update|add|remove))?|model\/switch|translation\/(models|health|test)|cache\/clear)$/;
+const _ALLOWED_PATH = /^\/(health|stats|jobs(\/[a-f0-9]{32}(\/(options|export|leave))?)?|library(\/(export|delete))?|blacklist(\/(update|add|remove))?|model\/switch|translation\/(models|health|test)|cache\/clear)$/;
 
 // Call the server: { ok, status, data } — never throws.
 async function serverRequest({ method = 'GET', path, query, body, timeout = 15000 }) {

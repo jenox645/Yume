@@ -76,6 +76,64 @@ def test_other_language_is_a_different_job(pipeline):
     assert pipeline.jobs.create(PARAMS) is a  # same params rejoin the same job
 
 
+def test_a_part_cached_video_shows_its_lines_before_the_download_ends(pipeline):
+    _state.store.put_video("part", "https://x", "t", 95.0, [[0.0, 25.0], [25.0, 50.0]])
+    _state.store.put_transcript("part", "ja", "m", 0.0, 25.0, [_raw(2.0, 5.0, "保存された行です")])
+    release = threading.Event()
+    seen = []
+
+    def slow_download(*_a, **_k):
+        release.wait(5)
+        return None, "stopped by the test"
+
+    with (
+        patch.object(_job, "job_model", return_value="m"),
+        patch.object(_jobs, "job_model", return_value="m"),
+        patch.object(_download, "download_full_audio", slow_download),
+    ):
+        job = pipeline.jobs.create({**PARAMS, "video_id": "part", "language": "ja", "target": ""})
+        deadline = time.time() + 5
+        while time.time() < deadline and not seen:
+            seen = [s["text"] for s in job.snapshot()["segments"]]
+            time.sleep(0.02)
+        release.set()
+    assert seen == ["保存された行です"]
+
+
+def test_a_job_the_viewer_left_gets_no_more_gpu_work(pipeline):
+    job = _job.Job(("v", "ja", "", "m"), {"language": "ja"})
+    job.status, job.mode = "transcribing", "stream"
+    job.regions, job.region_state = [(0.0, 25.0)], ["pending"]
+    with pipeline.jobs.lock:
+        pipeline.jobs.jobs[job.id] = job
+    pipeline.jobs.leave(job)
+    assert pipeline.jobs._pick_region() == (None, None)
+    assert pipeline.jobs.stats()["active"] == 0
+    pipeline.jobs.poll(job)  # came back
+    assert pipeline.jobs._pick_region() == (job, 0)
+
+
+def test_a_video_left_during_its_download_is_not_separated(pipeline):
+    job = _job.Job(("v", "ja", "", "m"), {"language": "ja", "url": "https://x/a"})
+    with pipeline.jobs.lock:
+        pipeline.jobs.jobs[job.id] = job
+        pipeline.jobs.by_key[job.key] = job.id
+
+    def download(*_a, **_k):
+        pipeline.jobs.leave(job)
+        return "a.wav", None
+
+    with (
+        patch.object(_download, "download_full_audio", download),
+        patch.object(pipeline.jobs, "_use_audio") as used,
+        patch.object(_audio, "remove_temp") as removed,
+    ):
+        pipeline.jobs._download(job, {}, {})
+    used.assert_not_called()
+    removed.assert_any_call("a.wav")
+    assert pipeline.jobs.get(job.id) is None and job.key not in pipeline.jobs.by_key
+
+
 def test_blacklist_edit_hides_lines_incrementally(pipeline):
     job = pipeline.jobs.create(PARAMS)
     snap = _run(pipeline.jobs, job)

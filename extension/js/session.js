@@ -113,6 +113,8 @@ class SubtitleSession {
       this.video.removeEventListener('seeked', this._onTime);
     }
     chrome.storage.onChanged.removeListener(this._onStorage);
+    // Not awaited: the server stops working on it, the page does not wait for that
+    if (this.jobId) SubtitleSession.api({ method: 'POST', path: `/jobs/${this.jobId}/leave` });
     this.segments.clear();
     this.cues = [];
     this.current = null;

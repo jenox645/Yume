@@ -64,6 +64,7 @@ class JobManager:
                 with existing.lock:
                     existing.romanize = existing.romanize or bool(params.get("romanize"))
                     existing.last_poll = time.time()
+                    existing.left = False
                 self._notify()
                 return existing
             if existing is not None:
@@ -82,9 +83,17 @@ class JobManager:
     def poll(self, job, playhead=None):
         with job.lock:
             job.last_poll = time.time()
+            job.left = False
             if playhead is not None:
                 job.playhead = seconds(playhead)
         self._notify()
+
+    def leave(self, job):
+        """The viewer moved on. Without this a job counted as watched for ACTIVE_S
+        more, and songs skipped past had Demucs ahead of the one on screen: the
+        third of three new songs waited 50 s."""
+        with job.lock:
+            job.left = True
 
     def set_romanize(self, job, on):
         with job.lock:
@@ -122,7 +131,7 @@ class JobManager:
         with self.lock:
             return {
                 "jobs": len(self.jobs),
-                "active": sum(time.time() - j.last_poll < ACTIVE_S for j in self.jobs.values()),
+                "active": sum(self._watched(j, time.time()) for j in self.jobs.values()),
             }
 
     # ── internals ───────────────────────────────────────────────────────────
@@ -159,6 +168,10 @@ class JobManager:
         with self.lock:
             return self.jobs.get(job.id) is job
 
+    @staticmethod
+    def _watched(job, now):
+        return not job.left and now - job.last_poll < ACTIVE_S
+
     def _by_recent_poll(self):
         with self.lock:
             return sorted(self.jobs.values(), key=lambda j: j.last_poll, reverse=True)
@@ -173,6 +186,7 @@ class JobManager:
             video = store.get_video(job.video_key) or {}
             cached = store.get_transcripts(job.video_key, job.lang_key, job.model)
             if not self._from_cache(job, video, cached):
+                self._show_cached(job, video, cached)
                 self._download(job, video, cached)
         except Exception as e:  # never let a job thread die silently
             self._fail(job, f"{type(e).__name__}: {e}")
@@ -196,6 +210,15 @@ class JobManager:
             job.set_regions(planned, cached)
         return True
 
+    def _show_cached(self, job, video, cached):
+        """Part of the video is cached: its lines need no download. A new target
+        language on a video half watched took 11 s to show lines it already had."""
+        planned = video.get("regions")
+        if planned and cached:
+            with job.lock:
+                job.set_regions(planned, cached)
+            self._notify()
+
     def _download(self, job, video, cached):
         with job.lock:
             job.status = "downloading"
@@ -205,6 +228,9 @@ class JobManager:
             path, err = _download.download_direct(job.stream_url)
         else:
             path, err = _download.download_full_audio(job.url, stereo=job.isolate)
+        if job.left:
+            with self.lock:
+                self._remove_locked(job.id)  # coming back starts over, from what is cached
         if not self._alive(job):
             _audio.remove_temp(path)
         elif path:
@@ -370,7 +396,7 @@ class JobManager:
         now = time.time()
         for job in self._by_recent_poll():
             with job.lock:
-                if job.status != "transcribing" or now - job.last_poll > ACTIVE_S:
+                if job.status != "transcribing" or not self._watched(job, now):
                     continue
                 if job.mode == "full" and job.audio is None:
                     continue
@@ -427,7 +453,7 @@ class JobManager:
         now = time.time()
         for job in self._by_recent_poll():
             with job.lock:
-                if now - job.last_poll > ACTIVE_S or now < job.llm_backoff_until:
+                if not self._watched(job, now) or now < job.llm_backoff_until:
                     continue
                 kind, batch = job.llm_batch()
                 if batch:

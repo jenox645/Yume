@@ -186,10 +186,27 @@ def is_hallucination(text):
     return t_lower in SINGLE_WORD_BLOCKLIST
 
 
+_NO_SPACES_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")  # Japanese, Chinese, Korean
+_SHORT_ITEM = 2  # characters: an item this short must be the whole line
+
+
+def _blacklisted(item, t_lower):
+    """Matched as whole words: inside words, "а" hid 202 of 221 Russian lines.
+    Where spaces do not separate words, inside the line."""
+    item = _plain(item).lower().strip()
+    if not item:
+        return False
+    if len(item) <= _SHORT_ITEM:
+        return item == re.sub(r"^\W+|\W+$", "", t_lower)
+    if _NO_SPACES_RE.search(item):
+        return item in t_lower
+    return re.search(rf"(?<!\w){re.escape(item)}(?!\w)", t_lower) is not None
+
+
 def _on_user_blacklist(t, t_lower):
     """User-reported blacklist (sent from extension popup)."""
     for bl_item in _state.user_blacklist:
-        if bl_item and _plain(bl_item).lower() in t_lower:
+        if _blacklisted(bl_item, t_lower):
             print(f"[Yume] User blacklist match: {bl_item!r} in {t!r}")
             return True
     return False
