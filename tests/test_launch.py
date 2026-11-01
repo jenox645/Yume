@@ -1,4 +1,5 @@
-"""The interactive launcher's flow (yume/launch.py) with servers, ports and prompts faked."""
+"""The interactive launcher's flow (yume/launch.py, resource_check.py, runtime_menu.py) with
+servers, ports and prompts faked."""
 
 from __future__ import annotations
 
@@ -13,6 +14,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import yume.launch as launch  # noqa: E402
+import yume.resource_check as resource_check  # noqa: E402
+import yume.runtime_menu as rt  # noqa: E402
 
 NVIDIA = {"has_nvidia": True, "has_amd": False, "vram_mb": 12288, "name": "RTX 3060"}
 CPU = {"has_nvidia": False, "has_amd": False, "vram_mb": 0, "name": None}
@@ -48,10 +51,10 @@ def resources(cfg, *, gpu=NVIDIA, free_vram=12000, free_ram=16000, choices=(), g
     }
     with ExitStack() as stack:
         for name, fake in fakes.items():
-            stack.enter_context(patch.object(launch, name, fake))
+            stack.enter_context(patch.object(resource_check, name, fake))
         stack.enter_context(patch("builtins.input", lambda *a: ""))
         stack.enter_context(patch.object(Path, "stat", stat))
-        ok = launch._check_resources(cfg)
+        ok = resource_check.check_resources(cfg)
     return ok, panels
 
 
@@ -89,7 +92,7 @@ def test_cpu_only_checks_ram_for_the_gguf(tmp_path):
 def test_retry_checks_again():
     cfg = {"whisper_model": "large-v3", "whisper_compute_type": "float16", "translation_backend": "ollama"}
     frees = iter([2000, 12000])
-    with patch.object(launch, "_get_available_vram_mb", lambda: next(frees)):
+    with patch.object(resource_check, "_get_available_vram_mb", lambda: next(frees)):
         ok, panels = resources(cfg, choices=[1])  # retry; then enough VRAM
     assert ok
 
@@ -129,11 +132,11 @@ class Launch:
             "is_port_free": lambda port, *a: port not in self.busy,
             "ensure_port_free": lambda port, cfg, kind, exclude=None: self.ensure,
             "find_free_port": lambda start, exclude=None: 5002,
-            "_check_resources": lambda cfg: True,
+            "check_resources": lambda cfg: True,
             "_start_llamacpp": self._start("llamacpp"),
             "_start_ollama": self._start("ollama"),
             "_start_whisper": self._start("whisper"),
-            "_runtime_menu": self.runtime,
+            "runtime_menu": self.runtime,
             "ask_yn": MagicMock(side_effect=self.yns),
             "clear": MagicMock(),
             "pause": MagicMock(),
@@ -235,14 +238,14 @@ def runtime(choices, yns=(), procs=None, tmp=None):
             (yume.benchmark, "benchmark_whisper"),
         ]:
             st.enter_context(patch.object(mod, name, lambda cfg, name=name: called.append(name)))
-        st.enter_context(patch.object(launch, "ask_arrow", lambda *a, **k: next(choices)))
-        st.enter_context(patch.object(launch, "ask_yn", lambda *a, **k: next(yns)))
-        st.enter_context(patch.object(launch, "check_server", lambda *a: {"up": True}))
-        st.enter_context(patch.object(launch, "check_translation_server", lambda *a: {"up": False}))
-        st.enter_context(patch.object(launch, "LOGS_DIR", tmp or Path("does-not-exist")))
+        st.enter_context(patch.object(rt, "ask_arrow", lambda *a, **k: next(choices)))
+        st.enter_context(patch.object(rt, "ask_yn", lambda *a, **k: next(yns)))
+        st.enter_context(patch.object(rt, "check_server", lambda *a: {"up": True}))
+        st.enter_context(patch.object(rt, "check_translation_server", lambda *a: {"up": False}))
+        st.enter_context(patch.object(rt, "LOGS_DIR", tmp or Path("does-not-exist")))
         for name in ("clear", "panel", "pause", "section"):
-            st.enter_context(patch.object(launch, name, lambda *a, **k: None))
-        launch._runtime_menu(cfg, procs, "llamacpp")
+            st.enter_context(patch.object(rt, name, lambda *a, **k: None))
+        rt.runtime_menu(cfg, procs, "llamacpp")
     return procs, called
 
 

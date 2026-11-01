@@ -104,56 +104,67 @@ def write_message(stream, msg: dict) -> None:
     stream.flush()
 
 
+def _whisper_up(cfg: dict) -> bool:
+    from yume import servers
+
+    return servers.whisper_up(cfg)
+
+
+def _status(cfg: dict, st: dict) -> dict:
+    managed = st["state"] != "stopped"
+    state = st["state"]
+    if not managed and _whisper_up(cfg):
+        state = "running"  # started from the launcher / CLI
+    return {
+        "ok": True,
+        "state": state,
+        "message": st.get("message", ""),
+        "last_error": st.get("last_error", ""),
+        "managed": managed,
+    }
+
+
+def _start(cfg: dict, st: dict) -> dict:
+    from yume import service
+
+    if st["state"] != "stopped":
+        return {"ok": True, "state": st["state"], "message": st.get("message", ""), "managed": True}
+    if _whisper_up(cfg):
+        return {"ok": True, "state": "running", "managed": False}
+    if not cfg.get("first_run_complete"):
+        return {"ok": False, "error": "Yume is not set up yet — run START_YUME once to finish setup."}
+    pid = service.spawn_detached(["serve"])
+    service.mark_starting(pid)
+    _log.info("started serve (pid %s)", pid)
+    return {"ok": True, "state": "starting", "message": "Starting Yume…", "managed": True}
+
+
+def _stop(cfg: dict, st: dict) -> dict:
+    from yume import service
+
+    if st["state"] == "stopped":
+        if _whisper_up(cfg):
+            return {"ok": False, "error": "Yume was started from the launcher — stop it there."}
+        return {"ok": True, "state": "stopped"}
+    stopped = service.request_stop()
+    return {"ok": stopped, "state": "stopped" if stopped else "stopping"}
+
+
 def handle(msg: dict) -> dict:
     """Answer one request."""
     from config import load_config
     from yume import service
-    from yume.network import check_server
 
     cmd = msg.get("cmd")
     if cmd == "ping":
         return {"ok": True, "protocol": PROTOCOL}
     if cmd not in ("status", "start", "stop"):
         return {"ok": False, "error": f"unknown command: {cmd!r}"}
-
     cfg = load_config()
     st = service.read_state()
-    managed = st["state"] != "stopped"
-
-    def whisper_up() -> bool:
-        return check_server(cfg["whisper_host"], cfg["whisper_port"], "/health")["up"]
-
     if cmd == "status":
-        state = st["state"]
-        if not managed and whisper_up():
-            state = "running"  # started from the launcher / CLI
-        return {
-            "ok": True,
-            "state": state,
-            "message": st.get("message", ""),
-            "last_error": st.get("last_error", ""),
-            "managed": managed,
-        }
-
-    if cmd == "start":
-        if managed:
-            return {"ok": True, "state": st["state"], "message": st.get("message", ""), "managed": True}
-        if whisper_up():
-            return {"ok": True, "state": "running", "managed": False}
-        if not cfg.get("first_run_complete"):
-            return {"ok": False, "error": "Yume is not set up yet — run START_YUME once to finish setup."}
-        pid = service.spawn_detached(["serve"])
-        service.mark_starting(pid)
-        _log.info("started serve (pid %s)", pid)
-        return {"ok": True, "state": "starting", "message": "Starting Yume…", "managed": True}
-
-    # stop
-    if not managed:
-        if whisper_up():
-            return {"ok": False, "error": "Yume was started from the launcher — stop it there."}
-        return {"ok": True, "state": "stopped"}
-    stopped = service.request_stop()
-    return {"ok": stopped, "state": "stopped" if stopped else "stopping"}
+        return _status(cfg, st)
+    return _start(cfg, st) if cmd == "start" else _stop(cfg, st)
 
 
 def main() -> int:

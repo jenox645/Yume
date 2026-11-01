@@ -43,7 +43,7 @@ _ROMA_EXAMPLES = {
 
 # Kana, CJK ideographs (+ext A, compatibility), half-width katakana
 _CJK_RE = re.compile("[぀-ヿ㐀-鿿豈-﫿ｦ-ﾟ]")
-_CJK_RUN_RE = re.compile("[぀-ヿ㐀-鿿豈-﫿ｦ-ﾟ]+")
+_CJK_RUN_RE = re.compile(_CJK_RE.pattern + "+")
 
 _MARKER_ONLY_RE = re.compile(r"^(?:\[?\d+[\].)]+\s*)+$")
 _MARKER_PREFIX_RE = re.compile(r"^(?:\s*\[?\d+[\].)]+\s*)+")
@@ -103,25 +103,35 @@ def _unquote(c):
     an end. An apostrophe that belongs to the words stays: 'Cause, dreamin',
     and so does a quote inside the line: 「君の名は」という映画."""
     for o, e in _QUOTES:
-        marks = sum(c.count(q) for q in {o, e})
-        if marks == 2 and len(c) >= 2 and c[0] == o and c[-1] == e:
-            return _unquote(c[1:-1].strip())
-        if marks == 1 and o != "'" and (c[:1] in (o, e) or c[-1:] in (o, e)):
-            return _unquote(c.strip(o + e).strip())
+        inner = _inside_quotes(c, o, e)
+        if inner is not None:
+            return _unquote(inner.strip())
     return c
+
+
+def _inside_quotes(c, o, e):
+    """c without the quotes (o, e) around it, or None if they are not around it."""
+    marks = sum(c.count(q) for q in {o, e})
+    if marks == 2 and c[0] == o and c[-1] == e:
+        return c[1:-1]
+    if marks == 1 and o != "'" and (c[:1] in (o, e) or c[-1:] in (o, e)):
+        return c.strip(o + e)
+    return None
 
 
 def _unshout(translation, source):
     """Sentence-case an ALL-CAPS translation of a line that was not itself
     written in capitals (models copy the casing of all-caps context lines)."""
     letters = [c for c in translation if c.isalpha() and c.isascii()]
-    if len(letters) < 4 or translation != translation.upper():
+    if len(letters) < 4 or translation != translation.upper() or _in_latin_capitals(source):
         return translation
-    src_letters = [c for c in source if c.isalpha() and c.isascii()]
-    if src_letters and "".join(src_letters).isupper() and len(src_letters) == len([c for c in source if c.isalpha()]):
-        return translation  # a Latin all-caps source line: keep its style
     low = translation.lower()
     return low[:1].upper() + low[1:]
+
+
+def _in_latin_capitals(text):
+    letters = [c for c in text if c.isalpha()]
+    return bool(letters) and all(c.isascii() and c.isupper() for c in letters)
 
 
 # A reading the model copied into its answer (never seen in tests, but cheap)
@@ -164,6 +174,17 @@ def _drop_copied(texts, out):
 
 _JSON_REPLY_RE = re.compile(r'^\s*(?:```\w*\s*)?[{\[]\s*["{\[]')
 _JSON_STRING_RE = re.compile(r'"((?:[^"\\]|\\.)*)"\s*(?=[,\]}]|$)')
+_ESCAPE_RE = re.compile(r"\\(.)", re.DOTALL)
+
+
+def _json_string(s):
+    """A JSON string as a model wrote it: an escape JSON does not have ("it\\'s")
+    stands for the character itself, and a raw newline is allowed."""
+    valid = _ESCAPE_RE.sub(lambda m: m.group(0) if m.group(1) in '"\\/bfnrtu' else m.group(1), s)
+    try:
+        return json.loads(f'"{valid}"', strict=False)
+    except json.JSONDecodeError:  # a \u escape cut short
+        return valid
 
 
 def _json_like_list(raw, key, n):
@@ -176,7 +197,7 @@ def _json_like_list(raw, key, n):
         return parse_json_list(raw, key, n)
     except (ValueError, json.JSONDecodeError):
         pass
-    found = [json.loads(f'"{m}"') for m in _JSON_STRING_RE.findall(raw) if m != key]
+    found = [_json_string(m) for m in _JSON_STRING_RE.findall(raw) if m != key]
     return ([clean_translation(x) or None for x in found[:n]] + [None] * n)[:n]
 
 
@@ -189,8 +210,12 @@ def parse_numbered(raw, n, key="translations"):
         return as_json
     lines = [ln.strip() for ln in raw.splitlines()]
     lines = [ln for ln in lines if ln and not _MARKER_ONLY_RE.match(ln)]
+    return _by_number(lines, n) or _by_position(lines, n)
+
+
+def _by_number(lines, n):
+    """The lines that carry a number in 1..n, in its place; None if none does."""
     out = [None] * n
-    hits = 0
     for ln in lines:
         m = _NUMBERED_RE.match(ln)
         if m:
@@ -198,11 +223,12 @@ def parse_numbered(raw, n, key="translations"):
             val = clean_translation(m.group(2))
             if 0 <= idx < n and val:
                 out[idx] = val
-                hits += 1
-    if hits == 0:
-        for i, ln in enumerate(lines[:n]):
-            out[i] = clean_translation(ln) or None
-    return out
+    return out if any(out) else None
+
+
+def _by_position(lines, n):
+    out = [clean_translation(ln) or None for ln in lines[:n]]
+    return out + [None] * (n - len(out))
 
 
 def parse_json_list(raw, key, n):
@@ -237,6 +263,40 @@ def _item_text(x):
     if isinstance(x, dict):  # {"text": "…"} or {"translation": "…"}
         x = next((v for v in x.values() if isinstance(v, str)), None)
     return clean_translation(str(x)) if x is not None else None
+
+
+def _response_format(mode, key, n):
+    schema = {
+        "type": "object",
+        "properties": {key: {"type": "array", "items": {"type": "string"}, "minItems": n, "maxItems": n}},
+        "required": [key],
+        "additionalProperties": False,
+    }
+    if mode == "json_schema":
+        return {"type": "json_schema", "json_schema": {"name": key, "strict": True, "schema": schema}}
+    return {"type": "json_object", "schema": schema}
+
+
+def _batch_message(texts, readings, context):
+    """What changes per batch (see _translate_lines): the numbered lines and the context before them."""
+    lines = "\n".join(
+        f"{i + 1}. {t} (reading: {r})" if r and r != t else f"{i + 1}. {t}"
+        for i, (t, r) in enumerate(zip(texts, readings))
+    )
+    message = f"Translate these {len(texts)} lines:\n{lines}"
+    if context:
+        ctx = " / ".join(f"{a} -> {b}" for a, b in context[-3:])[:400]
+        message = f"(Previous lines, for context only — do not translate them: {ctx})\n\n{message}"
+    return message
+
+
+def _final_line(tr, retry, leaks):
+    """The better of a batch's line and its single-line retry. Neither clean of
+    CJK: the leak cut out, the rest is still better than no line."""
+    if retry and not (leaks and contains_cjk(retry)):
+        return retry
+    line = tr or retry
+    return strip_cjk(line) if line and leaks else line
 
 
 class Translator:
@@ -316,16 +376,6 @@ class Translator:
         """Return n items (None = missing). Picks the best output format the
         backend accepts and remembers it per endpoint."""
         _, base = self._cfg()
-        schema = {
-            "type": "object",
-            "properties": {key: {"type": "array", "items": {"type": "string"}, "minItems": n, "maxItems": n}},
-            "required": [key],
-            "additionalProperties": False,
-        }
-        formats = {
-            "json_schema": {"type": "json_schema", "json_schema": {"name": key, "strict": True, "schema": schema}},
-            "json_object": {"type": "json_object", "schema": schema},
-        }
         order = ["json_schema", "json_object", "plain"]
         with self._lock:
             known = self._mode.get(base)
@@ -338,23 +388,7 @@ class Translator:
         garbled = False
         for mode in order:
             try:
-                if mode == "plain":
-                    numbered_hint = (
-                        f"\nReply with exactly {n} lines, each starting with its number in brackets: [1] ..."
-                    )
-                    # Not the "Return JSON" line: told both, a small model obeys that one
-                    prompt = system.split("\nReturn JSON", 1)[0] + numbered_hint
-                    raw = self._chat(
-                        [{"role": "system", "content": prompt}, {"role": "user", "content": user}], max_tokens
-                    )
-                    result = parse_numbered(raw, n, key)
-                else:
-                    raw = self._chat(
-                        [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                        max_tokens,
-                        response_format=formats[mode],
-                    )
-                    result = parse_json_list(raw, key, n)
+                result = self._in_format(mode, system, user, key, n, max_tokens)
                 if not garbled:
                     with self._lock:
                         self._mode[base] = mode
@@ -372,6 +406,21 @@ class Translator:
                 last_err = TranslationError(f"unparseable {mode} output: {e}")
                 garbled = True
         raise last_err or TranslationError("translation failed")
+
+    def _in_format(self, mode, system, user, key, n, max_tokens):
+        """One request, its reply parsed: n items."""
+        if mode == "plain":
+            hint = f"\nReply with exactly {n} lines, each starting with its number in brackets: [1] ..."
+            # Not the "Return JSON" line: told both, a small model obeys that one
+            prompt = system.split("\nReturn JSON", 1)[0] + hint
+            raw = self._chat([{"role": "system", "content": prompt}, {"role": "user", "content": user}], max_tokens)
+            return parse_numbered(raw, n, key)
+        raw = self._chat(
+            [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            max_tokens,
+            response_format=_response_format(mode, key, n),
+        )
+        return parse_json_list(raw, key, n)
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -431,16 +480,8 @@ class Translator:
         # everything that changes per batch (context, line count) goes last
         system = self._system_prompt(src_lang, tgt, title)
         system += '\nReturn JSON {"translations": [...]} with one string per numbered input line, in order.'
-        lines = "\n".join(
-            f"{i + 1}. {t} (reading: {r})" if r and r != t else f"{i + 1}. {t}"
-            for i, (t, r) in enumerate(zip(texts, readings))
-        )
-        user = f"Translate these {n} lines:\n{lines}"
-        if context:
-            ctx = " / ".join(f"{a} -> {b}" for a, b in context[-3:])[:400]
-            user = f"(Previous lines, for context only — do not translate them: {ctx})\n\n{user}"
         max_tokens = min(3000, 120 + sum(len(t) for t in texts) * 4 + 40 * n)
-        out = self._structured(system, user, "translations", n, max_tokens)
+        out = self._structured(system, _batch_message(texts, readings, context), "translations", n, max_tokens)
         out = [_READING_RE.sub("", tr).strip() if tr else tr for tr in out]
         # A copied reading is no translation: retried alone, without the reading,
         # and never fed back as context (it snowballed: batch after batch of romaji)
@@ -453,17 +494,15 @@ class Translator:
         leaks = tgt not in CJK_LANGS
         if tr and not (leaks and contains_cjk(tr)):
             return _unshout(tr, text)
+        line = _final_line(tr, self._retried(text, reading, src_lang, tgt), leaks)
+        return _unshout(line, text) if line else ""
+
+    def _retried(self, text, reading, src_lang, tgt):
         try:
             retry = self._single(text, src_lang, tgt)
         except TranslationError:
-            retry = ""
-        if _is_reading(retry, reading, text):
-            retry = ""
-        if retry and not (leaks and contains_cjk(retry)):
-            tr = retry
-        elif tr or retry:
-            tr = strip_cjk(tr or retry) if leaks else (tr or retry)
-        return _unshout(tr, text) if tr else ""
+            return ""
+        return "" if _is_reading(retry, reading, text) else retry
 
     def romanize_batch(self, texts, lang):
         """LLM transliteration (used for Arabic, and for JA/ZH when the

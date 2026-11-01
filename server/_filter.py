@@ -1,6 +1,6 @@
 """Hallucination and credits-line filter for Whisper transcription results.
 
-All detection is stateless except _is_hallucination which reads the mutable
+All detection is stateless except is_hallucination which reads the mutable
 user_blacklist from _state.
 """
 
@@ -172,19 +172,10 @@ def is_hallucination(text):
         return True
     t_lower = _plain(t).lower()
 
-    for pat in _HALLUCINATION_PATTERNS_LOWER:
-        if pat in t_lower:
-            return True
+    if any(pat in t_lower for pat in _HALLUCINATION_PATTERNS_LOWER):
+        return True
 
-    # User-reported blacklist (sent from extension popup)
-    for bl_item in _state.user_blacklist:
-        if bl_item and _plain(bl_item).lower() in t_lower:
-            print(f"[Yume] User blacklist match: {bl_item!r} in {t!r}")
-            return True
-
-    # Repeated word spam: "30k 30k 30k 30k" (6+ words, <=2 unique)
-    words = t.split()
-    if len(words) >= 6 and len({w.lower().strip(".,!?") for w in words}) <= 2:
+    if _on_user_blacklist(t, t_lower) or _is_word_spam(t):
         return True
 
     sub = _repeated_unit(t_lower.replace(" ", ""))
@@ -193,6 +184,21 @@ def is_hallucination(text):
         return True
 
     return t_lower in SINGLE_WORD_BLOCKLIST
+
+
+def _on_user_blacklist(t, t_lower):
+    """User-reported blacklist (sent from extension popup)."""
+    for bl_item in _state.user_blacklist:
+        if bl_item and _plain(bl_item).lower() in t_lower:
+            print(f"[Yume] User blacklist match: {bl_item!r} in {t!r}")
+            return True
+    return False
+
+
+def _is_word_spam(t):
+    """Repeated word spam: "30k 30k 30k 30k" (6+ words, <=2 unique)."""
+    words = t.split()
+    return len(words) >= 6 and len({w.lower().strip(".,!?") for w in words}) <= 2
 
 
 def _repeated_unit(clean):

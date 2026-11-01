@@ -46,6 +46,22 @@ def test_windows_listening_socket_and_its_name():
     assert calls[1][:3] == ["tasklist", "/FI", "PID eq 4242"]
 
 
+def test_windows_in_another_language():
+    # netstat translates its state column: on German Windows no row said LISTENING,
+    # so Yume could never free a port from its own stale server
+    german = """
+Aktive Verbindungen
+
+  Proto  Lokale Adresse         Remoteadresse          Status           PID
+  TCP    127.0.0.1:5001         127.0.0.1:61000        HERGESTELLT     7777
+  TCP    127.0.0.1:5001         0.0.0.0:0              ABHOEREN        4242
+  TCP    [::]:5002              [::]:0                 ABHOEREN        5252
+  UDP    0.0.0.0:5001           *:*                                    9999
+"""
+    assert owner({"netstat": german, "tasklist": TASKLIST}, win=True)[0][0] == 4242
+    assert owner({"netstat": german}, win=True, port=5002)[0][0] == 5252
+
+
 def test_windows_name_unknown_when_tasklist_fails():
     (pid, name), _ = owner({"netstat": NETSTAT}, win=True)
     assert (pid, name) == (4242, "unknown")
@@ -80,7 +96,7 @@ def test_posix_nobody_listening():
 # ── ensure_port_free: the "port in use" prompt ───────────────────────────────
 
 
-def resolve(choice, typed="", free=(), killed=True, found=5002, key="whisper"):
+def resolve(choice, typed="", free=(), killed=True, found=5002, key="whisper", exclude=None):
     """ensure_port_free(5001) with the user picking `choice` (and typing `typed`);
     `free` are the ports that are free. Returns (result, saved config, output)."""
     import config
@@ -105,7 +121,7 @@ def resolve(choice, typed="", free=(), killed=True, found=5002, key="whisper"):
         patch.object(ports, "warn", out.append),
         patch.object(ports, "info", out.append),
     ):
-        return ports.ensure_port_free(5001, cfg, key), saved, out
+        return ports.ensure_port_free(5001, cfg, key, exclude), saved, out
 
 
 def test_a_free_port_is_kept_without_asking():
@@ -134,5 +150,132 @@ def test_a_typed_port_is_checked():
         assert resolve(2, typed=typed)[:2] == (None, [])
 
 
+def test_a_typed_port_cannot_be_the_other_servers():
+    # llama.cpp is not started yet, so its port is free: both servers would share it
+    port, saved, out = resolve(2, typed="5000", free={5000}, exclude={5000})
+    assert (port, saved) == (None, []) and any("5000" in line for line in out)
+
+
+def test_a_typed_whisper_port_reminds_about_the_extension():
+    assert any("extension popup" in line for line in resolve(2, typed="6000", free={6000})[2])
+    assert not any("extension popup" in line for line in resolve(2, typed="6000", free={6000}, key="translation")[2])
+
+
 def test_cancel_changes_nothing():
     assert resolve(3)[:2] == (None, [])
+    assert resolve(-1)[:2] == (None, [])  # Esc
+
+
+def test_macos_explains_airplay_on_port_5000():
+    def notes(port, mac):
+        out = []
+        with (
+            patch.object(ports, "is_port_free", lambda p, *a: False),
+            patch.object(ports, "get_port_process", lambda p: (None, None)),
+            patch.object(ports, "ask_arrow", lambda *a, **k: 3),
+            patch.object(ports, "warn", out.append),
+            patch.object(ports, "info", out.append),
+            patch.object(ports, "IS_MAC", mac),
+        ):
+            ports.ensure_port_free(port, {}, "translation")
+        return out
+
+    assert any("AirPlay" in line for line in notes(5000, True))
+    assert not any("AirPlay" in line for line in notes(5001, True))
+    assert not any("AirPlay" in line for line in notes(5000, False))
+
+
+def test_the_prompt_names_what_it_would_kill():
+    def kill_label(owner):
+        options = []
+        with (
+            patch.object(ports, "is_port_free", lambda p, *a: False),
+            patch.object(ports, "get_port_process", lambda p: owner),
+            patch.object(ports, "ask_arrow", lambda prompt, opts, **k: options.extend(opts) or 3),
+            patch.object(ports, "warn", lambda m: None),
+        ):
+            ports.ensure_port_free(5001, {}, "whisper")
+        return options[1][1]
+
+    assert kill_label((42, "app.exe")) == "Terminate app.exe"
+    assert kill_label((42, None)) == "Terminate PID 42"
+    assert kill_label((None, None)) == "Terminate unknown process"
+
+
+# ── kill_port_process ────────────────────────────────────────────────────────
+
+
+def kill(*, ours=True, yes=True, interactive=True, frees=True, win=True, owner=(4242, "python.exe")):
+    """kill_port_process(5001). Returns (result, commands run, output)."""
+    ran, out = [], []
+    free = iter([False] + [frees] * 3)
+
+    def run(cmd, **kw):
+        ran.append(cmd)
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with (
+        patch.object(yume.utils, "_run", run),
+        patch.object(ports, "IS_WIN", win),
+        patch.object(ports, "is_port_free", lambda p: next(free)),
+        patch.object(ports, "get_port_process", lambda p: owner),
+        patch.object(ports, "is_yume_process", lambda pid, name: ours),
+        patch.object(ports, "ask_yn", lambda *a, **k: yes),
+        patch.object(ports.time, "sleep", lambda s: None),
+        patch.object(ports, "info", out.append),
+        patch.object(ports, "warn", out.append),
+    ):
+        return ports.kill_port_process(5001, interactive=interactive), ran, out
+
+
+def test_yumes_own_server_is_killed_without_asking():
+    ok, ran, out = kill()
+    assert ok is True and ran == [["taskkill", "/F", "/PID", "4242"]]
+    assert any("Killed python.exe (PID 4242)" in line for line in out)
+    assert kill(win=False)[1] == [["kill", "-9", "4242"]]
+
+
+def test_another_program_is_only_killed_after_a_yes():
+    ok, ran, out = kill(ours=False, yes=False)
+    assert ok is False and ran == [] and any("Left it running" in line for line in out)
+    assert kill(ours=False, yes=True)[0] is True
+
+
+def test_another_program_is_left_alone_without_a_person_to_ask():
+    ok, ran, out = kill(ours=False, interactive=False)
+    assert ok is False and ran == [] and any("leaving it alone" in line for line in out)
+
+
+def test_an_unknown_owner_is_never_killed():
+    ok, ran, out = kill(owner=(None, None))
+    assert ok is False and ran == [] and any("could not be identified" in line for line in out)
+
+
+def test_a_port_still_busy_after_the_kill_reports_failure():
+    assert kill(frees=False)[0] is False
+
+
+def test_a_free_port_needs_no_kill():
+    with patch.object(ports, "is_port_free", lambda p: True):
+        assert ports.kill_port_process(5001) is True
+
+
+# ── the Deno PO-token helper ─────────────────────────────────────────────────
+
+
+def bgutil(owner, *, free=False, win=True):
+    ran = []
+    with (
+        patch.object(yume.utils, "_run", lambda cmd, **k: ran.append(cmd)),
+        patch.object(ports, "IS_WIN", win),
+        patch.object(ports, "is_port_free", lambda p: free),
+        patch.object(ports, "get_port_process", lambda p: owner),
+    ):
+        ports.stop_bgutil_server()
+    return ran
+
+
+def test_only_deno_on_the_token_port_is_stopped():
+    assert bgutil((7, "deno.exe")) == [["taskkill", "/F", "/PID", "7"]]
+    assert bgutil((7, "deno"), win=False) == [["kill", "7"]]
+    assert bgutil((7, "other.exe")) == [] and bgutil((None, None)) == [] and bgutil((7, "deno"), free=True) == []

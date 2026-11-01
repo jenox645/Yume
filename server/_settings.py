@@ -102,24 +102,35 @@ def apply_config(args):
     _state.model_name = args.model
     _state.device = args.device
     _state.compute_type = args.compute_type
-
     if args.config and os.path.exists(args.config):
-        cfg = _read_config(args.config)
-        _state.model_name = cfg.get("whisper_model", _state.model_name)
-        _state.model_display_name = cfg.get("whisper_model_name", "")
-        # NOTE: whisper_device / whisper_compute_type are intentionally NOT loaded
-        # from config here.  The CLI resolves "auto" → "cuda"/"cpu" before launching
-        # the server and passes the resolved value via --device / --compute-type.
-        args.port = _port_or(cfg.get("whisper_port", args.port), args.port)
-        _state.youtube_auth_method = cfg.get("youtube_auth_method", _state.youtube_auth_method)
-        _state.cookies_browser = cfg.get("cookies_browser", _state.cookies_browser)
-        load_live_config(cfg)
-        _state.config_file = args.config
-        _state.config_mtime = os.path.getmtime(args.config)
-
-    # Persisted user blacklist — reported hallucinations must survive restarts
+        _apply_config_file(args)
     cfg_dir = Path(args.config).parent if args.config else Path(__file__).resolve().parent.parent / "config"
-    _state.blacklist_file = str(cfg_dir / "blacklist.json")
+    _load_blacklist(str(cfg_dir / "blacklist.json"))
+    _resolve_auto_device()
+    # --low-vram forces int8 regardless of GPU — reduces VRAM by ~30-40%
+    if getattr(args, "low_vram", False):
+        _state.compute_type = "int8"
+        print("  [low-vram]        compute_type overridden to int8")
+
+
+def _apply_config_file(args):
+    cfg = _read_config(args.config)
+    _state.model_name = cfg.get("whisper_model", _state.model_name)
+    _state.model_display_name = cfg.get("whisper_model_name", "")
+    # NOTE: whisper_device / whisper_compute_type are intentionally NOT loaded
+    # from config here.  The CLI resolves "auto" → "cuda"/"cpu" before launching
+    # the server and passes the resolved value via --device / --compute-type.
+    args.port = _port_or(cfg.get("whisper_port", args.port), args.port)
+    _state.youtube_auth_method = cfg.get("youtube_auth_method", _state.youtube_auth_method)
+    _state.cookies_browser = cfg.get("cookies_browser", _state.cookies_browser)
+    load_live_config(cfg)
+    _state.config_file = args.config
+    _state.config_mtime = os.path.getmtime(args.config)
+
+
+def _load_blacklist(path):
+    """The persisted user blacklist: reported hallucinations must survive restarts."""
+    _state.blacklist_file = path
     try:
         with open(_state.blacklist_file, encoding="utf-8") as f:
             items = json.load(f)
@@ -132,7 +143,9 @@ def apply_config(args):
     except Exception as e:
         print(f"[Yume] Blacklist load failed: {e}")
 
-    # Resolve 'auto' device using CTranslate2's own detection. (This used to test
+
+def _resolve_auto_device():
+    # 'auto' goes by CTranslate2's own detection. (This used to test
     # `"cuda" in get_supported_compute_types("cuda")` — a set of compute types like
     # {"float16", "int8"}, which never contains "cuda" — so "auto" always meant CPU.)
     if _state.device == "auto":
@@ -145,11 +158,6 @@ def apply_config(args):
 
     if _state.compute_type == "auto":
         _state.compute_type = "float16" if _state.device == "cuda" else "int8"
-
-    # --low-vram forces int8 regardless of GPU — reduces VRAM by ~30-40%
-    if getattr(args, "low_vram", False):
-        _state.compute_type = "int8"
-        print("  [low-vram]        compute_type overridden to int8")
 
 
 def persist_whisper_model(model):

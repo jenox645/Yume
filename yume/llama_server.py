@@ -23,7 +23,7 @@ import zipfile
 from pathlib import Path
 
 from yume.constants import TOOLS_DIR
-from yume.utils import _run
+from yume.utils import _run, safe_extractall
 
 _log = logging.getLogger("pocket_yume")
 
@@ -50,6 +50,21 @@ def installed_build() -> dict:
         return {}
 
 
+def build_label() -> str:
+    build = installed_build()
+    return f"llama-server {build.get('tag', '')} ({build.get('variant', '?')})"
+
+
+def python_engine_on_gpu() -> bool | None:
+    """Whether llama-cpp-python runs on the GPU; None when it does not load (a broken
+    install raises more than ImportError: RuntimeError when its library will not load)."""
+    try:
+        import llama_cpp.llama_cpp as lib  # type: ignore[import]
+    except Exception:
+        return None
+    return callable(getattr(lib, "ggml_backend_cuda_reg", None))
+
+
 def driver_cuda_version() -> tuple[int, int] | None:
     """Highest CUDA version the NVIDIA driver supports, from nvidia-smi's header
     ("CUDA Version: 12.8", or "CUDA UMD Version: 13.3" on newer drivers)."""
@@ -68,6 +83,40 @@ def _os_arch() -> tuple[str, str]:
     return os_name, arch
 
 
+def _matching(assets: list[dict], pattern: str) -> list[dict]:
+    rx = re.compile(pattern)
+    return [a for a in assets if rx.fullmatch(a["name"])]
+
+
+def _cuda_build(assets: list[dict], plat: str, tail: str, cuda: tuple[int, int]) -> tuple[str, list[dict]] | None:
+    """(variant, [build, its CUDA runtime]) of the newest build the driver supports, or None."""
+    builds = []
+    for a in _matching(assets, rf"llama-b\d+-bin-{plat}-cuda-(\d+)\.(\d+){tail}"):
+        m = re.search(r"cuda-(\d+)\.(\d+)", a["name"])
+        ver = (int(m.group(1)), int(m.group(2)))
+        if ver <= cuda:
+            builds.append((ver, a))
+    if not builds:
+        return None
+    ver, main = max(builds, key=lambda b: b[0])
+    tag = f"{ver[0]}.{ver[1]}"
+    runtime = _matching(assets, rf"cudart-llama-(?:b\d+-)?bin-{plat}-cuda-{re.escape(tag)}{tail}")
+    return (f"cuda-{tag}", [main, runtime[0]]) if runtime else None
+
+
+def _gpu_build(assets: list[dict], gpu: dict, cuda: tuple[int, int] | None, plat: str, tail: str):
+    """(variant, assets) of the build for this GPU, or None."""
+    if gpu.get("has_nvidia") and cuda:
+        build = _cuda_build(assets, plat, tail, cuda)
+        if build:
+            return build
+    if gpu.get("has_nvidia") or gpu.get("has_amd") or gpu.get("has_intel"):
+        found = _matching(assets, rf"llama-b\d+-bin-{plat}-vulkan{tail}")
+        if found:
+            return "vulkan", found[:1]
+    return None
+
+
 def pick_assets(assets: list[dict], gpu: dict, cuda: tuple[int, int] | None) -> tuple[str, list[dict]]:
     """(variant, [assets to download]) for this machine from one release's assets.
 
@@ -75,36 +124,14 @@ def pick_assets(assets: list[dict], gpu: dict, cuda: tuple[int, int] | None) -> 
     driver fails to start) plus its CUDA runtime. AMD and Intel GPUs: Vulkan.
     macOS: the Metal build. Otherwise the CPU build."""
     os_name, arch = _os_arch()
-    by_name = {a["name"]: a for a in assets}
-
-    def find(pattern):
-        rx = re.compile(pattern)
-        return [a for n, a in by_name.items() if rx.fullmatch(n)]
-
-    ext = r"\.zip" if os_name == "win" else r"\.tar\.gz"
+    tail = rf"-{arch}\.zip" if os_name == "win" else rf"-{arch}\.tar\.gz"
     if os_name == "macos":
-        found = find(rf"llama-b\d+-bin-macos-{arch}{ext}")
-        return ("metal" if arch == "arm64" else "cpu"), found[:1]
-
-    if gpu.get("has_nvidia") and cuda:
-        builds = []
-        for a in find(rf"llama-b\d+-bin-{os_name}-cuda-(\d+)\.(\d+)-{arch}{ext}"):
-            m = re.search(r"cuda-(\d+)\.(\d+)", a["name"])
-            ver = (int(m.group(1)), int(m.group(2)))
-            if ver <= cuda:
-                builds.append((ver, a))
-        if builds:
-            ver, main = max(builds, key=lambda b: b[0])
-            tag = f"{ver[0]}.{ver[1]}"
-            runtime = find(rf"cudart-llama-(?:b\d+-)?bin-{os_name}-cuda-{re.escape(tag)}-{arch}{ext}")
-            if runtime:
-                return f"cuda-{tag}", [main, runtime[0]]
-    if gpu.get("has_nvidia") or gpu.get("has_amd") or gpu.get("has_intel"):
-        found = find(rf"llama-b\d+-bin-{os_name}-vulkan-{arch}{ext}")
-        if found:
-            return "vulkan", found[:1]
-    cpu = rf"llama-b\d+-bin-{os_name}-cpu-{arch}{ext}" if os_name == "win" else rf"llama-b\d+-bin-{os_name}-{arch}{ext}"
-    return "cpu", find(cpu)[:1]
+        return ("metal" if arch == "arm64" else "cpu"), _matching(assets, rf"llama-b\d+-bin-macos{tail}")[:1]
+    cpu = "-cpu" if os_name == "win" else ""
+    return _gpu_build(assets, gpu, cuda, os_name, tail) or (
+        "cpu",
+        _matching(assets, rf"llama-b\d+-bin-{os_name}{cpu}{tail}")[:1],
+    )
 
 
 def _releases() -> list[dict]:
@@ -122,10 +149,8 @@ def _extract(archive: Path, dest: Path) -> None:
         return target == root or root in target.parents
 
     if archive.suffix == ".zip":
-        from yume.installers import _safe_extractall
-
         with zipfile.ZipFile(archive) as zf:
-            _safe_extractall(zf, dest)  # nosec B202 — zip-slip checked inside
+            safe_extractall(zf, dest)  # nosec B202 — zip-slip checked inside
     else:
         with tarfile.open(archive, "r:gz") as tf:
             members = [m for m in tf.getmembers() if (m.isfile() or m.isdir() or m.issym()) and inside(m.name)]

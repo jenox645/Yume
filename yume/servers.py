@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from yume.constants import TOOLS_DIR, SERVER_DIR, LOGS_DIR, IS_WIN, HEALTH_PATH_OLLAMA
+from yume.constants import TOOLS_DIR, SERVER_DIR, LOGS_DIR, IS_WIN, HEALTH_PATH_OLLAMA, CREATE_NO_WINDOW
 from yume.hardware import detect_gpu
 from yume.utils import _run, find_gguf_models, find_ollama
 
@@ -48,8 +48,6 @@ LLAMA_SERVER_DEPS = [
     "starlette-context==0.5.1",
     "pydantic-settings==2.13.1",
 ]
-
-_CREATE_NO_WINDOW = 0x08000000
 
 
 # ── Interpreters ──────────────────────────────────────────────────────────────
@@ -301,7 +299,7 @@ class Processes:
             cmd = [console_python(), *cmd[1:]]
         lh = open_rotating_log(log_name)
         self.logs.append(lh)
-        flags = _CREATE_NO_WINDOW if (self.hidden and IS_WIN) else 0
+        flags = CREATE_NO_WINDOW if (self.hidden and IS_WIN) else 0
         # stdin: a child must never read the launcher's menu keys
         p = subprocess.Popen(  # nosec B603 — argv from the builders above
             cmd, stdout=lh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env, creationflags=flags

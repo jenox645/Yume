@@ -135,15 +135,19 @@ function yumeCommand(cmd) {
 // MESSAGES
 // ============================================================================
 
+// Jobs carry the tab title as translation context (song name, artist, topic)
+function _withTabTitle(request, sender) {
+  const req = { ...request };
+  if (req.path === '/jobs' && req.method === 'POST' && sender.tab?.title) {
+    req.body = { ...req.body, title: req.body?.title || sender.tab.title };
+  }
+  return req;
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return false;  // only our own scripts
   if (message.type === 'API') {
-    const req = { ...message.request };
-    // Jobs carry the tab title as translation context (song name, artist, topic)
-    if (req.path === '/jobs' && req.method === 'POST' && sender.tab?.title) {
-      req.body = { ...req.body, title: req.body?.title || sender.tab.title };
-    }
-    serverRequest(req).then(sendResponse);
+    serverRequest(_withTabTitle(message.request, sender)).then(sendResponse);
     return true;
   }
   if (message.type === 'YUME') {

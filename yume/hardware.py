@@ -7,7 +7,7 @@ import platform
 import shutil
 from pathlib import Path
 
-from yume.constants import IS_WIN, IS_MAC, MiB, GiB
+from yume.constants import BASE_DIR, IS_WIN, IS_MAC, MiB, GiB
 
 _log = logging.getLogger("pocket_yume")
 
@@ -95,22 +95,19 @@ def _rocm_vram_mb() -> int:
     return 0
 
 
-def _rocm_smi() -> dict | None:
-    """AMD on Linux; the name is "AMD GPU" when rocm-smi does not give one."""
-    rows = [
-        ln
-        for ln in _probe(["rocm-smi", "--showproductname", "--showmeminfo", "vram", "--csv"]).strip().split("\n")[1:]
-        if ln.strip()
-    ]
-    if not rows:
-        return None
-    fields = [f.strip() for f in rows[0].split(",")]
+def _rocm_name(csv_row: str) -> str:
+    fields = [f.strip() for f in csv_row.split(",")]
     name = fields[-1] if len(fields) > 1 else fields[0]
     if not name or name.startswith(("card", "GPU")):
         name = fields[1] if len(fields) > 1 else ""
-    if not name or name.startswith("card"):
-        name = "AMD GPU"
-    return _amd(name, _rocm_vram_mb())
+    return "AMD GPU" if not name or name.startswith("card") else name
+
+
+def _rocm_smi() -> dict | None:
+    """AMD on Linux; the name is "AMD GPU" when rocm-smi does not give one."""
+    out = _probe(["rocm-smi", "--showproductname", "--showmeminfo", "vram", "--csv"])
+    rows = [ln for ln in out.strip().split("\n")[1:] if ln.strip()]
+    return _amd(_rocm_name(rows[0]), _rocm_vram_mb()) if rows else None
 
 
 def _rocminfo_name() -> str | None:
@@ -200,9 +197,9 @@ def detect_ram_gb() -> float:
             ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(s))
             return s.ullTotalPhys / GiB
         elif IS_MAC:
-            import subprocess as _sp
+            from yume.utils import _run
 
-            r = _sp.run(["sysctl", "hw.memsize"], capture_output=True, text=True, timeout=5)
+            r = _run(["sysctl", "hw.memsize"], timeout=5)
             if r.returncode == 0 and r.stdout.strip():
                 return int(r.stdout.split(":")[1].strip()) / GiB
         else:
@@ -217,12 +214,16 @@ def detect_ram_gb() -> float:
 
 def disk_free_gb(p=None) -> float:
     try:
-        from pathlib import Path as _Path
-
-        base = _Path(__file__).parent.parent
-        return shutil.disk_usage(p or base).free / GiB
+        return shutil.disk_usage(p or BASE_DIR).free / GiB
     except Exception:
         return 0.0
+
+
+def whisper_compute_type(vram_mb: int) -> str:
+    """Whisper precision that fits in the GPU's memory."""
+    if vram_mb >= 8000:
+        return "float16"
+    return "int8_float16" if vram_mb >= 4000 else "int8"
 
 
 def recommend_whisper_model(gpu_info: dict | None = None) -> tuple[str, str]:

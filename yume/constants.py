@@ -28,6 +28,7 @@ IS_MAC = PLAT == "Darwin"
 IS_LIN = PLAT == "Linux"
 ARCH = platform.machine().lower()
 EXE = ".exe" if IS_WIN else ""
+CREATE_NO_WINDOW = 0x08000000  # Windows process creation flag
 
 KiB = 1024
 MiB = 1024**2
@@ -38,6 +39,8 @@ GiB = 1024**3
 HEALTH_PATH_OPENAI = "/v1/models"
 HEALTH_PATH_OLLAMA = "/api/tags"
 CHAT_PATH = "/v1/chat/completions"
+
+DEFAULT_OLLAMA_MODEL = "qwen2.5:7b"
 
 # name, desc, default host (dh) / port (dp), health path (hp), chat path (ap), install hint
 BACKEND_INFO = {

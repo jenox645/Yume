@@ -6,9 +6,15 @@ Submodules:
   network     — Downloads, server health checks, server API calls
   ports       — Port availability, discovery, conflict resolution
   installers  — yt-dlp / FFmpeg / Deno / Ollama / pip-package installers
-  health      — health_check, show_status, detect_fonts
+  llama_python — llama-cpp-python builds per GPU and OS
+  po_token    — YouTube PO-token plugin and server
+  health      — health_check
+  fonts       — detect_fonts
+  status      — show_status
   benchmark   — Whisper model benchmark
   menus       — All interactive CLI menus
-  launch      — Server lifecycle: start, runtime menu, stop
+  launch      — Server lifecycle: start
+  resource_check — Pre-launch RAM/VRAM check
+  runtime_menu — The menu while the servers run, stop
   setup       — First-run wizard, uninstall
 """

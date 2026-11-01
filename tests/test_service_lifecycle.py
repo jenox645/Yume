@@ -246,7 +246,7 @@ class TestDetachedSpawn:
         self._windows(monkeypatch, popen)
         assert service._spawn_detached_cmd(self.CMD) == 4001
         assert popen.calls[0].flags & service._CREATE_BREAKAWAY_FROM_JOB
-        assert popen.calls[0].flags & service._CREATE_NO_WINDOW
+        assert popen.calls[0].flags & service.CREATE_NO_WINDOW
 
     def test_windows_child_still_in_a_job_is_replaced_through_wmi(self, monkeypatch):
         popen = _Popen()

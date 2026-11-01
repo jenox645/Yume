@@ -115,12 +115,12 @@
   function onUrlChange() {
     const url = window.location.href;
     if (url === lastUrl) return;
-    const prevId = lastUrl;
+    const prevUrl = lastUrl;
     lastUrl = url;
     if (!state.active) return;
     // Same YouTube video, other params (&t=, playlists): nothing to do
     const v = (u) => { try { return new URL(u).searchParams.get('v'); } catch (_e) { return null; } };
-    if (v(prevId) && v(prevId) === v(url)) return;
+    if (v(prevUrl) && v(prevUrl) === v(url)) return;
     // Stop now: the old session would otherwise keep drawing the previous
     // video's lines over the new one until the restart below.
     if (state.session) state.session.stop();
@@ -173,12 +173,12 @@
 
   // Settings that change WHAT the server produces need a new job; display-only
   // settings are applied by SubtitleWindow / SubtitleSession themselves.
+  const JOB_SETTINGS = ['sourceLanguage', 'targetLanguage', 'showEnglish', 'whisperUrl'];
   chrome.storage.onChanged.addListener((changes) => {
     if (!changes.settings || !state.active) return;
     const o = changes.settings.oldValue || {};
     const n = changes.settings.newValue || {};
-    if (o.sourceLanguage !== n.sourceLanguage || o.targetLanguage !== n.targetLanguage ||
-        o.showEnglish !== n.showEnglish || o.whisperUrl !== n.whisperUrl) {
+    if (JOB_SETTINGS.some((key) => o[key] !== n[key])) {
       restart('Reloading with new settings...');
     } else if (o.showRomaji !== n.showRomaji && state.session) {
       state.session.setRomanize(n.showRomaji === true);
@@ -187,47 +187,59 @@
 
   // ── popup / background messages ──────────────────────────────────────────
 
+  // Each returns true when it answers later (the message channel stays open)
+  function exportSubtitles(format, sendResponse) {
+    if (!state.session) { sendResponse({ success: false, error: 'No active session' }); return false; }
+    state.session.exportSubtitles(format).then(sendResponse);
+    return true;
+  }
+
+  const messageHandlers = {
+    TOGGLE_SUBTITLES(_message, sendResponse) {
+      if (state.active) {
+        stop();
+        sendResponse({ success: true, active: false });
+        return false;
+      }
+      start().then(() => sendResponse({ success: true, active: state.active }),
+        (e) => sendResponse({ success: false, error: e.message }));
+      return true;
+    },
+    GET_STATUS(_message, sendResponse) {
+      sendResponse({ success: true, active: state.active, hasVideo: !!findVideo() });
+      return false;
+    },
+    GET_DIAGNOSTICS(_message, sendResponse) {
+      if (!state.session) { sendResponse({ success: true, active: false, diagnostics: null }); return false; }
+      state.session.getDiagnostics().then((d) => sendResponse({ success: true, active: state.active, diagnostics: d }));
+      return true;
+    },
+    REFRESH_SUBTITLES(_message, sendResponse) {
+      if (state.session) state.session.refresh();
+      sendResponse({ success: true });
+      return false;
+    },
+    GET_CURRENT_SUBTITLE(_message, sendResponse) {
+      sendResponse({ success: true, subtitle: state.session ? state.session.getCurrentSubtitle() : null });
+      return false;
+    },
+    EXPORT_SRT: (_message, sendResponse) => exportSubtitles('srt', sendResponse),
+    EXPORT_VTT: (_message, sendResponse) => exportSubtitles('vtt', sendResponse),
+    UPDATE_GLASS(message, sendResponse) {
+      if (state.window) {
+        Object.assign(state.window.settings, {
+          glassEnabled: message.glassEnabled, glassBlur: message.glassBlur, glassRadius: message.glassRadius,
+        });
+        state.window.applyCustomStyles();
+      }
+      sendResponse({ success: true });
+      return false;
+    },
+  };
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    switch (message.action) {
-      case 'TOGGLE_SUBTITLES':
-        if (state.active) {
-          stop();
-          sendResponse({ success: true, active: false });
-          return false;
-        }
-        start().then(() => sendResponse({ success: true, active: state.active }),
-          (e) => sendResponse({ success: false, error: e.message }));
-        return true;
-      case 'GET_STATUS':
-        sendResponse({ success: true, active: state.active, hasVideo: !!findVideo() });
-        return false;
-      case 'GET_DIAGNOSTICS':
-        if (!state.session) { sendResponse({ success: true, active: false, diagnostics: null }); return false; }
-        state.session.getDiagnostics().then((d) => sendResponse({ success: true, active: state.active, diagnostics: d }));
-        return true;
-      case 'REFRESH_SUBTITLES':
-        if (state.session) state.session.refresh();
-        sendResponse({ success: true });
-        return false;
-      case 'GET_CURRENT_SUBTITLE':
-        sendResponse({ success: true, subtitle: state.session ? state.session.getCurrentSubtitle() : null });
-        return false;
-      case 'EXPORT_SRT':
-      case 'EXPORT_VTT':
-        if (!state.session) { sendResponse({ success: false, error: 'No active session' }); return false; }
-        state.session.exportSubtitles(message.action === 'EXPORT_VTT' ? 'vtt' : 'srt').then(sendResponse);
-        return true;
-      case 'UPDATE_GLASS':
-        if (state.window) {
-          Object.assign(state.window.settings, {
-            glassEnabled: message.glassEnabled, glassBlur: message.glassBlur, glassRadius: message.glassRadius,
-          });
-          state.window.applyCustomStyles();
-        }
-        sendResponse({ success: true });
-        return false;
-      default:
-        return false;
-    }
+    // hasOwn: the action is a string from a message, not to reach Object.prototype
+    if (!Object.hasOwn(messageHandlers, message.action)) return false;
+    return messageHandlers[message.action](message, sendResponse);
   });
 })();

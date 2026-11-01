@@ -1,4 +1,5 @@
-"""yume/installers.py: which pip commands install_llamacpp_python runs per GPU and OS."""
+"""yume/installers.py + llama_python.py + po_token.py: which pip commands install_llamacpp_python
+runs per GPU and OS, and what the FFmpeg and Deno installers do."""
 
 from __future__ import annotations
 
@@ -14,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import yume.hardware  # noqa: E402
 import yume.installers as inst  # noqa: E402
+import yume.llama_python as llama_python  # noqa: E402
+import yume.po_token as po_token  # noqa: E402
 
 NVIDIA = {"has_nvidia": True, "has_amd": False}
 AMD = {"has_nvidia": False, "has_amd": True}
@@ -46,19 +49,20 @@ def llama(gpu, *, win, fail=(), cuda_in_wheel=True, build_tools=True):
         return types.SimpleNamespace(returncode=1 if step in fail else 0, stdout="", stderr="boom")
 
     with ExitStack() as stack:
-        for name, fake in {
-            "_run": run,
-            "_check_pip": lambda: True,
-            "_has_build_tools": lambda: build_tools,
-            "_install_build_tools": lambda: False,
-            "IS_WIN": win,
-            "IS_LIN": not win,
-            "info": MagicMock(),
-            "warn": MagicMock(),
-            "error": MagicMock(),
-            "success": MagicMock(),
-        }.items():
-            stack.enter_context(patch.object(inst, name, fake))
+        stack.enter_context(patch.object(inst, "_check_pip", lambda: True))
+        stack.enter_context(patch.object(llama_python, "has_build_tools", lambda: build_tools))
+        stack.enter_context(patch.object(llama_python, "_install_build_tools", lambda: False))
+        for mod in (inst, llama_python):
+            for name, fake in {
+                "_run": run,
+                "IS_WIN": win,
+                "IS_LIN": not win,
+                "info": MagicMock(),
+                "warn": MagicMock(),
+                "error": MagicMock(),
+                "success": MagicMock(),
+            }.items():
+                stack.enter_context(patch.object(mod, name, fake))
         stack.enter_context(patch.object(yume.hardware, "detect_gpu", lambda: gpu))
         stack.enter_context(patch.object(inst.sys.stdout, "write", lambda s: None))
         return inst.install_llamacpp_python(), steps
@@ -222,10 +226,15 @@ def deno(tmp_path, *, deno_ok=True, bgutil_ok=True, with_main=True, codes=None, 
     say = lambda msg="", *a, **k: said.append(str(msg))  # noqa: E731
     with ExitStack() as stack:
         for name, fake in {
-            "TOOLS_DIR": tools, "IS_WIN": True, "EXE": ".exe", "_download_verified": verified, "_run": run,
-            "find_tool": lambda t: "C:/deno.exe", **{n: say for n in ("info", "warn", "error", "success")},
+            "IS_WIN": True, "EXE": ".exe", "_download_verified": verified,
         }.items():  # fmt: skip
             stack.enter_context(patch.object(inst, name, fake))
+        for mod in (inst, po_token):
+            for name, fake in {
+                "TOOLS_DIR": tools, "_run": run, **{n: say for n in ("info", "warn", "error", "success")},
+            }.items():  # fmt: skip
+                stack.enter_context(patch.object(mod, name, fake))
+        stack.enter_context(patch.object(po_token, "find_tool", lambda t: "C:/deno.exe"))
         stack.enter_context(patch.object(yume.network, "download_file", download))
         ok = inst.install_deno()
     return ok, tools, ran, said

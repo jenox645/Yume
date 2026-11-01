@@ -22,9 +22,10 @@ from yume.constants import (
     MiB,
     HEALTH_PATH_OLLAMA,
     BACKEND_INFO,
+    DEFAULT_OLLAMA_MODEL,
     use_backend,
 )
-from yume.hardware import detect_gpu, detect_ram_gb, disk_free_gb, recommend_whisper_model
+from yume.hardware import detect_gpu, detect_ram_gb, disk_free_gb, recommend_whisper_model, whisper_compute_type
 from yume.network import check_server
 from yume.ui import C, ask_arrow, ask_yn, center, error, header, info, pause, section, success, warn
 from yume.utils import _run, _try_import, find_gguf_models, find_tool
@@ -140,7 +141,6 @@ def _offer_one_click() -> None:
 def _offer_vocal_isolation() -> None:
     """Offer vocal isolation on NVIDIA machines (optional, ~3.5 GB)."""
     from yume import vocals
-    from yume.hardware import detect_gpu
 
     if not detect_gpu().get("has_nvidia") or vocals.status()[0]:
         return
@@ -161,15 +161,6 @@ _MISSING_LABELS = {
 }
 
 
-def _compute_type(vram_mb: int) -> str:
-    """Whisper precision that fits in the GPU's memory."""
-    if vram_mb >= 8000:
-        return "float16"
-    if vram_mb >= 4000:
-        return "int8_float16"
-    return "int8"
-
-
 def _welcome() -> None:
     import platform
 
@@ -183,22 +174,16 @@ def _welcome() -> None:
     print()
 
 
-def _scan_hardware(cfg: dict) -> dict:
-    """Step 1: show GPU, RAM and disk; pick the Whisper model, device and precision."""
-    _step(1, "Detecting Hardware")
-    info(f"{C.DIM}Scanning GPU, RAM, and disk to recommend the best settings...{C.RESET}")
-    print()
-    gpu = detect_gpu()
-    ram = detect_ram_gb()
-    disk = disk_free_gb()
-
-    pyver = f"{sys.version_info.major}.{sys.version_info.minor}"
+def _warn_new_python() -> None:
     if sys.version_info >= (3, 13):
-        warn(f"Python {pyver} detected — some packages may need to build from source.")
+        warn(
+            f"Python {sys.version_info.major}.{sys.version_info.minor} detected — some packages may need to build from source."
+        )
         info("This requires C++ build tools. If installs fail, use Python 3.11 or 3.12.")
         print()
 
-    rocm = bool(gpu.get("has_amd")) and not IS_WIN
+
+def _show_hardware(gpu: dict, rocm: bool, ram: float, disk: float) -> None:
     if gpu["has_nvidia"]:
         success(f"GPU:  {gpu['name']} ({gpu['vram_mb']} MB)")
     elif rocm:
@@ -210,6 +195,8 @@ def _scan_hardware(cfg: dict) -> dict:
     success(f"RAM:  {ram:.1f} GB")
     (success if disk >= 10 else warn)(f"Disk: {disk:.1f} GB free" + ("" if disk >= 10 else " -- need ~8 GB"))
 
+
+def _pick_whisper_model(cfg: dict, gpu: dict) -> None:
     existing_model = cfg.get("whisper_model", "")
     if existing_model and (os.path.sep in existing_model or "/" in existing_model):
         info(f"Custom Whisper model preserved: {C.BOLD}{Path(existing_model).name}{C.RESET}")
@@ -219,16 +206,33 @@ def _scan_hardware(cfg: dict) -> dict:
         info(f"Recommendation: {rec_reason}")
         cfg["whisper_model"] = rec_model
 
+
+def _pick_whisper_device(cfg: dict, gpu: dict, rocm: bool) -> None:
     if gpu["has_nvidia"]:
         cfg["whisper_device"] = "cuda"
-        cfg["whisper_compute_type"] = _compute_type(gpu["vram_mb"])
+        cfg["whisper_compute_type"] = whisper_compute_type(gpu["vram_mb"])
     elif rocm:
         cfg["whisper_device"] = "auto"
-        cfg["whisper_compute_type"] = _compute_type(gpu.get("vram_mb", 0))
+        cfg["whisper_compute_type"] = whisper_compute_type(gpu.get("vram_mb", 0))
         info(f"AMD GPU detected — ROCm (Linux), compute: {cfg['whisper_compute_type']}")
     else:
         cfg["whisper_device"] = "cpu"
         cfg["whisper_compute_type"] = "int8"
+
+
+def _scan_hardware(cfg: dict) -> dict:
+    """Step 1: show GPU, RAM and disk; pick the Whisper model, device and precision."""
+    _step(1, "Detecting Hardware")
+    info(f"{C.DIM}Scanning GPU, RAM, and disk to recommend the best settings...{C.RESET}")
+    print()
+    gpu = detect_gpu()
+    ram = detect_ram_gb()
+    disk = disk_free_gb()
+    _warn_new_python()
+    rocm = bool(gpu.get("has_amd")) and not IS_WIN
+    _show_hardware(gpu, rocm, ram, disk)
+    _pick_whisper_model(cfg, gpu)
+    _pick_whisper_device(cfg, gpu, rocm)
     return gpu
 
 
@@ -237,22 +241,17 @@ def _translation_engine_ok(gpu: dict) -> bool:
     from yume import llama_server
 
     if llama_server.server_path():
-        build = llama_server.installed_build()
-        success(f"Translation engine: llama-server {build.get('tag', '')} ({build.get('variant', '?')})")
+        success(f"Translation engine: {llama_server.build_label()}")
         return True
     # llama.cpp's prebuilt server is the engine Yume installs. An existing
     # llama-cpp-python is kept only when it already runs on the GPU (or
     # there is no GPU to use): CUDA wheels lag behind new Pythons, and the
     # source build needs the CUDA Toolkit and a C++ compiler.
-    try:
-        import llama_cpp.llama_cpp as _lib  # noqa: F401
-        import uvicorn  # noqa: F401
-        import fastapi  # noqa: F401
-    except ImportError:
+    on_gpu = llama_server.python_engine_on_gpu()
+    if on_gpu is None or not _try_import("uvicorn") or not _try_import("fastapi"):
         warn("Translation engine: missing")
         return False
-    has_gpu_hw = gpu.get("has_nvidia") or gpu.get("has_amd")
-    if not has_gpu_hw or callable(getattr(_lib, "ggml_backend_cuda_reg", None)):
+    if on_gpu or not (gpu.get("has_nvidia") or gpu.get("has_amd")):
         success("Translation engine: llama-cpp-python")
         return True
     warn("Translation engine: llama-cpp-python runs on the CPU only — slow")
@@ -405,7 +404,7 @@ def _use_ollama(cfg: dict) -> None:
     from yume.installers import install_ollama, pull_ollama_model
 
     use_backend(cfg, "ollama")
-    cfg["translation_model"] = "qwen2.5:7b"
+    cfg["translation_model"] = DEFAULT_OLLAMA_MODEL
     if not ask_yn("Install Ollama?"):
         return
     _install_with_retry("Ollama", install_ollama, f"Install manually: {C.CYAN}https://ollama.com{C.RESET}")
