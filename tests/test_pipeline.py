@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import io
 import json
-import shutil
 import sys
 import threading
 import time
@@ -17,16 +16,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "server"))
 
-import _api  # noqa: E402
 import _audio  # noqa: E402
 import _download  # noqa: E402
 import _export  # noqa: E402
-import _filter  # noqa: E402
 import _job  # noqa: E402
 import _jobs  # noqa: E402
 import _romanize  # noqa: E402
 import _separate  # noqa: E402
-import _startup  # noqa: E402
 import _state  # noqa: E402
 import _store  # noqa: E402
 import _stream  # noqa: E402
@@ -125,6 +121,7 @@ def test_enable_again_retries_failed_regions(pipeline):
 
 def test_job_request_validation():
     sys.argv = ["server"]
+    import _api
 
     ok, err = _api._job_params(
         {"url": "https://www.youtube.com/watch?v=abc", "language": "JA", "t": "12.5", "target": "  French "}
@@ -149,6 +146,7 @@ def test_corrupt_cache_database_is_set_aside(tmp_path):
 
 
 def test_whisper_loops_are_cut_and_hidden(pipeline):
+    import _filter
 
     loop = "高い夢を見つけるようなパープをチェックしてみて" + "みて" * 150
     assert _filter.collapse_loops(loop) == "高い夢を見つけるようなパープをチェックしてみて"
@@ -247,6 +245,7 @@ def test_a_failed_custom_stream_url_gives_advice_not_raw_output(monkeypatch, tmp
 
 def test_old_ytdlp_self_updates_once_a_day(tmp_path, monkeypatch):
     sys.argv = ["server"]
+    import _startup
 
     exe = tmp_path / "yt-dlp.exe"
     exe.write_bytes(b"")
@@ -441,6 +440,7 @@ def test_first_translation_batch_is_small_even_when_nothing_is_near_the_playhead
 
 def test_non_ascii_token_header_is_rejected_not_a_crash():
     sys.argv = ["server"]
+    import _api
 
     _state.API_TOKEN = "abc"
     assert _api.token_ok("abc")
@@ -450,6 +450,7 @@ def test_non_ascii_token_header_is_rejected_not_a_crash():
 
 def test_translation_test_reports_any_failure_as_json(monkeypatch):
     """The health check reads its JSON; an unexpected error was an HTML 500."""
+    import _api
 
     def boom(*a, **k):
         raise ValueError("bad JSON from the model")
@@ -475,6 +476,7 @@ def test_model_switch_rejects_bad_requests(monkeypatch, tmp_path):
 
 
 def test_model_switch_swaps_or_keeps_the_old_model(monkeypatch, tmp_path):
+    import _api
 
     monkeypatch.setattr(_state, "model_name", "small")
     monkeypatch.setattr(_state, "model", "old-whisper")
@@ -518,6 +520,7 @@ def test_cookie_hint_only_where_cookies_could_help(monkeypatch):
 def test_audio_that_is_not_16k_mono_is_converted_by_ffmpeg(tmp_path):
     # The stereo downloads for vocal isolation. faster-whisper's decode_audio
     # fails with PyAV 19 (TypeError), so Yume converts with ffmpeg itself.
+    import shutil
     import wave
 
     if not shutil.which("ffmpeg"):
@@ -802,6 +805,7 @@ def test_the_llm_skips_unwatched_and_backed_off_jobs():
     ],
 )
 def test_translation_models_are_asked_of_the_backend(monkeypatch, backend, url, reply, models):
+    import _api
 
     asked = []
 

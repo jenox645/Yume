@@ -9,7 +9,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "server"))
 
-import _filter  # noqa: E402
 import _job  # noqa: E402
 import _jobs  # noqa: E402
 import _lines  # noqa: E402
@@ -29,6 +28,7 @@ def test_job_duration_and_playhead_are_sane(bad):
 
 
 def test_line_that_is_only_a_loop_is_hidden_not_trimmed():
+    import _filter
 
     azumoto = {"start": 0.0, "end": 30.0, "text": "Azumoto-" * 44 + "Azum"}
     real = {"start": 226.0, "end": 255.0, "text": "高い夢を見つけるようなパープをチェックしてみて" + "みて" * 150}
@@ -41,6 +41,7 @@ def test_line_that_is_only_a_loop_is_hidden_not_trimmed():
 
 
 def test_cut_off_copies_of_the_next_line_are_hidden():
+    import _filter
 
     segs = [
         _seg(44.9, 45.4, "Место..."),
@@ -55,6 +56,7 @@ def test_cut_off_copies_of_the_next_line_are_hidden():
 
 
 def test_the_same_line_twice_becomes_one_line():
+    import _filter
 
     out, hide = _filter.clean_raw_segments(
         [
@@ -84,6 +86,7 @@ def test_the_user_is_told_when_the_video_sounds_like_another_language(heard, not
 
 
 def test_a_loop_of_a_long_phrase_is_cut():
+    import _filter
 
     line = "هل تتحدث عن ماذا يمكن أن يتحدث " + "عن ماذا يتحدث " * 30  # 14-char unit: was let through
     out, hide = _filter.clean_raw_segments([_seg(50.0, 77.5, line)])
@@ -91,6 +94,7 @@ def test_a_loop_of_a_long_phrase_is_cut():
 
 
 def test_a_sung_stutter_is_a_lyric_not_a_loop():
+    import _filter
 
     lines = ["あたし大大大大大大嫌い", "カイカイカイカイカイはない", "ダイダイダイダイダイキライ"]  # "ダイダイ…キライ"
     out, hide = _filter.clean_raw_segments([_seg(i * 2.0, i * 2.0 + 2.0, t) for i, t in enumerate(lines)])
@@ -104,6 +108,7 @@ def test_thanks_for_watching_in_chinese_is_hidden():
 
 
 def test_a_line_too_long_to_read_is_cut_into_timed_pieces():
+    import _filter
 
     pieces = _filter.split_long(_seg(101.75, 123.2, RAP))  # one Whisper line: 384 characters for 21 s
     assert len(pieces) == 5
@@ -126,6 +131,7 @@ def test_a_line_too_long_to_read_is_cut_into_timed_pieces():
 
 
 def test_a_short_or_quick_line_is_not_cut():
+    import _filter
 
     assert len(_filter.split_long(_seg(0.0, 9.2, "Пусть отболит за ночь, пока ты там совсем не ждёшь, я войду"))) == 1
     assert len(_filter.split_long(_seg(0.0, 3.0, RAP))) == 1  # 3 s: no piece would be readable

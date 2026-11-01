@@ -13,7 +13,6 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "server"))
 
-import _api  # noqa: E402
 import _audio  # noqa: E402
 import _download  # noqa: E402
 import _job  # noqa: E402
@@ -142,6 +141,7 @@ class _FlakyModel(_FakeModel):
 def _switch(body):
     """POST /model/switch → (status code, json), past the token check. Works
     with real Flask and with the stub server_stubs installs."""
+    import _api
 
     request = types.SimpleNamespace(get_json=lambda silent=False: body)
     with patch.object(_api, "request", request), patch.object(_api, "jsonify", lambda d: d):
