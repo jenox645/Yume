@@ -24,6 +24,7 @@ import _jobs  # noqa: E402
 import _romanize  # noqa: E402
 import _separate  # noqa: E402
 import _state  # noqa: E402
+import _translate  # noqa: E402
 import _store  # noqa: E402
 import _stream  # noqa: E402
 import _ytdlp  # noqa: E402
