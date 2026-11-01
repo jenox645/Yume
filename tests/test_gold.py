@@ -1,4 +1,6 @@
-"""The gold set's scoring: a wrong count here would decide a model change."""
+"""The gold set's scoring: a wrong count here would decide a model change.
+
+CI installs neither fugashi nor rapidfuzz: the gold set runs on a PC with a GPU."""
 
 import sys
 from pathlib import Path
@@ -20,18 +22,23 @@ import gold
     ],
 )
 def test_spelling_is_not_an_error(lang, a, b):
+    if lang == "ja":
+        pytest.importorskip("fugashi")
     assert gold.tokens(a, lang) == gold.tokens(b, lang)
 
 
 def test_sound_marks_in_a_reference_are_not_words():
+    pytest.importorskip("fugashi")
     assert gold.tokens("[音楽] (拍手) >> はい", "ja") == gold.tokens("はい", "ja")
 
 
 def test_errors_count_each_kind():
+    pytest.importorskip("rapidfuzz")
     assert gold.errors(list("abcd"), list("axd")) == {"n": 4, "sub": 1, "del": 1, "ins": 0, "runs": 0}
 
 
 def test_a_long_invented_passage_is_one_run():
+    pytest.importorskip("rapidfuzz")
     out = gold.errors(list("abcd"), list("ab") + list("x" * 12) + list("cd"))
     assert out["ins"] == 12 and out["runs"] == 1
 
