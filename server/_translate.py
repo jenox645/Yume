@@ -290,6 +290,12 @@ def _batch_message(texts, readings, context):
     return message
 
 
+def is_junk_reply(tr, text):
+    """Pieces of the JSON format taken for a translation: "{", ":", "%s" for a whole
+    sentence. A short line may well become one word, but not no word."""
+    return len(text) >= 8 and sum(ch.isalnum() for ch in tr) < 2
+
+
 def _final_line(tr, retry, leaks):
     """The better of a batch's line and its single-line retry. Neither clean of
     CJK: the leak cut out, the rest is still better than no line."""
@@ -480,7 +486,9 @@ class Translator:
         # everything that changes per batch (context, line count) goes last
         system = self._system_prompt(src_lang, tgt, title)
         system += '\nReturn JSON {"translations": [...]} with one string per numbered input line, in order.'
-        max_tokens = min(3000, 120 + sum(len(t) for t in texts) * 4 + 40 * n)
+        # What a translation can need, not more: a model stuck repeating itself ran to
+        # 2500 tokens, over 60 s with the one worker every other line waits for
+        max_tokens = 60 + int(sum(len(t) for t in texts) * 1.5) + 15 * n
         out = self._structured(system, _batch_message(texts, readings, context), "translations", n, max_tokens)
         out = [_READING_RE.sub("", tr).strip() if tr else tr for tr in out]
         # A copied reading is no translation: retried alone, without the reading,
@@ -492,6 +500,8 @@ class Translator:
         """One single-line retry for anything missing or leaking CJK into a
         non-CJK target (a 7B model writes "smile in拉斯媒体" for katakana names)."""
         leaks = tgt not in CJK_LANGS
+        if tr and is_junk_reply(tr, text):
+            tr = ""
         if tr and not (leaks and contains_cjk(tr)):
             return _unshout(tr, text)
         line = _final_line(tr, self._retried(text, reading, src_lang, tgt), leaks)

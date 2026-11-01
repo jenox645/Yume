@@ -34,7 +34,7 @@ SR = _regions.SAMPLE_RATE
 ACTIVE_S = 30  # a job polled within this window is being watched
 IDLE_DROP_S = 1800  # jobs idle this long are dropped (cache keeps the work)
 MAX_JOBS = 4  # audio is held in memory (~4 MB/min); bound how many tracks
-PREVIEW_FIRST_S = 10  # vocal separation waits this long for a stream preview in flight
+PREVIEW_FIRST_S = 15  # vocal separation waits this long for a stream preview in flight
 MAX_TRANSLATE_TRIES = 3
 READING_LANGS = {"ja", "zh", "ko"}  # romanization sent with each line to translate
 
@@ -241,23 +241,25 @@ class JobManager:
             self._fail(job, err or "Audio download failed")
 
     def _start_preview(self, job, cached):
-        # For a video watched from the start, not one resumed at 40:00
-        no_preview = job.playhead >= _regions.FIRST_REGION_S or any(r[0] == 0.0 for r in cached)
+        no_preview = any(r[0] <= job.playhead < r[1] for r in cached)  # its lines are showing already
         if job.stream_url or (no_preview and not job.isolate):
             return
         with job.lock:
-            job.preview_started = time.time()
-        target = self._learn_category if no_preview else self._preview
-        threading.Thread(target=target, args=(job,), name=f"preview-{job.id[:6]}", daemon=True).start()
+            job.preview_started = 0.0 if no_preview else time.time()
+            job.category_wanted = job.isolate
+        if job.isolate:  # _isolate needs the video's category, which comes with the stream URL
+            threading.Thread(
+                target=self._learn_category, args=(job,), name=f"preview-{job.id[:6]}c", daemon=True
+            ).start()
+        if not no_preview:
+            threading.Thread(target=self._preview, args=(job,), name=f"preview-{job.id[:6]}", daemon=True).start()
 
     def _learn_category(self, job):
-        """_isolate needs the video's category, which comes with the stream URL.
-        Yume starting takes ~35 s, so a news video opened cold has no preview to ask it."""
         try:
             _stream.get_stream_url(job.url)
         finally:
             with job.lock:
-                job.preview_started = 0.0
+                job.category_wanted = False
             self._notify()
 
     def _stream_regions(self, job, err, cached):
@@ -330,7 +332,7 @@ class JobManager:
         """Whisper and Demucs slow each other down on one GPU: the preview's 30 s
         took 31.6 s instead of 1-4 s, for a viewer with nothing on screen yet."""
         deadline = time.time() + PREVIEW_FIRST_S
-        while job.preview_started and time.time() < deadline and self._alive(job):
+        while (job.preview_started or job.category_wanted) and time.time() < deadline and self._alive(job):
             time.sleep(0.1)
 
     def _preview(self, job):
@@ -338,17 +340,20 @@ class JobManager:
         download runs: first subtitles in ~max(download, whisper) instead of
         download + whisper."""
         path = None
+        # At the playhead: a video resumed at 40:00 needs what comes after 40:00
+        start = 0.0 if job.playhead < _regions.FIRST_REGION_S else round(job.playhead, 1)
         try:
-            path = _stream.download_audio_segment(job.url, 0, _regions.FIRST_REGION_S)
+            path = _stream.download_audio_segment(job.url, start, _regions.FIRST_REGION_S)
             with job.lock:
-                # After a 403 the fetch can outlast the full download: the worker took region 0
-                hear = path and self._alive(job) and (not job.region_state or job.region_state[0] == "pending")
+                # The read can outlast the full download: the worker has the region then
+                pending = not job.region_state or (start == 0.0 and job.region_state[0] == "pending")
+                hear = path and self._alive(job) and pending
                 if hear:
                     job.preview_hearing = time.time()
             if hear:
-                self._preview_heard(
-                    job, transcribe_audio(_audio.load_audio(path), job.language, 0.0, is_first_region=True)
-                )
+                first = start == 0.0
+                raw = transcribe_audio(_audio.load_audio(path), job.language, start, is_first_region=first)
+                self._preview_heard(job, raw, start)
         except Exception as e:
             print(f"[Yume] Stream preview failed: {e}")
         finally:
@@ -357,18 +362,19 @@ class JobManager:
                 job.preview_started = job.preview_hearing = 0.0
             self._notify()
 
-    def _preview_heard(self, job, raw):
+    def _preview_heard(self, job, raw, start=0.0):
         with job.lock:
             if job.status == "error":  # the download failed meanwhile (a live stream)
                 return
-            job.preview_segments = raw
+            # Only the start can become region 0; a preview at the playhead just shows
+            job.preview_segments = raw if start == 0.0 else None
             if job.regions and job.status not in ("downloading", "separating"):
                 self._adopt_preview(job)
             elif not job.regions:
                 # preview_segments kept: cached and adopted under the plan,
                 # whose region 0 may end before 30 s
-                job.show_preview(raw)
-                job.event(f"First 30 s ready from the stream ({len(raw)} lines) — full download continues", "ok")
+                job.show_preview(raw, start)
+                job.event(f"30 s ready from the stream ({len(raw)} lines) — full download continues", "ok")
 
     def _adopt_preview(self, job):
         """Use the preview as region 0 if it covers the plan's region 0 (which
@@ -485,15 +491,23 @@ class JobManager:
         return self.translator.translate_batch(texts, job.language, job.target, title, context, readings)
 
     @staticmethod
+    def _llm_outage(e):
+        """Seconds to wait when the translator is away, not wrong: None otherwise."""
+        if not isinstance(e, TranslationError):
+            return None
+        if "unreachable" in str(e):
+            return 30
+        return 5 if "HTTP 503" in str(e) else None  # llama.cpp restarting, its model not in yet
+
+    @staticmethod
     def _llm_failed(job, kind, batch, e):
-        unreachable = isinstance(e, TranslationError) and "unreachable" in str(e)
-        loading = isinstance(e, TranslationError) and "HTTP 503" in str(e)  # llama.cpp restarting, its model not in yet
+        outage = JobManager._llm_outage(e)
         with job.lock:
             # Server down: wait for it, don't burn the lines' retries
-            job.llm_backoff_until = time.time() + (30 if unreachable else 5 if loading else 10)
+            job.llm_backoff_until = time.time() + (outage or 10)
             what = "Translation server error" if isinstance(e, TranslationError) else "Translation failed"
             job.event(f"{what}: {e}", "error")
-            for s in batch if not (unreachable or loading) else ():
+            for s in batch if not outage else ():
                 s["tries"] += 1
                 if s["tries"] >= MAX_TRANSLATE_TRIES:
                     # Give up on this line: show the original only

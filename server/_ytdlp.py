@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import time
+from pathlib import Path
 from urllib.parse import urlparse
 
 import _state
@@ -60,7 +61,14 @@ def ytdlp_cmd():
     """
     if _state.youtube_auth_method == "deno":
         return [sys.executable, "-m", "yt_dlp"]
-    return ["yt-dlp"]
+    return [bundled_ytdlp() or "yt-dlp"]
+
+
+def bundled_ytdlp():
+    """Yume's own yt-dlp, by full path, or None. By name, PATH can answer with
+    another copy: a 7-month-old one on this very machine got 403 on every video."""
+    exe = TOOLS_DIR / ("yt-dlp.exe" if sys.platform == "win32" else "yt-dlp")
+    return str(exe) if exe.exists() else None
 
 
 def check_ytdlp():
@@ -168,6 +176,7 @@ NOT_INSTALLED = "yt-dlp is not installed. Run the Yume setup wizard to install i
 
 # (conditions, message): the first rule whose every condition matches wins.
 # A condition is a tuple of phrases, any of which may appear in the error.
+TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools"
 _YTDLP_PREFIX = re.compile(r"^ERROR:\s*(\[[\w:]+\]\s*[\w-]*:\s*)?")  # "ERROR: [youtube] aBcDeFgHiJk: "
 _YTDLP_ERRORS = [
     (

@@ -344,3 +344,28 @@ def test_plain_mode_does_not_ask_for_json():
     with patch.object(tr, "_chat", side_effect=chat):
         tr.translate_batch(["あ"], "ja", "English")
     assert "Return JSON" not in prompts[0] and "[1]" in prompts[0]
+
+
+@pytest.mark.parametrize("reply", ["{", "}'}", ":", "[", "%s", "  "])
+def test_pieces_of_the_format_are_no_translation(reply):
+    assert _translate.is_junk_reply(reply, "Сначала маршрут разминирует.")
+
+
+@pytest.mark.parametrize(
+    ("reply", "text"), [("Yes", "Да, конечно."), ("1930", "Тысяча девятьсот тридцатый"), ("好", "はい"), (":", "ね")]
+)
+def test_a_short_answer_can_be_a_real_one(reply, text):
+    assert not _translate.is_junk_reply(reply, text)
+
+
+def test_a_batch_cannot_generate_far_past_what_it_needs():
+    asked = []
+
+    class T(_translate.Translator):
+        def _structured(self, system, message, key, n, max_tokens, *a, **k):
+            asked.append(max_tokens)
+            return ["ok"] * n
+
+    t = T(lambda: {"host": "h", "port": 1, "backend": "llamacpp", "model": "", "prompt": "", "roma_prompt": ""})
+    t.translate_batch(["Сначала маршрут разминирует." * 2] * 10, "ru", "English")
+    assert asked[0] < 1100  # it was 2800: the batches that ran away reached 2500 tokens

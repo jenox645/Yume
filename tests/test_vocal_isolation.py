@@ -95,14 +95,16 @@ def test_stereo_downloads_are_read_for_the_separator(tmp_path):
     assert _separate.read_stereo(str(tmp_path / "missing.wav")) is None
 
 
-def test_no_stream_preview_of_the_start_for_a_resumed_video(pipeline):
+def test_the_stream_preview_is_of_where_the_viewer_is(pipeline):
     with patch.object(_stream, "download_audio_segment", return_value=None) as seg:
         job = pipeline.jobs.create({**PARAMS, "video_id": "resumed", "playhead": 60.0})
         assert job.playhead == 60.0  # transcribed first, before the first poll
-        _run(pipeline.jobs, job, playhead=60.0)
-        seg.assert_not_called()
+        deadline = time.time() + 10
+        while not seg.called and time.time() < deadline:
+            time.sleep(0.02)
+        assert seg.call_args.args[1] == 60.0
         _run(pipeline.jobs, pipeline.jobs.create({**PARAMS, "video_id": "from-start"}))
-        seg.assert_called_once()
+        assert seg.call_args.args[1] == 0.0
 
 
 def test_stream_preview_shown_before_a_plan_that_keeps_its_region(pipeline):

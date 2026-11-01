@@ -560,6 +560,8 @@ test('in fullscreen the window moves into the fullscreen element, and back after
 });
 
 test('popup: Diagnostics shows the job and its log; Export and Download Log save files', async () => {
+  await seek(0);  // regions skipped past wait until the viewer is there: only then is the job done
+  await page.waitForTimeout(3000);
   const popup = await openPopup();
   await openSection(popup, 'diagnostics');
   await until('the job status', async () => /^DONE \| regions \d+\/\d+ \| lines \d+/.test(await popup.textContent('#diagStatus')));

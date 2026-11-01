@@ -32,7 +32,6 @@ _win_console_handler_ref = None
 # ── String constants (SonarCloud S1192 — no duplicated literals) ─────────────
 FFMPEG_PROTOCOL_WHITELIST = "file,http,https,tcp,tls,crypto"
 FFMPEG_AUDIO_OPTS = "ffmpeg:-ar 16000 -ac 1"
-YT_PLAYER_CLIENT_TV_WEB = "youtube:player_client=tv,web"
 ERR_REQUESTED_FORMAT = "requested format"
 ERR_NO_SUCH_FILE = "no such file"
 

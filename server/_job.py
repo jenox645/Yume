@@ -16,9 +16,10 @@ import _romanize
 import _separate
 import _state
 from _lines import clean_region, first_line, is_unwanted, join_across_cut, last_line
-from _translate import BATCH_SIZE, _unshout, src_name
+from _translate import BATCH_SIZE, _unshout, is_junk_reply, src_name
 
-HORIZON_REGIONS = 10  # don't transcribe further than ~4-5 min ahead of the playhead
+AHEAD_HIGH_S = 80  # subtitles ready ahead of the playhead, then rest (players hold 10-60 s)...
+AHEAD_LOW_S = 40  # ...until this much is left: short bursts, not 30 s of full GPU at a video's start
 PREVIEW_GRACE_S = 60  # region 0 waits this long for Whisper to finish the stream preview
 NEAR_S = 20  # lines starting this soon after the playhead are translated first...
 NEAR_BATCH = 3  # ...in batches this small
@@ -73,6 +74,8 @@ class Job:
         self.preview_started = 0.0  # stream preview of region 0 in flight since
         self.preview_hearing = 0.0  # ...and in Whisper since
         self.preview_segments = None
+        self.category_wanted = False  # the site's category is on its way: see JobManager._isolate
+        self.resting = False  # enough ahead of the playhead: see AHEAD_HIGH_S
 
         self.segments = {}  # id -> segment dict
         self.next_sid = 1
@@ -106,7 +109,8 @@ class Job:
         if found:
             with _state.stats_lock:
                 _state.server_stats["translation_cache_hits"] += len(found)
-        return {k: _unshout(v, k) for k, v in found.items()}  # cached before that fix
+        # Both cached before their fix: junk is translated again
+        return {k: _unshout(v, k) for k, v in found.items() if not is_junk_reply(v, k)}
 
     def _romaji(self, text):
         """The line's romaji; None = the LLM must produce it, if the user wants it
@@ -239,11 +243,28 @@ class Job:
         first = not any(s["translation"] for s in self.segments.values())
         return (near or need_tr)[:NEAR_BATCH] if near or first else need_tr[:BATCH_SIZE]
 
+    def _ready_ahead(self, p):
+        """Seconds transcribed in a row from the playhead."""
+        end = self.playhead
+        for region, state in zip(self.regions[p:], self.region_state[p:]):
+            if state not in ("done", "failed"):
+                break
+            end = region[1]
+        return end - self.playhead
+
     def next_region(self, now):
-        """The region to transcribe next, marked running, or None."""
+        """The region to transcribe next, marked running, or None. Forward from the
+        playhead, as far as is needed soon: what the viewer never reaches, or
+        skipped past, costs no GPU."""
         p = _regions.region_index_at(self.regions, self.playhead)
-        order = list(range(p, min(len(self.regions), p + HORIZON_REGIONS + 1))) + list(range(p - 1, -1, -1))
-        for idx in order:
+        ahead = self._ready_ahead(p)
+        if ahead >= AHEAD_HIGH_S:
+            self.resting = True
+        elif ahead < AHEAD_LOW_S:
+            self.resting = False
+        if self.resting:
+            return None
+        for idx in range(p, len(self.regions)):
             if self.region_state[idx] != "pending":
                 continue
             if idx == 0 and self.preview_hearing and now - self.preview_hearing < PREVIEW_GRACE_S:
@@ -273,10 +294,10 @@ class Job:
         self.status = "transcribing"
         self._update_status()
 
-    def show_preview(self, raw):
+    def show_preview(self, raw, start=0.0):
         """Show the stream preview before the region plan exists: install a
-        provisional single region [0, 30) so its lines are visible right away."""
-        first = (0.0, _regions.FIRST_REGION_S)
+        provisional single region so its lines are visible right away."""
+        first = (start, start + _regions.FIRST_REGION_S)
         self.regions = [first]
         self.region_state = ["pending"]
         self.add_region(0, raw)

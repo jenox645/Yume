@@ -206,11 +206,11 @@ def switch_model():
     new_model, err = _requested_model(_json_body().get("model"))
     if err:
         return jsonify(err), 400
-    if new_model == _state.model_name:
-        return jsonify({"status": "already_loaded", "model": _state.model_name})
     if not _state.model_switch_lock.acquire(blocking=False):
         return jsonify({"error": "A model switch is already in progress"}), 409
     try:
+        if new_model == _state.model_name:
+            return jsonify({"status": "already_loaded", "model": _state.model_name})
         return _swap_model(new_model)
     finally:
         _state.model_switch_lock.release()

@@ -33,6 +33,7 @@ except ImportError:  # never used here: CI installs the server's packages withou
 import _api  # noqa: E402
 import _audio  # noqa: E402
 import _download  # noqa: E402
+import _job  # noqa: E402
 import _jobs  # noqa: E402
 import _settings  # noqa: E402
 import _state  # noqa: E402
@@ -89,6 +90,7 @@ def main():
     _state.user_blacklist = []
     _state.blacklist_file = str(Path(tmp) / "blacklist.json")  # never the user's own list
     _state.vocal_isolation = False
+    _job.AHEAD_HIGH_S = 10_000  # the tests export every line; they do not play the whole video
     _state.jobs = _jobs.JobManager(FakeTranslator())
 
     @_api.app.before_request

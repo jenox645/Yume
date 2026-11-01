@@ -236,22 +236,14 @@ def _build_download_strategies(is_yt):
 
     strategies = []
     if is_yt:
-        if _state.youtube_auth_method == "deno":
-            strategies.append(("deno+default", []))
-            strategies.append(("deno+tv,web", ["--extractor-args", _state.YT_PLAYER_CLIENT_TV_WEB]))
-            if cookie_args:
-                strategies.append(("cookies-fallback", [*cookie_args]))
-                strategies.append(
-                    ("cookies+tv,web", ["--extractor-args", _state.YT_PLAYER_CLIENT_TV_WEB, *cookie_args])
-                )
-        else:
-            if cookie_args:
-                strategies.append(("cookies+default", [*cookie_args]))
-                strategies.append(
-                    ("cookies+tv,web", ["--extractor-args", _state.YT_PLAYER_CLIENT_TV_WEB, *cookie_args])
-                )
-                strategies.append(("cookies+mweb", ["--extractor-args", "youtube:player_client=mweb", *cookie_args]))
-            strategies.append(("no-auth", []))
+        # yt-dlp's own choice of clients, which it updates as YouTube changes, and
+        # cookies only for what needs them: yt-dlp's wiki warns they risk the
+        # account, and most videos are public
+        first = "deno+default" if _state.youtube_auth_method == "deno" else "no-auth"
+        strategies.append((first, []))
+        if cookie_args:
+            strategies.append(("cookies", [*cookie_args]))
+        strategies.append(("once-more", []))  # about 1 download in 26 gets a 403 the next one does not
     else:
         # Non-YouTube URLs (direct media, other sites). Try browser cookies first
         # for login-gated sites, but ALWAYS fall back to no-auth: a missing or
