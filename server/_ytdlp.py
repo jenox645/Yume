@@ -177,6 +177,10 @@ _YTDLP_ERRORS = [
     ),
     ((("sign in to confirm", "confirm you"),), f"YouTube requires sign-in to access this video. {_COOKIES_FIX}."),
     (
+        (("only works when logged-in", "--cookies-from-browser"),),
+        f"This site only works when you are logged in. {_COOKIES_FIX}. Or paste a stream URL in the extension popup.",
+    ),
+    (
         (("http error 403", "403 forbidden"), ("cloudflare",)),
         "Access denied (403) — Cloudflare anti-bot protection. This site blocks automated downloads. "
         "Try: copy the direct video/audio URL (often .m3u8 or .mp4) from the browser's Network tab "
@@ -205,7 +209,7 @@ _YTDLP_ERRORS = [
     ((("geo",), ("block",)), "This video is not available in your region."),
     (
         (("unable to download",), ("webpage", "player")),
-        "Cannot reach YouTube. Check your internet connection, or YouTube may be temporarily down.",
+        "Cannot reach this page. Check your internet connection and that the address still works.",
     ),
     ((("timed out", "timeout"),), "Download timed out — the video may be too long or the connection too slow."),
     (((_state.ERR_NO_SUCH_FILE,), ("yt-dlp",)), NOT_INSTALLED),
