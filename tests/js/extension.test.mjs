@@ -215,6 +215,54 @@ test('polling tells the user when the server stops answering, and keeps polling'
   assert.equal(scheduled, 4);
 });
 
+test('a Yume that stopped is reported as such, and polling ends', async () => {
+  const { ctx, events } = load('session.js', { video: { currentTime: 0, duration: 60 } });
+  ctx.chrome.runtime.sendMessage = (msg, cb) => cb(msg.type === 'YUME'
+    ? { ok: true, state: 'stopped', last_error: 'Whisper (exit code 1) stopped unexpectedly' }
+    : { ok: false, status: 0, data: { error: 'not reachable' } });
+  const s = new ctx.SubtitleSession();
+  s.jobId = 'a'.repeat(32);
+  let scheduled = 0;
+  s._schedulePoll = () => { scheduled++; };
+  for (let i = 0; i < 3; i++) await s._poll(s.generation);
+  const errors = events.filter((e) => e.type === 'display-error').map((e) => e.detail.message);
+  assert.deepEqual(errors, ['Whisper (exit code 1) stopped unexpectedly — press Enable to start it again']);
+  assert.equal(scheduled, 2);  // the two polls before it gave up
+});
+
+test('after a session error, Enable starts a new session', async () => {
+  const onMessage = [];
+  const listeners = {};
+  const sessions = [];
+  const video = { readyState: 1, getBoundingClientRect: () => ({ width: 640, height: 360 }) };
+  const ctx = vm.createContext({
+    console: { log: noop, warn: noop, error: noop },
+    chrome: {
+      runtime: { id: 'self', onMessage: { addListener: (f) => onMessage.push(f) } },
+      storage: { onChanged: { addListener: noop } },
+    },
+    setTimeout: noop, setInterval: noop, clearTimeout: noop, URL,
+    SubtitleWindow: class { resetProgress() {} updateStatus() {} showError() {} close() {} },
+    SubtitleSession: class {
+      constructor() { this.stopped = false; sessions.push(this); }
+      start() { return Promise.resolve(true); }
+      stop() { this.stopped = true; }
+    },
+    document: { querySelectorAll: () => [video], contains: () => true, addEventListener: noop },
+  });
+  ctx.window = ctx;
+  ctx.window.location = { href: 'https://www.youtube.com/watch?v=a' };
+  ctx.window.addEventListener = (name, fn) => { (listeners[name] ||= []).push(fn); };
+  vm.runInContext(readFileSync(new URL('content.js', ROOT), 'utf8'), ctx);
+  const send = (action) => new Promise((resolve) => { onMessage[0]({ action }, {}, resolve); });
+
+  assert.equal((await send('TOGGLE_SUBTITLES')).active, true);
+  listeners['display-error'].forEach((fn) => fn({ detail: { message: 'Yume stopped' } }));
+  assert.equal(sessions[0].stopped, true);
+  assert.equal((await send('TOGGLE_SUBTITLES')).active, true);  // used to stop, and need a second press
+  assert.equal(sessions.length, 2);
+});
+
 test('a job whose every region failed is reported, not shown as "no vocals"', () => {
   const { ctx, events } = load('session.js', { video: { currentTime: 0, duration: 60 } });
   const s = new ctx.SubtitleSession();

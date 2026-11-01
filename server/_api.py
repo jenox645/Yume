@@ -414,6 +414,15 @@ def job_options(job_id):
     return jsonify({"success": True})
 
 
+@app.route("/jobs/<job_id>/leave", methods=["POST"])
+def leave_job(job_id):
+    job = _state.jobs.get(job_id)
+    if job is None:
+        return jsonify({"success": True})  # gone already: nothing to stop
+    _state.jobs.leave(job)
+    return jsonify({"success": True})
+
+
 @app.route("/jobs/<job_id>/export", methods=["GET"])
 def job_export(job_id):
     job, err = _job_or_404(job_id)

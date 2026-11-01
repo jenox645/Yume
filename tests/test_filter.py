@@ -228,6 +228,24 @@ class TestIsHallucination(unittest.TestCase):
         _state.user_blacklist = ["Custom Spam"]
         self.assertTrue(_filter.is_hallucination("this is custom spam"))
 
+    def test_user_blacklist_matches_whole_words(self):
+        _state.user_blacklist = ["спам", "banana"]
+        self.assertTrue(_filter.is_hallucination("это спам и всё"))
+        self.assertTrue(_filter.is_hallucination("He ate a banana on the way home"))
+        self.assertFalse(_filter.is_hallucination("Он отказался от антиспама в почте"))
+        self.assertFalse(_filter.is_hallucination("They were growing bananas near the river"))
+
+    def test_a_short_user_blacklist_item_must_be_the_whole_line(self):
+        _state.user_blacklist = ["а", "не"]
+        self.assertFalse(_filter.is_hallucination("Рабочая неделя началась как обычно"))
+        self.assertFalse(_filter.is_hallucination("Он не пришёл на работу сегодня утром"))
+        self.assertTrue(_filter.is_hallucination("Не."))
+
+    def test_user_blacklist_reads_inside_lines_without_spaces(self):
+        _state.user_blacklist = ["ご視聴ありがとう", "구독과 좋아요"]
+        self.assertTrue(_filter.is_hallucination("最後までご視聴ありがとうございました"))
+        self.assertTrue(_filter.is_hallucination("여러분의 구독과 좋아요를 부탁드립니다"))
+
     def test_user_blacklist_empty_is_safe(self):
         _state.user_blacklist = []
         self.assertFalse(_filter.is_hallucination("今日はいい天気"))

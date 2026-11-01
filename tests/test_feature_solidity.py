@@ -184,6 +184,8 @@ def test_forget_dead_keeps_what_runs():
         ("ERROR: [youtube] aaaaaaaaaaa: This video is unavailable", "it may be private, deleted"),
         ("ERROR: [youtube] jfKfPfyJRdk: This live stream recording is not available.", "once a stream has ended"),
         ("ERROR: [generic] Something else went wrong", "Something else went wrong"),
+        ("ERROR: [generic] Unable to download webpage: HTTP Error 404", "Cannot reach this page"),
+        ("ERROR: [vimeo] The web client only works when logged-in. Use --cookies", "only works when you are logged in"),
         ("ERROR: [twitch:stream] some_channel: Nothing here", "Nothing here"),
     ],
 )

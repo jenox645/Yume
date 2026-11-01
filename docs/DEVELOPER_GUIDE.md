@@ -88,6 +88,7 @@ All endpoints except `/health` need the `X-API-Token` header.
 | POST | `/jobs` | Create or rejoin a job: `url`, `video_id`, `language`, `target`, `romanize`, `title`, `duration`, `stream_url` |
 | GET | `/jobs/<id>?since=&t=&events=1` | Poll: segments changed since revision `since`; `t` = playhead |
 | POST | `/jobs/<id>/options` | `{"romanize": bool}` |
+| POST | `/jobs/<id>/leave` | The viewer moved on: no more GPU work for this job until it is polled again |
 | GET | `/jobs/<id>/export?format=srt\|vtt` | Subtitle file content |
 | GET | `/library` · `/library/export` · POST `/library/delete` | Cached videos |
 | GET | `/blacklist` · POST `/blacklist/add` `/blacklist/remove` `/blacklist/update` | User blacklist |

@@ -47,6 +47,8 @@ npx playwright install chromium  # once, for the browser test
 npm run e2e                    # the real extension in a browser against the real server code (fake Whisper/LLM/download)
 ```
 
+`node tests/e2e/stress.mjs <out-dir> <lang> <ids...>` is the stress test with everything real (GPU, YouTube audio, LLM): changing videos, skipping, changing languages and models mid-play, blacklist, restarts. It checks that no line or translation bleeds between videos or languages. Back up `config/` first: it edits the config and clears the blacklist.
+
 `npm run e2e` uses Edge on Windows (Playwright's Chromium may fail there with "side-by-side configuration is incorrect"), Chromium elsewhere; `BROWSER=chromium|msedge|chrome` picks one, `HEADED=1` shows it. It needs Python with the server's packages (faster-whisper not required).
 
 ### Running

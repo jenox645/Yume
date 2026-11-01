@@ -113,6 +113,8 @@ class SubtitleSession {
       this.video.removeEventListener('seeked', this._onTime);
     }
     chrome.storage.onChanged.removeListener(this._onStorage);
+    // Not awaited: the server stops working on it, the page does not wait for that
+    if (this.jobId) SubtitleSession.api({ method: 'POST', path: `/jobs/${this.jobId}/leave` });
     this.segments.clear();
     this.cues = [];
     this.current = null;
@@ -254,9 +256,20 @@ class SubtitleSession {
       this._apply(r.data);
       if (this.status === 'error') { this._fail(this.error); return false; }
     } else if (r.status === 0 && ++this._unreachable === 3) {
-      // Keep polling: a restarted server answers 404 and the job is recreated
-      this._status('Lost contact with the Yume server — retrying...', 'loading');
+      return this._lostContact();
     }
+    return true;
+  }
+
+  // False: Yume itself stopped, nothing will answer again. Otherwise keep
+  // polling: a restarted server answers 404 and the job is recreated.
+  async _lostContact() {
+    const s = await SubtitleSession.yume('status');
+    if (s.ok && s.state === 'stopped') {
+      this._fail(`${s.last_error || 'Yume stopped'} — press Enable to start it again`);
+      return false;
+    }
+    this._status('Lost contact with the Yume server — retrying...', 'loading');
     return true;
   }
 

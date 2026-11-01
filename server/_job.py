@@ -79,6 +79,7 @@ class Job:
         self.rev = 0
         self.playhead = seconds(params.get("playhead"))  # YouTube resumes where you left off
         self.last_poll = time.time()
+        self.left = False  # the viewer moved on: no more GPU work for this job
         self.events = collections.deque(maxlen=60)
         self.notice = ""  # shown in the overlay: the video sounds like another language
         self.lang_checks = 0 if self.language else LANG_CHECKS  # nothing to check on auto-detect
