@@ -217,6 +217,7 @@ class SubtitleWindow {
     // are read, so a custom title used to show only after the next change
     const titleEl = this.element.querySelector('.subtitle-title');
     if (titleEl) titleEl.textContent = s.windowTitle || 'Yume';
+    if (this.element.dataset) this.element.dataset.look = s.subtitleStyle || 'plain';
     // Per line: size, colour and font from the settings named after it
     for (const [selector, name, size, color] of LINE_STYLES) {
       const el = this.element.querySelector(selector);
@@ -358,6 +359,8 @@ class SubtitleWindow {
       return;
     }
 
+    const newLine = (original || '') !== this.currentOriginal || (english || '') !== this.currentEnglish;
+    if (newLine) this._animateLine(q('.subtitle-content'));
     this.isPlaying = true;
     this.currentOriginal = original || '';
     this.currentEnglish  = english || '';
@@ -375,6 +378,16 @@ class SubtitleWindow {
     }
     const englishEl = lines[1][0];
     if (englishEl) englishEl.style.opacity = confidenceOpacity(s.showConfidence, confidence);
+  }
+
+  // Restarts the entrance on each new line; 'cut' shows it at once
+  _animateLine(box) {
+    const entrance = this.settings.subtitleEntrance || 'fade';
+    if (!box?.classList?.add) return;
+    box.classList.remove('line-fade', 'line-ink');
+    if (entrance === 'cut') return;
+    void box.offsetWidth;
+    box.classList.add('line-' + entrance);
   }
 
   updateStatus(message, type = 'info') {

@@ -14,6 +14,15 @@ from yume.constants import IS_WIN
 # ── Colour codes ──────────────────────────────────────────────────────────────
 
 
+def _tone(rgb: tuple, c256: int, c16: int) -> str:
+    """One colour at the depth this terminal has. Mid tones: readable on dark and on light."""
+    if os.environ.get("COLORTERM", "").lower() in ("truecolor", "24bit") or os.environ.get("WT_SESSION"):
+        return "\033[38;2;{};{};{}m".format(*rgb)
+    if "256color" in os.environ.get("TERM", ""):
+        return f"\033[38;5;{c256}m"
+    return f"\033[{c16}m"
+
+
 class C:
     RESET = "\033[0m"
     BOLD = "\033[1m"
@@ -24,8 +33,8 @@ class C:
     BLUE = "\033[94m"
     MAGENTA = "\033[95m"
     CYAN = "\033[96m"
-    GOLD = "\033[38;5;220m"
-    PURPLE = "\033[38;5;141m"
+    GOLD = _tone((209, 73, 91), 167, 91)  # YUME-chan's red: prompts, the seal
+    PURPLE = _tone((91, 141, 239), 69, 94)  # her cobalt
 
     @classmethod
     def disable(cls):
@@ -78,7 +87,7 @@ def panel(text: str, title: str = "", style: str = "", width: int | None = None,
 
     if title:
         t = f" {title} "
-        t_visible = len(ANSI_ESCAPE_RE.sub("", t))
+        t_visible = _width(ANSI_ESCAPE_RE.sub("", t))
         top = f"{b['tl']}{t}{b['h'] * max(0, w - 2 - t_visible)}{b['tr']}"
     else:
         top = f"{b['tl']}{b['h'] * (w - 2)}{b['tr']}"
@@ -88,7 +97,7 @@ def panel(text: str, title: str = "", style: str = "", width: int | None = None,
     print(f"  {color}{top}{C.RESET}")
     for line in lines:
         clean = ANSI_ESCAPE_RE.sub("", line)
-        padding = inner - len(clean)
+        padding = inner - _width(clean)
         print(f"  {color}{b['v']}{C.RESET}{' ' * pad}{line}{' ' * max(0, padding)}{' ' * pad}{color}{b['v']}{C.RESET}")
     print(f"  {color}{bot}{C.RESET}")
 
@@ -235,22 +244,14 @@ def center(t: str) -> str:
 def header(sub: str | None = None, version: str = "") -> None:
     clear()
     print()
-    # The product is YUME — the logo spells the product, not the launcher.
+    version_text = f"  {C.DIM}v{version}{C.RESET}" if version else ""
+    motto = f"  {C.DIM}You'll Understand More Easily{C.RESET}"
     try:
-        logo = [
-            f"{C.GOLD}╦ ╦  ╦ ╦  ╔╦╗  ╔═╗{C.RESET}",
-            f"{C.GOLD}╚╦╝  ║ ║  ║║║  ║╣ {C.RESET}",
-            f"{C.GOLD} ╩   ╚═╝  ╩ ╩  ╚═╝{C.RESET}",
-        ]
-        for line in logo:
-            print(center(line))
-    except UnicodeEncodeError:
-        print(center(f"{C.GOLD}{C.BOLD}Y  U  M  E{C.RESET}"))
-    print(center(f"{C.PURPLE}YUME-chan · You'll Understand More Easily{C.RESET}"))
-    tag = "Pocket Yume CLI" + (f" · v{version}" if version else "")
-    print(center(f"{C.DIM}{tag}{C.RESET}"))
+        print(f"  {C.GOLD}\033[7m 夢 {C.RESET} {C.BOLD}Yume{C.RESET}{version_text}{motto}")
+    except UnicodeEncodeError:  # a legacy console code page
+        print(f"  {C.BOLD}Yume{C.RESET}{version_text}{motto}")
     if sub:
-        print(center(f"{C.BOLD}{sub}{C.RESET}"))
+        print(f"  {C.BOLD}{sub}{C.RESET}")
     print()
 
 
@@ -399,12 +400,12 @@ def _render_arrow_menu(prompt: str, options: list, sel: int, allow_back: bool) -
     for i, (label, desc) in enumerate(options):
         num = f"{C.DIM}{i + 1}.{C.RESET} " if i < 9 else "   "
         if i == sel:
-            out.append(f"  {C.GREEN}▶{C.RESET} {num}{C.BOLD}{label}{C.RESET}\n")
+            out.append(f"  {C.GOLD}>{C.RESET} {num}{C.BOLD}{label}{C.RESET}\n")
         else:
             out.append(f"    {num}{label}\n")
         if has_any_desc:
             out.append(f"      {C.DIM}{desc}{C.RESET}\n" if i == sel and desc else "\n")
-    hint = "↑↓ navigate  1-9 jump  Enter select" + ("  Esc back" if allow_back else "")
+    hint = "Arrows move  1-9 jump  Enter selects" + ("  Esc back" if allow_back else "")
     out.append(f"\n  {C.DIM}{hint}{C.RESET}")
     text = "".join(out)
     sys.stdout.write(text)

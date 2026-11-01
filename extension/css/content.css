@@ -18,15 +18,56 @@
   min-width: 280px;
   max-width: 800px;
   background: rgba(8, 8, 12, 0.88);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
-  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+  border-radius: 2px;
   z-index: 2147483647;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: 'Yu Gothic UI', 'Hiragino Sans', 'Microsoft YaHei UI', 'Malgun Gothic', 'Segoe UI', 'Noto Sans', -apple-system, sans-serif;
   overflow: hidden;
   animation: sw-fade-in 0.25s ease-out;
+}
+
+/* Reading comes first: the bar shows only while the pointer is on the window */
+.subtitle-window:not(:hover):not(:focus-within) .subtitle-header {
+  opacity: 0;
+}
+
+/* Styles picked in the popup. !important: the window's colours are inline */
+.subtitle-window[data-look="outline"] {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.subtitle-window[data-look="outline"] .subtitle-original,
+.subtitle-window[data-look="outline"] .subtitle-english,
+.subtitle-window[data-look="outline"] .subtitle-romaji {
+  color: #ffffff !important;
+  text-shadow: -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000, 0 2px 0 #000, 2px 0 0 #000, -2px 0 0 #000, 0 -2px 0 #000;
+}
+
+.subtitle-window[data-look="slip"] {
+  background: #EDE6D8 !important;
+  border-bottom: 4px solid #B7282E;
+}
+
+.subtitle-window[data-look="slip"] .subtitle-original { color: #1E3F8A !important; text-shadow: none; }
+.subtitle-window[data-look="slip"] .subtitle-english { color: #8C1D22 !important; text-shadow: none; }
+.subtitle-window[data-look="slip"] .subtitle-romaji { color: #4F5A6B !important; text-shadow: none; }
+.subtitle-window[data-look="slip"] .subtitle-title,
+.subtitle-window[data-look="slip"] .control-btn,
+.subtitle-window[data-look="slip"] .subtitle-status { color: #4F5A6B; }
+
+.subtitle-window[data-look="night"] { background: #1A1F2E !important; }
+.subtitle-window[data-look="night"] .subtitle-original { color: #DCD7BA !important; }
+.subtitle-window[data-look="night"] .subtitle-english { color: #F08F9B !important; }
+.subtitle-window[data-look="night"] .subtitle-romaji { color: #A7B0C0 !important; }
+
+.subtitle-content.line-fade { animation: line-fade 0.16s ease-out; }
+.subtitle-content.line-ink { animation: line-ink 0.34s ease-out; }
+
+@keyframes line-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes line-ink { from { opacity: 0; filter: blur(5px); } to { opacity: 1; filter: blur(0); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .subtitle-window, .subtitle-content { animation: none !important; }
 }
 
 /* Minimized */
@@ -47,14 +88,13 @@
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   cursor: move;
   user-select: none;
+  transition: opacity 0.15s;
 }
 
 .subtitle-title {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.5);
+  color: rgba(255, 255, 255, 0.7);
 }
 
 .subtitle-controls {

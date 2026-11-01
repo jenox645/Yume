@@ -1,94 +1,36 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-state="asleep">
 <head>
   <meta charset="UTF-8">
   <title>Yume</title>
   <link rel="stylesheet" href="css/popup.css">
 </head>
 <body>
-  <div class="yume-container">
-    <div class="yume-header">
-      <div class="deco-line top-line"></div>
-      <h1 class="yume-title">Yume</h1>
+  <div class="yume-shell">
+      <svg class="yume-mark" viewBox="0 -880 1000 1000" aria-hidden="true" focusable="false"><path transform="scale(1 -1)" d="M846 678Q853 667 850 662Q848 656 844 652Q841 649 840 648Q789 649 748 652Q706 656 653 661Q649 645 638 632Q627 618 627 618Q677 634 726 615Q774 596 811 564Q811 546 802 538Q792 529 778 524Q765 520 753 514Q742 502 738 484Q734 466 730 449Q725 432 714 424Q713 419 714 416Q714 414 715 412Q716 410 717 408Q718 405 717 401Q665 401 600 400Q534 399 464 396Q394 392 330 384Q323 383 321 378Q319 372 314 368Q283 366 270 380Q258 395 253 417Q248 445 248 477Q247 509 233 531Q222 532 206 538Q189 543 175 548Q204 577 249 590Q294 604 340 608Q340 608 331 618Q322 629 314 645Q303 643 294 640Q284 636 275 633Q260 627 244 622Q229 618 208 618Q191 641 172 662Q153 683 140 711Q142 715 146 719Q149 723 153 721Q188 699 219 698Q250 698 295 703Q299 704 303 704Q307 705 311 705Q312 718 306 730Q301 741 294 753Q288 764 282 776Q276 787 275 801Q300 796 324 790Q349 783 366 766Q382 750 382 715Q405 714 432 715Q459 716 486 717Q515 718 540 719Q565 720 579 718Q585 737 583 754Q581 771 577 789Q576 795 574 802Q573 808 572 815Q597 814 624 803Q652 792 663 772Q676 749 659 721Q685 711 708 731Q754 724 786 714Q819 704 846 678ZM762 241Q760 228 748 224Q736 220 733 207Q703 210 684 201Q666 192 652 177Q634 157 620 132Q605 106 579 91Q549 36 498 -2Q447 -39 398 -60Q384 -66 368 -77Q352 -88 340 -90Q312 -94 284 -94Q257 -93 240 -90Q249 -74 266 -66Q284 -57 302 -48Q319 -40 327 -26Q369 -12 405 18Q441 47 459 67Q443 84 420 115Q397 146 385 174Q366 165 351 151Q336 137 320 124Q303 112 279 107Q277 116 266 119Q256 122 244 125Q233 128 227 137Q275 161 312 197Q350 233 388 267Q388 270 382 275Q379 278 376 282Q374 286 375 294Q437 286 487 284Q537 282 595 287Q598 293 600 300Q602 307 604 314Q642 304 686 288Q731 271 762 241ZM904 211Q908 196 903 184Q898 173 887 164Q872 151 851 141Q830 131 814 121Q809 122 806 128Q803 133 795 134Q794 139 796 143Q798 147 798 147Q776 154 762 170Q747 186 737 201Q757 212 771 229Q785 246 798 264Q795 268 795 272Q795 275 796 279Q796 283 796 287Q797 291 795 297Q790 313 770 320Q749 327 721 329Q696 331 668 331Q639 331 613 330Q587 330 571 329Q567 329 565 329Q546 328 518 326Q491 323 464 320Q438 317 421 314Q390 309 354 307Q319 305 290 302Q262 299 250 291Q234 280 226 260Q219 239 215 216Q211 192 206 172Q200 152 188 141Q192 132 200 126Q207 119 208 107Q206 97 196 97Q185 97 179 91Q157 96 140 113Q123 130 110 150Q98 169 92 183Q85 197 85 197Q97 192 106 196Q114 199 122 205Q128 209 134 212Q139 216 146 217Q146 217 146 218Q146 223 147 228Q148 234 156 237Q154 243 157 252Q160 260 164 269Q167 276 170 283Q173 290 175 297Q165 301 149 308Q133 316 127 327Q130 330 134 330Q137 330 142 330Q147 329 152 330Q158 331 162 337Q178 332 194 336Q211 339 221 347Q226 347 230 347Q235 347 239 347Q263 348 286 350Q308 352 330 364Q348 358 371 359Q394 360 421 364Q426 364 430 364Q435 365 440 366Q476 370 513 372Q550 375 585 377Q598 378 612 378Q625 378 639 378Q665 377 691 378Q717 379 740 384L737 388Q753 393 782 384Q810 376 839 361Q868 346 885 331Q886 327 883 322Q880 318 872 317Q875 310 880 303Q884 296 889 290Q900 273 909 254Q918 236 914 211ZM582 234Q575 233 568 234Q562 234 555 234Q542 235 530 234Q518 234 508 227Q492 238 478 235Q465 232 453 224Q445 219 434 211Q422 203 413 197Q404 191 404 191Q427 185 449 176Q471 168 487 153Q503 138 507 112Q515 117 523 126Q531 134 537 141Q541 158 551 172Q561 186 570 201Q580 216 582 234ZM650 561Q637 565 620 564Q604 564 588 563Q582 562 576 562Q571 561 566 561Q570 549 570 530Q570 511 569 493Q568 480 568 469Q568 458 569 451Q578 453 586 453Q594 453 601 453Q610 453 619 454Q628 454 637 458Q637 460 638 465Q642 485 646 513Q651 541 650 561ZM585 621Q583 632 576 638Q569 645 569 658Q544 660 510 658Q477 657 443 654Q409 652 382 648Q379 633 376 623Q374 613 372 608Q405 608 434 610Q463 612 492 615Q514 617 537 618Q560 620 585 621ZM388 444Q389 472 388 499Q387 526 382 548Q370 550 356 548Q342 545 328 542Q323 541 318 540Q313 539 308 538Q314 511 315 488Q316 464 321 438Q339 439 354 440Q368 442 388 444ZM508 454Q512 475 512 508Q512 540 504 558Q491 560 470 558Q448 557 437 548Q442 523 444 496Q445 468 437 448Q441 448 448 448Q467 448 480 448Q493 449 508 454Z"/></svg>
+    <header class="yume-top">
+      <div class="yume-name">
+        <h1 class="yume-title">Yume</h1>
+        <div id="yumeState" class="yume-state">Asleep</div>
+      </div>
       <div class="yume-subtitle" id="yumeVersion"></div>
-      <div class="deco-line bottom-line"></div>
-    </div>
+    </header>
 
-    <!-- Subtitle Control -->
-    <div class="yume-section">
-      <div class="section-label">Subtitle Control</div>
-      <div class="section-body">
-        <div class="control-card">
-          <div class="control-row">
-            <span class="control-label">AI Subtitles</span>
-            <button type="button" id="toggleSubtitles" class="yume-button primary" aria-label="Toggle subtitles on or off" role="switch" aria-checked="false">
-              <span id="toggleText">Enable</span>
-            </button>
-          </div>
-          <div id="statusMessage" class="status-message" role="status"></div>
-          <div id="shortcutHint" class="setting-hint" style="margin-top:4px"></div>
-          <button type="button" id="grantAccess" class="yume-button secondary" style="display:none">Allow Yume on websites</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Server Status -->
-    <div class="yume-section">
-      <div class="section-label">Server Status</div>
-      <div class="section-body">
-        <div class="status-card">
-          <div class="status-row">
-            <div class="status-indicator" id="whisperStatus" role="img" aria-label="Whisper server: checking"></div>
-            <div class="status-info">
-              <div class="status-name">Whisper</div>
-              <div class="status-port" id="whisperInfo">localhost:5001</div>
-            </div>
-          </div>
-        </div>
-        <div class="status-card">
-          <div class="status-row">
-            <div class="status-indicator" id="translationStatus" role="img" aria-label="Translation server: checking"></div>
-            <div class="status-info">
-              <div class="status-name">Translation</div>
-              <div class="status-port" id="translationInfo">via Whisper server</div>
-            </div>
-          </div>
-        </div>
-        <div id="serverHint" class="setting-hint" role="status" style="display:none;margin:4px 0"></div>
+    <main class="yume-panes">
+      <section class="yume-pane" id="pane-watch" role="tabpanel" aria-labelledby="tab-watch">
+        <button type="button" id="toggleSubtitles" class="yume-main" role="switch" aria-checked="false">
+          <span id="toggleText">Turn subtitles on</span>
+        </button>
+        <div id="statusMessage" class="status-message" role="status"></div>
+        <button type="button" id="grantAccess" class="yume-button secondary" style="display:none">Allow Yume on websites</button>
+        <div id="serverHint" class="setting-hint" role="status" style="display:none"></div>
         <div class="button-row">
-          <button type="button" id="serviceStart" class="yume-button secondary" style="display:none">Start Yume</button>
+          <button type="button" id="serviceStart" class="yume-button primary" style="display:none">Start Yume</button>
           <button type="button" id="serviceStop" class="yume-button secondary" style="display:none">Stop Yume</button>
-          <button type="button" id="refreshStatus" class="yume-button secondary" aria-label="Refresh server status">Refresh</button>
         </div>
-      </div>
-    </div>
-
-    <!-- Display Settings -->
-    <div class="yume-section">
-      <div class="section-label">Display Settings</div>
-      <div class="section-body">
-        <div class="setting-card">
-          <div class="setting-row">
-            <span class="setting-label">Original Text</span>
-            <label class="yume-toggle"><input type="checkbox" id="showOriginal" checked aria-label="Show original text"><span class="toggle-slider"></span></label>
-          </div>
-        </div>
-        <div class="setting-card">
-          <div class="setting-row">
-            <span class="setting-label" id="romajiLabel">Romanization <span class="setting-hint" id="romajiHint">(Romaji)</span></span>
-            <label class="yume-toggle"><input type="checkbox" id="showRomaji" aria-label="Show romanization"><span class="toggle-slider"></span></label>
-          </div>
-        </div>
-        <div class="setting-card">
-          <div class="setting-row">
-            <span class="setting-label">Translation</span>
-            <label class="yume-toggle"><input type="checkbox" id="showEnglish" checked aria-label="Show translation"><span class="toggle-slider"></span></label>
-          </div>
-        </div>
-        <div class="setting-card">
-          <div class="setting-row">
-            <span class="setting-label">Source language</span>
-            <select id="sourceLanguage" class="yume-select" aria-label="Source language">
+        <div class="yume-langs">
+          <label class="yume-field">From
+            <select id="sourceLanguage" class="yume-select">
               <option value="ja">Japanese</option>
               <option value="zh">Chinese</option>
               <option value="ko">Korean</option>
@@ -102,12 +44,9 @@
               <option value="ar">Arabic</option>
               <option value="auto">Auto-detect</option>
             </select>
-          </div>
-        </div>
-        <div class="setting-card">
-          <div class="setting-row">
-            <span class="setting-label">Translate to</span>
-            <select id="targetLanguage" class="yume-select" aria-label="Target language">
+          </label>
+          <label class="yume-field">Into
+            <select id="targetLanguage" class="yume-select">
               <option value="English">English</option>
               <option value="French">Fran&#231;ais</option>
               <option value="Spanish">Espa&#241;ol</option>
@@ -126,70 +65,63 @@
               <option value="Dutch">Nederlands</option>
               <option value="Polish">Polski</option>
             </select>
+          </label>
+        </div>
+        <div class="yume-show" role="group" aria-label="Lines to show">
+          <div class="setting-card">
+            <div class="setting-row">
+              <label class="yume-toggle"><input type="checkbox" id="showOriginal" checked aria-label="Show original text"><span class="toggle-slider" data-mark="原"></span></label>
+              <span class="setting-label">Original text</span>
+            </div>
+          </div>
+          <div class="setting-card">
+            <div class="setting-row">
+              <label class="yume-toggle"><input type="checkbox" id="showRomaji" aria-label="Show romanization"><span class="toggle-slider" data-mark="読"></span></label>
+              <span class="setting-label" id="romajiLabel">Reading <span class="setting-hint" id="romajiHint">(Romaji)</span></span>
+            </div>
+          </div>
+          <div class="setting-card">
+            <div class="setting-row">
+              <label class="yume-toggle"><input type="checkbox" id="showEnglish" checked aria-label="Show translation"><span class="toggle-slider" data-mark="訳"></span></label>
+              <span class="setting-label">Translation</span>
+            </div>
           </div>
         </div>
+        <div class="yume-timing">
+          <span class="setting-label">Timing</span>
+          <div class="setting-value-group">
+            <input type="range" id="timingOffset" aria-label="Subtitle timing offset" min="-30" max="30" value="0" step="1" class="yume-range">
+              <input type="number" id="timingOffsetVal" aria-label="Timing offset in seconds" class="yume-input" style="width:60px;text-align:center" min="-3" max="3" step="0.1" value="0.0">
+              <span class="setting-unit">s</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="yume-pane" id="pane-look" role="tabpanel" aria-labelledby="tab-look" hidden>
+        <div class="yume-langs">
+          <label class="yume-field">Popup
+            <select id="popupTheme" class="yume-select"><option value="auto">Follow the system</option><option value="light">Light</option><option value="dark">Dark</option></select>
+          </label>
+          <label class="yume-field">Line appears
+            <select id="subtitleEntrance" class="yume-select"><option value="cut">At once</option><option value="fade">Fade</option><option value="ink">Ink</option></select>
+          </label>
+        </div>
+        <label class="yume-field">Subtitle style
+          <select id="subtitleStyle" class="yume-select"><option value="plain">Plain box, best for reading</option><option value="outline">Outline, no box</option><option value="slip">Paper slip</option><option value="night">Night</option></select>
+        </label>
         <div class="setting-card">
           <div class="setting-row">
-            <span class="setting-label">Show Progress Counter</span>
+            <span class="setting-label">Progress counter</span>
             <label class="yume-toggle"><input type="checkbox" id="showChunkCounter" checked aria-label="Show chunk counter"><span class="toggle-slider"></span></label>
           </div>
         </div>
         <div class="setting-card">
           <div class="setting-row">
-            <span class="setting-label">Confidence Indicator</span>
+            <span class="setting-label">Confidence indicator</span>
             <label class="yume-toggle"><input type="checkbox" id="showConfidence" aria-label="Show confidence score"><span class="toggle-slider"></span></label>
           </div>
           <div class="setting-hint">Fades translation when Whisper is less certain</div>
         </div>
-        <div class="setting-card">
-          <div class="setting-row">
-            <span class="setting-label">Timing Offset</span>
-            <div class="setting-value-group">
-              <input type="range" id="timingOffset" aria-label="Subtitle timing offset" min="-30" max="30" value="0" step="1" class="yume-range">
-              <input type="number" id="timingOffsetVal" aria-label="Timing offset in seconds" class="yume-input" style="width:60px;text-align:center" min="-3" max="3" step="0.1" value="0.0">
-              <span class="setting-unit">s</span>
-            </div>
-          </div>
-          <div class="setting-hint" style="margin-top:2px;font-size:11px">Shift subtitles earlier (−) or later (+). 1 tick = 0.1s</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Hallucination Filter (collapsible) -->
-    <div class="yume-section collapsible collapsed" data-section="hallucination">
-      <div class="section-label section-toggle">
-        <span class="toggle-arrow" aria-hidden="true">&#9654;</span> Hallucination Filter
-      </div>
-      <div class="section-body">
-        <div class="setting-card">
-          <div class="hallucination-info">
-            Seeing phantom subtitles? Click <b>Report</b> to block the line on screen. The blacklist lives
-            on the Yume server, so it applies everywhere at once &mdash; including the CLI and saved videos.
-          </div>
-        </div>
-        <button type="button" id="reportHallucination" class="yume-button danger" aria-label="Report current subtitle as hallucination" style="margin-bottom:8px">
-          &#9888; Report Current Subtitle
-        </button>
-        <div id="hallucinationPreview" class="hallucination-preview" style="display:none"></div>
-        <div class="setting-card" style="margin-top:8px">
-          <div class="setting-row">
-            <span class="setting-label">Blacklist</span>
-            <div style="display:flex;align-items:center;gap:8px">
-              <span id="blacklistCount" class="setting-hint">0 items</span>
-              <button type="button" id="toggleBlacklistView" class="yume-button-mini" title="Show/Hide list" aria-label="Show the blacklist" aria-expanded="false" aria-controls="blacklistContainer">&#9660;</button>
-            </div>
-          </div>
-        </div>
-        <div id="blacklistContainer" class="blacklist-container" style="display:none"></div>
-        <div style="display:flex;gap:8px;margin-top:8px">
-          <button type="button" id="clearBlacklist" class="yume-button secondary" style="flex:1;margin-top:0">
-            Clear All
-          </button>
-        </div>
-        <div id="blacklistStatus" class="status-message" role="status" style="margin-top:4px"></div>
-      </div>
-    </div>
-
     <!-- Appearance (collapsible) -->
     <div class="yume-section collapsible collapsed" data-section="appearance">
       <div class="section-label section-toggle">
@@ -323,7 +255,28 @@
         </div>
       </div>
     </div>
+      </section>
 
+      <section class="yume-pane" id="pane-models" role="tabpanel" aria-labelledby="tab-models" hidden>
+        <div class="status-card">
+          <div class="status-row">
+            <div class="status-indicator" id="whisperStatus" role="img" aria-label="Whisper server: checking"></div>
+            <div class="status-info">
+              <div class="status-name">Whisper</div>
+              <div class="status-port" id="whisperInfo">localhost:5001</div>
+            </div>
+          </div>
+        </div>
+        <div class="status-card">
+          <div class="status-row">
+            <div class="status-indicator" id="translationStatus" role="img" aria-label="Translation server: checking"></div>
+            <div class="status-info">
+              <div class="status-name">Translation</div>
+              <div class="status-port" id="translationInfo">via Whisper server</div>
+            </div>
+          </div>
+        </div>
+        <button type="button" id="refreshStatus" class="yume-button secondary" aria-label="Refresh server status">Refresh</button>
     <!-- Translation Model (collapsible) -->
     <div class="yume-section collapsible collapsed" data-section="model">
       <div class="section-label section-toggle">
@@ -338,7 +291,6 @@
         <button type="button" id="refreshModels" class="yume-button secondary">Refresh Models</button>
       </div>
     </div>
-
     <!-- Whisper Model Switcher (collapsible) -->
     <div class="yume-section collapsible collapsed" data-section="whisper-model">
       <div class="section-label section-toggle">
@@ -376,7 +328,6 @@
         </div>
       </div>
     </div>
-
     <!-- Server Stats (collapsible) -->
     <div class="yume-section collapsible collapsed" data-section="stats">
       <div class="section-label section-toggle">
@@ -391,7 +342,6 @@
         <button type="button" id="refreshStats" class="yume-button secondary">Refresh</button>
       </div>
     </div>
-
     <!-- Server Settings (collapsible) -->
     <div class="yume-section collapsible collapsed" data-section="server">
       <div class="section-label section-toggle">
@@ -428,7 +378,43 @@
         </div>
       </div>
     </div>
+      </section>
 
+      <section class="yume-pane" id="pane-more" role="tabpanel" aria-labelledby="tab-more" hidden>
+    <!-- Hallucination Filter (collapsible) -->
+    <div class="yume-section collapsible collapsed" data-section="hallucination">
+      <div class="section-label section-toggle">
+        <span class="toggle-arrow" aria-hidden="true">&#9654;</span> Hallucination Filter
+      </div>
+      <div class="section-body">
+        <div class="setting-card">
+          <div class="hallucination-info">
+            Seeing phantom subtitles? Click <b>Report</b> to block the line on screen. The blacklist lives
+            on the Yume server, so it applies everywhere at once &mdash; including the CLI and saved videos.
+          </div>
+        </div>
+        <button type="button" id="reportHallucination" class="yume-button danger" aria-label="Report current subtitle as hallucination" style="margin-bottom:8px">
+          &#9888; Report Current Subtitle
+        </button>
+        <div id="hallucinationPreview" class="hallucination-preview" style="display:none"></div>
+        <div class="setting-card" style="margin-top:8px">
+          <div class="setting-row">
+            <span class="setting-label">Blacklist</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span id="blacklistCount" class="setting-hint">0 items</span>
+              <button type="button" id="toggleBlacklistView" class="yume-button-mini" title="Show/Hide list" aria-label="Show the blacklist" aria-expanded="false" aria-controls="blacklistContainer">&#9660;</button>
+            </div>
+          </div>
+        </div>
+        <div id="blacklistContainer" class="blacklist-container" style="display:none"></div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button type="button" id="clearBlacklist" class="yume-button secondary" style="flex:1;margin-top:0">
+            Clear All
+          </button>
+        </div>
+        <div id="blacklistStatus" class="status-message" role="status" style="margin-top:4px"></div>
+      </div>
+    </div>
     <!-- Diagnostics (collapsible) -->
     <div class="yume-section collapsible collapsed" data-section="diagnostics">
       <div class="section-label section-toggle">
@@ -450,7 +436,6 @@
         <div id="exportStatus" class="status-message" role="status" style="margin-top:4px"></div>
       </div>
     </div>
-
     <!-- History (persistent subtitle library) -->
     <div class="yume-section collapsible collapsed" data-section="history">
       <div class="section-label section-toggle">
@@ -469,11 +454,17 @@
         <div id="historyStatus" class="status-message" role="status" style="margin-top:4px"></div>
       </div>
     </div>
+        <div id="shortcutHint" class="setting-hint"></div>
+        <div class="footer-text">You'll Understand More Easily</div>
+      </section>
+    </main>
 
-    <div class="yume-footer">
-      <div class="deco-line"></div>
-      <div class="footer-text">YUME-chan · You'll Understand More Easily</div>
-    </div>
+    <nav class="yume-tabs" role="tablist" aria-label="Yume">
+      <button type="button" role="tab" id="tab-watch" data-pane="pane-watch" aria-controls="pane-watch" aria-selected="true">Watch</button>
+      <button type="button" role="tab" id="tab-look" data-pane="pane-look" aria-controls="pane-look" aria-selected="false" tabindex="-1">Look</button>
+      <button type="button" role="tab" id="tab-models" data-pane="pane-models" aria-controls="pane-models" aria-selected="false" tabindex="-1">Models</button>
+      <button type="button" role="tab" id="tab-more" data-pane="pane-more" aria-controls="pane-more" aria-selected="false" tabindex="-1">More</button>
+    </nav>
   </div>
 
   <script src="js/bundled-fonts.js"></script>

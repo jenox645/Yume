@@ -583,6 +583,18 @@ test('a finished run fading its badge does not hide the next run\'s badge', () =
   assert.equal(badge.className, 'chunk-badge active');
 });
 
+test('a new line restarts its entrance; "at once" has none', () => {
+  const { ctx } = load('subtitle-window.js');
+    const box = { classes: new Set(), classList: { add(c) { box.classes.add(c); }, remove(...c) { c.forEach((x) => box.classes.delete(x)); } }, offsetWidth: 1 };
+  const win = Object.create(ctx.SubtitleWindow.prototype);
+  win.settings = { subtitleEntrance: 'ink' };
+  win._animateLine(box);
+  assert.deepEqual([...box.classes], ['line-ink']);
+  win.settings = { subtitleEntrance: 'cut' };
+  win._animateLine(box);
+  assert.deepEqual([...box.classes], []);
+});
+
 test('popup: add-on store pages are not offered (no browser runs content scripts there)', () => {
   const { ctx } = loadPopup();
   for (const url of ['https://chromewebstore.google.com/detail/x', 'https://chrome.google.com/webstore/detail/x',

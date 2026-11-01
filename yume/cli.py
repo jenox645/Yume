@@ -297,6 +297,20 @@ def _tools(cfg, args):
     tools_menu(cfg)
 
 
+def _auto_start(cfg, args):
+    from yume.menus import menu_one_click
+
+    menu_one_click(cfg)
+
+
+def _auto_start_label() -> str:
+    from yume.native_host import registered_browsers
+
+    if registered_browsers():
+        return f"{C.GREEN}on{C.RESET}  {C.DIM}Enable in the browser starts Yume{C.RESET}"
+    return f"{C.DIM}off{C.RESET}  {C.DIM}turn it on below{C.RESET}"
+
+
 def _uninstall(cfg, args):
     from yume.setup import uninstall_yume
 
@@ -318,6 +332,7 @@ def _then_pause(fn):
 # (label, description, handler); a handler returning a dict replaces the config
 MAIN_MENU = [
     ("Launch Yume", "Start servers + runtime menu", _launch),
+    ("Auto start", "Let the browser start and stop Yume by itself", _auto_start),
     ("System Status", "Hardware, tools, packages, ports", _then_pause(_status)),
     ("Health Check", "Test every component end-to-end", _then_pause(_health)),
     ("Settings", "Whisper, translation, addresses, subtitles", _settings),
@@ -342,7 +357,8 @@ def main_menu() -> None:
             f"{C.DIM}Hardware   {C.RESET}  {_hardware_label()}\n"
             f"{C.DIM}Speech AI  {C.RESET}  {C.CYAN}{cfg['whisper_model']}{C.RESET}  on  {cfg['whisper_host']}:{cfg['whisper_port']}\n"
             f"{C.DIM}Translator {C.RESET}  {C.MAGENTA}{bn}{C.RESET}  on  {cfg['translation_host']}:{cfg['translation_port']}\n"
-            f"{C.DIM}Servers    {C.RESET}  {_servers_label(cfg)}",
+            f"{C.DIM}Servers    {C.RESET}  {_servers_label(cfg)}\n"
+            f"{C.DIM}Auto start {C.RESET}  {_auto_start_label()}",
             style=C.DIM,
         )
         _update_notice()
