@@ -5,6 +5,7 @@ import time
 import _state
 
 SAMPLE_RATE = 16000
+BEAM_SIZE = 5  # 1 and 2 are faster but gave more repetition loops: tests/gold/RESULTS.md
 
 
 def transcribe_audio(audio, language, offset=0.0, is_first_region=False):
@@ -32,7 +33,7 @@ def transcribe_audio(audio, language, offset=0.0, is_first_region=False):
 
     params = dict(
         language=language,
-        beam_size=5,
+        beam_size=BEAM_SIZE,
         vad_filter=False,
         word_timestamps=False,
         condition_on_previous_text=False,

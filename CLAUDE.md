@@ -49,6 +49,8 @@ npm run e2e                    # the real extension in a browser against the rea
 
 `node tests/e2e/stress.mjs <out-dir> <lang> <ids...>` is the stress test with everything real (GPU, YouTube audio, LLM): changing videos, skipping, changing languages and models mid-play, blacklist, restarts. It checks that no line or translation bleeds between videos or languages. Back up `config/` first: it edits the config and clears the blacklist.
 
+`python tests/gold/gold.py find|fetch|run <variants>|score` scores Whisper settings against captions and lyrics written by people (GPU, data outside git in `tests/gold/data/`). Anything that changes subtitle text is decided here first; `tests/gold/RESULTS.md` holds what was measured.
+
 `npm run e2e` uses Edge on Windows (Playwright's Chromium may fail there with "side-by-side configuration is incorrect"), Chromium elsewhere; `BROWSER=chromium|msedge|chrome` picks one, `HEADED=1` shows it. It needs Python with the server's packages (faster-whisper not required).
 
 ### Running

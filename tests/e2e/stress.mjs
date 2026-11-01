@@ -452,8 +452,8 @@ const scenarios = {
     await seek(300);
     await sleep(700);
     await firstLine(A, 60);
-    await setSettings({ sourceLanguage: 'ja' });
-    const wrong = await settled('source → Japanese on a Russian video');
+    await setSettings({ sourceLanguage: lang === 'ja' ? 'ko' : 'ja' });
+    const wrong = await settled('source → a language the video is not in');
     if (!wrong.o.notice) note('no wrong-language notice yet');
     await setSettings({ sourceLanguage: 'auto' });
     await settled('source → auto-detect');
@@ -508,15 +508,19 @@ const scenarios = {
       if ((await overlay()).windows !== 1) problem(`not exactly one window after ${label}`);
     };
     if (!(await active())) await enable();
+    await go(A);
+    await sleep(1200);
     await seek(40);
     await firstLine(A, 60);
+    // Fractions, not seconds: a jump past the end of a short video has no line to wait for
+    const length = await page.evaluate(() => window.document.querySelector('video').duration);
 
     let r = await switchTo('tiny');
     note(`switch to tiny while playing: ${r.status} in ${r.seconds.toFixed(1)} s, ${JSON.stringify(r.data).slice(0, 80)}`);
     if (!r.ok) problem(`switch to tiny failed: ${JSON.stringify(r.data).slice(0, 120)}`);
     await settled('tiny while playing');
 
-    await seek(1000);  // not transcribed yet: Whisper is working when the switch comes
+    await seek(length * 0.5);  // not transcribed yet: Whisper is working when the switch comes
     await sleep(1200);
     r = await switchTo('base');
     note(`switch to base mid-transcription: ${r.status} in ${r.seconds.toFixed(1)} s`);
@@ -559,10 +563,10 @@ const scenarios = {
     const original = readFileSync(CONFIG, 'utf8');
     try {
       edit({ translation_prompt: 'Translate each line into plain, simple English.' });
-      await seek(1400);
+      await seek(length * 0.7);
       await settled('custom translation prompt while playing');
       edit({ translation_model: 'some-other-name' });
-      await seek(1450);
+      await seek(length * 0.8);
       await settled('translation model name changed while playing');
       edit({ vocal_isolation: false });
       await go(B);
