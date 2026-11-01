@@ -221,10 +221,15 @@ YTDLP_MAX_AGE_DAYS = 30
 def maybe_update_ytdlp(version):
     """Self-update the standalone yt-dlp when it is older than a month (YouTube
     changes break old versions: a 7-month-old one got HTTP 403 on every video).
-    pip installs (Deno auth) are left to the CLI. Returns the version to show."""
+    pip installs (Deno auth) are left to the CLI, which is told so. Returns the
+    version to show."""
     age = _release_age(version)
     exe = shutil.which("yt-dlp")
-    if age is None or age <= YTDLP_MAX_AGE_DAYS or not exe or _state.youtube_auth_method == "deno":
+    if age is None or age <= YTDLP_MAX_AGE_DAYS:
+        return version
+    if _state.youtube_auth_method == "deno":
+        return f"{version} ({age} days old — update it: pip install -U yt-dlp)"
+    if not exe:
         return version
     # Releases can be weeks apart: ask at most once a day, not on every start
     stamp = Path(exe).with_name(".yt-dlp-update-check")

@@ -37,6 +37,7 @@ SERVICE_LOG = "service.log"
 TICK_S = 5
 WHISPER_START_TIMEOUT_S = 600  # first run downloads the Whisper model
 TRANSLATION_START_TIMEOUT_S = 300
+MAX_TRANSLATION_RESTARTS = 3  # then lines stay untranslated: one bad model must not loop forever
 
 # Windows process creation flags (subprocess exposes most, not all, of them)
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
@@ -262,6 +263,7 @@ class _Supervisor:
         self.cfg = cfg
         self.procs = servers.Processes(hidden=True)
         self.started = time.time()
+        self.translation_restarts = 0
 
     # -- children --------------------------------------------------------------
 
@@ -329,15 +331,29 @@ class _Supervisor:
         while not self._stop_requested():
             time.sleep(TICK_S)
             dead = self.procs.dead()
-            if dead:
+            if any(d.startswith("Whisper") for d in dead):
                 self._state("error", f"{', '.join(dead)} stopped unexpectedly — see logs/")
                 return 1
+            if dead:
+                self._revive_translation(dead)
             if self._active():
                 last_active = time.time()
             elif idle_limit and time.time() - last_active > idle_limit:
                 _log.info("idle for %g min — stopping", idle_limit / 60)
                 break
         return 0
+
+    def _revive_translation(self, dead: list[str]) -> None:
+        """Whisper still makes subtitles without the translator, and jobs keep their
+        lines until it answers again: a crash there used to stop all of Yume."""
+        self.procs.forget_dead()
+        self.translation_restarts += 1
+        if self.translation_restarts > MAX_TRANSLATION_RESTARTS:
+            self._state("running", f"{dead[0]} keeps stopping — lines stay untranslated, see logs/")
+            return
+        _log.warning("%s stopped — restarting it (%d/%d)", dead[0], self.translation_restarts, MAX_TRANSLATION_RESTARTS)
+        err = self._start_translation(servers.build_server_env())
+        self._state("running", err or "")
 
     def run(self) -> int:
         err = self._start_servers()

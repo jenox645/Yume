@@ -178,6 +178,8 @@ def install_ffmpeg() -> bool:
         print(f"\r  {C.RED}x{C.RESET}  Failed: {e}")
         return False
     print(f"\r  {C.GREEN}+{C.RESET}  Extracted" + " " * 30)
+    if not IS_WIN and not IS_LIN:  # the Mac build has no ffprobe, and yt-dlp needs it to convert audio
+        warn("This build has no ffprobe, so some downloads will fail. Install Homebrew, then run Install again.")
     return _ffmpeg_runs()
 
 

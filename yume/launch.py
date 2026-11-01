@@ -21,7 +21,7 @@ from yume.ports import ensure_port_free, find_free_port, is_port_free, kill_port
 from yume.resource_check import check_resources
 from yume.runtime_menu import runtime_menu
 from yume.ui import C, Spinner, ask_yn, clear, error, header, info, pause, success, warn
-from yume.utils import _run
+from yume.utils import _run, _try_import
 
 
 def _offer_llama_server() -> bool:
@@ -240,16 +240,15 @@ def _ensure_python_engine(env: dict) -> bool:
     """llama-cpp-python and the packages its server needs. False = launching cannot go on."""
     from yume.installers import install_llamacpp_python
 
-    try:
-        import llama_cpp  # noqa: F401
-    except ImportError:
+    if not _try_import("llama_cpp"):
         error("llama-cpp-python not installed! This is the translation engine.")
         info(f"You can also install it manually: {C.CYAN}pip install llama-cpp-python{C.RESET}")
         if ask_yn("Install now?"):
             install_llamacpp_python()
-        else:
+        if not _try_import("llama_cpp"):
+            warn("Translation cannot start without it. Launch Yume again once it is installed.")
             pause()
-        return False
+            return False
     try:
         import fastapi  # noqa: F401
         import uvicorn  # noqa: F401

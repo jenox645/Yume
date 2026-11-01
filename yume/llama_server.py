@@ -110,7 +110,7 @@ def _gpu_build(assets: list[dict], gpu: dict, cuda: tuple[int, int] | None, plat
         build = _cuda_build(assets, plat, tail, cuda)
         if build:
             return build
-    if gpu.get("has_nvidia") or gpu.get("has_amd") or gpu.get("has_intel"):
+    if gpu.get("has_nvidia") or gpu.get("has_amd"):
         found = _matching(assets, rf"llama-b\d+-bin-{plat}-vulkan{tail}")
         if found:
             return "vulkan", found[:1]

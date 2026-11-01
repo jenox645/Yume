@@ -56,10 +56,10 @@ def test_a_version_that_is_no_date_is_left_alone(monkeypatch):
     assert _startup.maybe_update_ytdlp("?") == "?"
 
 
-def test_a_pip_install_is_left_to_the_cli(monkeypatch, ytdlp_exe):
+def test_a_pip_install_is_left_to_the_cli_which_is_told(monkeypatch, ytdlp_exe):
     calls = _ytdlp_answers(monkeypatch, _reply(0))
     monkeypatch.setattr(_state, "youtube_auth_method", "deno")
-    assert _startup.maybe_update_ytdlp(OLD) == OLD
+    assert "pip install -U yt-dlp" in _startup.maybe_update_ytdlp(OLD)
     assert calls == []
 
 
