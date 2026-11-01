@@ -141,8 +141,11 @@ xenon --max-absolute C --exclude "server/_vendor/*" server yume config.py pocket
 ```
 
 - `tests/test_pipeline.py` runs real jobs with a fake Whisper model and a fake
-  LLM: regions, cache reuse without download, blacklist re-filtering, error
-  paths, translator format fallback.
+  LLM (`tests/pipeline_fakes.py`): cache reuse without download, blacklist
+  re-filtering, error paths. Each topic has its own file: `test_translator.py`,
+  `test_line_cleaning.py`, `test_filter.py`, `test_regions.py`, `test_ytdlp.py`...
+- `tests/server_stubs.py` replaces flask for the whole test process, so only
+  modules collected after the ones that need the real one may import it.
 - `tests/test_integration.py` guards cross-file invariants: dead config keys,
   yt-dlp auth arguments, version sources, manifest contents, no hardcoded
   server URLs, subprocess hygiene, pinned dependencies, every

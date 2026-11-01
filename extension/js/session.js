@@ -77,16 +77,7 @@ class SubtitleSession {
     if (aborted()) return false;
 
     this.videoId = SubtitleSession.videoId(video);
-    this.params = {
-      url: window.location.href,
-      video_id: this.videoId,
-      stream_url: customStreamUrl || undefined,
-      language: settings.sourceLanguage && settings.sourceLanguage !== 'auto' ? settings.sourceLanguage : '',
-      target: settings.showEnglish === false ? '' : (settings.targetLanguage || 'English'),
-      romanize: settings.showRomaji === true,
-      duration: Number.isFinite(video.duration) ? video.duration : 0,
-      title: SubtitleSession.pageTitle(),
-    };
+    this.params = this._jobParams(settings, customStreamUrl);
     this._status('Starting...', 'loading');
     await this._createJob();
     if (aborted()) return false;
@@ -97,6 +88,20 @@ class SubtitleSession {
     video.addEventListener('seeked', this._onTime);
     this._schedulePoll(0, gen);
     return true;
+  }
+
+  _jobParams(settings, customStreamUrl) {
+    const language = settings.sourceLanguage;
+    return {
+      url: window.location.href,
+      video_id: this.videoId,
+      stream_url: customStreamUrl || undefined,
+      language: language && language !== 'auto' ? language : '',
+      target: settings.showEnglish === false ? '' : (settings.targetLanguage || 'English'),
+      romanize: settings.showRomaji === true,
+      duration: Number.isFinite(this.video.duration) ? this.video.duration : 0,
+      title: SubtitleSession.pageTitle(),
+    };
   }
 
   stop() {
@@ -149,29 +154,35 @@ class SubtitleSession {
   // through the native helper (one-click start) and wait for it to come up.
   async _waitForServer(aborted) {
     this._status('Checking server...', 'loading');
-    const t0 = Date.now();
-    let started = false;  // we asked the helper to start Yume
-    let startedAt = 0;
+    const wait = { since: Date.now(), started: false };  // started: we asked the helper to start Yume
     while (!aborted()) {
       const r = await SubtitleSession.api({ path: '/health', timeout: 5000 });
-      const st = r.data?.status;
-      if (r.ok && st === 'ready') return;
-      if (st === 'error') throw new Error(`Whisper could not load its model: ${r.data.error || 'unknown error'}`);
-      const waited = Math.round((Date.now() - (started ? startedAt : t0)) / 1000);
-      if (st === 'loading') {
-        if (waited > (started ? START_WAIT_S : HEALTH_WAIT_S)) throw new Error('Model loading timed out — restart Yume');
-        this._status(`Loading the speech model... (${waited}s)`, 'loading');
-      } else if (r.status !== 0) {
-        throw new Error(r.data?.error || `Server error ${r.status}`);
-      } else if (!started) {
-        if (!await this._startYume(aborted)) return;
-        started = true;
-        startedAt = Date.now();
-      } else if (!await this._watchStart(aborted, waited)) {
-        return;
-      }
+      if (r.ok && r.data?.status === 'ready') return;
+      if (!await this._waitStep(r, wait, aborted)) return;
       await new Promise((res) => setTimeout(res, 2000));
     }
+  }
+
+  // One /health answer that is not "ready". False: aborted meanwhile.
+  async _waitStep(r, wait, aborted) {
+    const st = r.data?.status;
+    if (st === 'error') throw new Error(`Whisper could not load its model: ${r.data.error || 'unknown error'}`);
+    const waited = Math.round((Date.now() - wait.since) / 1000);
+    if (st === 'loading') {
+      this._showLoading(waited, wait.started ? START_WAIT_S : HEALTH_WAIT_S);
+      return true;
+    }
+    if (r.status !== 0) throw new Error(r.data?.error || `Server error ${r.status}`);
+    if (wait.started) return this._watchStart(aborted, waited);
+    if (!await this._startYume(aborted)) return false;
+    wait.started = true;
+    wait.since = Date.now();
+    return true;
+  }
+
+  _showLoading(waited, limit) {
+    if (waited > limit) throw new Error('Model loading timed out — restart Yume');
+    this._status(`Loading the speech model... (${waited}s)`, 'loading');
   }
 
   // Ask the native helper to start Yume. False: aborted meanwhile.
@@ -225,54 +236,70 @@ class SubtitleSession {
       path: `/jobs/${this.jobId}`, query: { since: String(this.rev), t: t.toFixed(1) }, timeout: 10000,
     });
     if (gen !== this.generation) return;
+    if (!await this._handlePoll(r)) return;
+    const delay = document.hidden ? POLL_HIDDEN_MS
+      : (this.status === 'done' || !r.ok) ? POLL_IDLE_MS : POLL_ACTIVE_MS;
+    this._schedulePoll(delay, gen);
+  }
+
+  // False: the job failed, polling ends.
+  async _handlePoll(r) {
     if (r.status === 404) {
       // Server restarted, cache cleared or Whisper model switched: start over
       // (the server reloads whatever it already has cached).
-      try { await this._createJob(); } catch (e) { return this._fail(e.message); }
+      try { await this._createJob(); } catch (e) { this._fail(e.message); return false; }
       this._unreachable = 0;
     } else if (r.ok) {
       this._unreachable = 0;
       this._apply(r.data);
-      if (this.status === 'error') return this._fail(this.error);
+      if (this.status === 'error') { this._fail(this.error); return false; }
     } else if (r.status === 0 && ++this._unreachable === 3) {
       // Keep polling: a restarted server answers 404 and the job is recreated
       this._status('Lost contact with the Yume server — retrying...', 'loading');
     }
-    const delay = document.hidden ? POLL_HIDDEN_MS
-      : (this.status === 'done' || !r.ok) ? POLL_IDLE_MS : POLL_ACTIVE_MS;
-    this._schedulePoll(delay, gen);
+    return true;
   }
 
   _apply(snap) {
     this.status = snap.status;
     this.error = snap.error || '';
     this.progress = snap.progress;
-    let changed = false;
-    for (const seg of snap.segments || []) {
-      if (seg.hidden) this.segments.delete(seg.id);
-      else this.segments.set(seg.id, seg);
-      changed = true;
-    }
+    const changed = this._mergeSegments(snap.segments || []);
     this.rev = Math.max(this.rev, snap.rev || 0);
-    // The video sounds like another language than the one picked: a line of
-    // its own, above the subtitles (a status is hidden once lines play, and the
-    // check needs two regions, so it comes after the first lines)
-    if ((snap.notice || '') !== this.notice) {
-      this.notice = snap.notice || '';
-      window.dispatchEvent(new CustomEvent('display-notice', { detail: { message: this.notice } }));
-    }
+    this._showNotice(snap.notice || '');
     if (changed) this._cuesChanged();
     const p = snap.progress || {};
-    window.dispatchEvent(new CustomEvent('chunk-progress', {
-      detail: {
-        done: p.regions_done || 0, total: p.regions_total || 0, complete: snap.status === 'done',
-        lines: p.lines || 0, translated: p.translated || 0, status: snap.status,
-      },
-    }));
+    this._reportProgress(snap.status, p);
     if (!this.cues.length) {
       const [msg, type] = SubtitleSession.waitingMessage(snap.status, p);
       if (msg) this._status(msg, type);
     }
+  }
+
+  // The video sounds like another language than the one picked: a line of
+  // its own, above the subtitles (a status is hidden once lines play, and the
+  // check needs two regions, so it comes after the first lines)
+  _showNotice(notice) {
+    if (notice === this.notice) return;
+    this.notice = notice;
+    window.dispatchEvent(new CustomEvent('display-notice', { detail: { message: notice } }));
+  }
+
+  _mergeSegments(segments) {
+    for (const seg of segments) {
+      if (seg.hidden) this.segments.delete(seg.id);
+      else this.segments.set(seg.id, seg);
+    }
+    return segments.length > 0;
+  }
+
+  _reportProgress(status, p) {
+    window.dispatchEvent(new CustomEvent('chunk-progress', {
+      detail: {
+        done: p.regions_done || 0, total: p.regions_total || 0, complete: status === 'done',
+        lines: p.lines || 0, translated: p.translated || 0, status,
+      },
+    }));
   }
 
   _cuesChanged() {
@@ -321,15 +348,7 @@ class SubtitleSession {
     if (!this.video || !this.active) return;
     // + = later: a +1 s offset shows each line 1 s after Whisper's timestamp,
     // so the lookup happens 1 s back in the track
-    const t = this.video.currentTime - this.timingOffset;
-    const cue = SubtitleSession.cueAt(this.cues, t);
-    // Show a cue only within its own span; the newest started cue wins, so a
-    // long Whisper segment is cut off when the next line starts.
-    let show = cue && t < cue.end ? cue : null;
-    // Short grace after a line ends so it stays readable — only while playback
-    // is still inside/just after it (not after a seek away) and it still exists.
-    const prev = this.current && this.segments.get(this.current.id);
-    if (!show && prev && t >= prev.start && t < prev.end + 1.0) show = prev;
+    const show = this._cueToShow(this.video.currentTime - this.timingOffset);
     if (!force && show === this.current) return;
     this.current = show;
     window.dispatchEvent(new CustomEvent('display-subtitle', {
@@ -337,6 +356,17 @@ class SubtitleSession {
         ? { original: show.text, english: show.translation, romaji: show.romaji, confidence: show.confidence }
         : { original: '', english: '', romaji: '' },
     }));
+  }
+
+  _cueToShow(t) {
+    const cue = SubtitleSession.cueAt(this.cues, t);
+    // Show a cue only within its own span; the newest started cue wins, so a
+    // long Whisper segment is cut off when the next line starts.
+    if (cue && t < cue.end) return cue;
+    // Short grace after a line ends so it stays readable — only while playback
+    // is still inside/just after it (not after a seek away) and it still exists.
+    const prev = this.current && this.segments.get(this.current.id);
+    return prev && t >= prev.start && t < prev.end + 1.0 ? prev : null;
   }
 
   // ── popup helpers ──────────────────────────────────────────────────────
@@ -385,14 +415,9 @@ class SubtitleSession {
   // re-download and re-transcribe.
   static videoId(video) {
     const loc = window.location;
-    const host = loc.hostname.replace(/^(www|m|music)\./, '');
     const params = new URLSearchParams(loc.search);
-    if (host === 'youtube.com' || host === 'youtube-nocookie.com' || host === 'youtu.be') {
-      if (params.get('v')) return params.get('v');
-      // /shorts/ID, /live/ID, /embed/ID, youtu.be/ID: the same video as watch?v=ID (same cache)
-      const m = loc.pathname.match(host === 'youtu.be' ? /^\/([\w-]{11})/ : /^\/(?:shorts|live|embed)\/([\w-]{11})/);
-      if (m) return m[1];
-    }
+    const youtube = SubtitleSession.youtubeId(loc, params);
+    if (youtube) return youtube;
     for (const k of [...params.keys()]) {
       if (/^(utm_.*|t|time|start|ref|si|feature|fbclid|gclid|list|index|pp)$/.test(k)) params.delete(k);
     }
@@ -401,6 +426,15 @@ class SubtitleSession {
     const v = video || document.querySelector('video');
     const dur = Number.isFinite(v?.duration) ? Math.round(v.duration) : '';
     return `${loc.hostname}${loc.pathname}${query ? '?' + query : ''}#${dur}`.slice(0, 200);
+  }
+
+  static youtubeId(loc, params) {
+    const host = loc.hostname.replace(/^(www|m|music)\./, '');
+    if (host !== 'youtube.com' && host !== 'youtube-nocookie.com' && host !== 'youtu.be') return null;
+    if (params.get('v')) return params.get('v');
+    // /shorts/ID, /live/ID, /embed/ID, youtu.be/ID: the same video as watch?v=ID (same cache)
+    const m = loc.pathname.match(host === 'youtu.be' ? /^\/([\w-]{11})/ : /^\/(?:shorts|live|embed)\/([\w-]{11})/);
+    return m ? m[1] : null;
   }
 }
 

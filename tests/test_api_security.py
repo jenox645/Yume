@@ -4,7 +4,7 @@ check (DNS rebinding), the API token, CORS for extension origins only, and what
 
 The unit tests call the routes as plain functions with a stub Flask, so the
 before/after-request hooks never ran in them. These run the real app with
-Flask's test client, in a child process: test_server_modules replaces `flask`
+Flask's test client, in a child process: server_stubs replaces `flask`
 with a stub for the rest of the session.
 """
 

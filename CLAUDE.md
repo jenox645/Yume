@@ -24,9 +24,9 @@ CodeRabbit is on the **free tier** (rate-limited, weaker than the trial) — do 
 
 ```bash
 pytest tests/ -v                         # Run all tests
-pytest tests/test_pipeline.py -v         # Server pipeline (fake Whisper + fake LLM)
+pytest tests/test_pipeline.py -v         # Whole server jobs (fake Whisper + fake LLM from tests/pipeline_fakes.py)
 pytest tests/test_integration.py -v      # Cross-file invariants
-pytest tests/test_server_modules.py -v   # Server module unit tests
+pytest tests/test_translator.py -v       # One topic: also test_line_cleaning, test_filter, test_regions, test_ytdlp...
 
 ruff check .                             # Lint
 ruff check --fix .                       # Auto-fix lint violations
