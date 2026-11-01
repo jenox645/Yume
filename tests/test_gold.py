@@ -61,3 +61,17 @@ def test_captions_join_their_lines_and_drop_repeats():
 def test_a_lyric_line_ends_where_the_next_starts_or_soon_after():
     lrc = "[00:10.50]one\n[00:12.00]\n[00:15.00]two\n[01:00.00]three"
     assert gold.parse_lrc(lrc, 70) == [(10.5, 12.0, "one"), (15.0, 27.0, "two"), (60.0, 70, "three")]
+
+
+def test_chrf_rewards_the_same_words_and_ignores_line_cuts():
+    import mt
+
+    assert mt.chrf("the cat sat", "the cat sat") == pytest.approx(100)
+    assert mt.chrf("the cat sat on it", "the  cat sat  on it") == pytest.approx(100)
+    assert mt.chrf("the cat sat", "the cat") > mt.chrf("dogs ran off", "the cat")
+
+
+def test_a_name_is_capitalised_inside_a_sentence():
+    import mt
+
+    assert mt.names_in("The tsar met Boris and then Godunov, and I left.") == {"Boris", "Godunov"}

@@ -142,6 +142,8 @@ Smaller models are faster at the cost of accuracy — a 3B translation model, or
 
 | Model | Size | Speed | Quality | Best for |
 |-------|------|-------|---------|----------|
+| **Hy-MT2-7B-Q4** | 4.6 GB | Medium | Best in our tests | **Recommended** |
+| Hy-MT2-1.8B-Q4 | 1.1 GB | Very fast | Very good | Small cards, quieter fans |
 | Qwen2.5-3B-Q6 | ~2.5 GB | Fast | Good | Low VRAM, faster subtitles |
 | Mistral-7B-Q4 | ~4.5 GB | Medium | Very good | General use |
 | Qwen2.5-7B-Q4 | ~4.5 GB | Medium | Very good | CJK languages |

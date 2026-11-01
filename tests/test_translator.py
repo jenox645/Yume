@@ -369,3 +369,87 @@ def test_a_batch_cannot_generate_far_past_what_it_needs():
     t = T(lambda: {"host": "h", "port": 1, "backend": "llamacpp", "model": "", "prompt": "", "roma_prompt": ""})
     t.translate_batch(["Сначала маршрут разминирует." * 2] * 10, "ru", "English")
     assert asked[0] < 1100  # it was 2800: the batches that ran away reached 2500 tokens
+
+
+def _dedicated(prompt=""):
+    tr = _translator()
+    settings = tr._settings
+    tr._settings = lambda: {**settings(), "model": "Hy-MT2-7B-Q4_K_M.gguf", "prompt": prompt}
+    calls = []
+
+    def fake_chat(messages, max_tokens, response_format=None, temperature=0.1, sampling=None):
+        calls.append({"messages": messages, "format": response_format, "sampling": sampling})
+        return "line"
+
+    return tr, calls, fake_chat
+
+
+def test_a_dedicated_model_gets_each_line_alone_with_its_own_settings():
+    tr, calls, fake = _dedicated()
+    with patch.object(tr, "_chat", side_effect=fake):
+        assert tr.translate_batch(["一行目", "二行目", "三行目"], "ja", "English") == ["line"] * 3
+    assert len(calls) == 3
+    assert all(c["format"] is None and c["sampling"]["top_k"] == 20 for c in calls)
+    assert all([m["role"] for m in c["messages"]] == ["user"] for c in calls)
+
+
+def test_a_line_sees_its_neighbours_only_as_background():
+    tr, calls, fake = _dedicated()
+    with patch.object(tr, "_chat", side_effect=fake):
+        tr.translate_batch(["一行目", "二行目", "三行目"], "ja", "English", "題名", [("前の行", "before")])
+    prompt = calls[1]["messages"][0]["content"]
+    background, source = prompt.split("[Source Text]")
+    assert source.strip() == "二行目"
+    assert all(t in background for t in ("Video title: 題名", "前の行", "一行目", "三行目"))
+
+
+def test_the_first_line_of_a_video_has_no_empty_background():
+    tr, calls, fake = _dedicated()
+    with patch.object(tr, "_chat", side_effect=fake):
+        tr.translate_batch(["一行目"], "ja", "English")
+    assert "[Background Information]" not in calls[0]["messages"][0]["content"]
+
+
+def test_a_custom_prompt_keeps_the_ordinary_route():
+    tr, calls, _ = _dedicated(prompt="Translate {src} to {tgt}.")
+
+    def fake(messages, max_tokens, response_format=None, temperature=0.1, sampling=None):
+        calls.append(messages)
+        return json.dumps({"translations": ["Hello", "World"]})
+
+    with patch.object(tr, "_chat", side_effect=fake):
+        assert tr.translate_batch(["一行目", "二行目"], "ja", "English") == ["Hello", "World"]
+    assert len(calls) == 1 and calls[0][0]["role"] == "system"
+
+
+def test_a_cjk_leak_from_a_dedicated_model_is_retried():
+    tr, calls, _ = _dedicated()
+    replies = iter(["smile in拉斯", "smile in Las Vegas"])
+    with patch.object(tr, "_chat", side_effect=lambda *a, **k: next(replies)):
+        assert tr.translate_batch(["ラスベガスで笑顔"], "ja", "English") == ["smile in Las Vegas"]
+
+
+@pytest.mark.parametrize(("backend", "sent"), [("llamacpp", True), ("ollama", False)])
+def test_thinking_is_turned_off_where_the_server_understands_it(backend, sent):
+    tr = _translator()
+    settings = tr._settings
+    tr._settings = lambda: {**settings(), "backend": backend}
+    seen = {}
+
+    class Reply:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": "x"}}]}).encode()
+
+    def urlopen(request, timeout=None):
+        seen.update(json.loads(request.data))
+        return Reply()
+
+    with patch.object(urllib.request, "urlopen", urlopen):
+        tr._chat([{"role": "user", "content": "x"}], 10)
+    assert ("chat_template_kwargs" in seen) is sent

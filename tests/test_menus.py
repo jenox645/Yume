@@ -356,7 +356,7 @@ def test_hf_recommends_the_largest_q4_that_fits_and_downloads_it():
     assert "★ recommended" in labels[default] and labels[default].startswith("qwen-q4_k_m.gguf")
     assert "too large" in labels[-2]  # the 15 GB f16, both parts as one entry
     assert "2 files" in labels[-2]
-    assert r.downloads == [("Qwen/Qwen2.5-7B-Instruct-GGUF", "qwen-q4_k_m.gguf", "b")]
+    assert r.downloads == [("tencent/Hy-MT2-7B-GGUF", "qwen-q4_k_m.gguf", "b")]
     assert cfg["gguf_model_path"].endswith("qwen-q4_k_m.gguf") and cfg["translation_model"] == "qwen-q4_k_m.gguf"
 
 

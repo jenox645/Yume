@@ -26,7 +26,9 @@ from yume.ui import (
 
 # Curated starting points — a pick list, so nothing needs to be retyped
 _HF_RECOMMENDED_REPOS = [
-    ("Qwen/Qwen2.5-7B-Instruct-GGUF", "Best quality/VRAM balance for JP→EN — ~4.4 GB in Q4_K_M"),
+    ("tencent/Hy-MT2-7B-GGUF", "Best translations in Yume's tests, as fast as Qwen2.5-7B — 4.6 GB in Q4_K_M"),
+    ("tencent/Hy-MT2-1.8B-GGUF", "Small cards and quiet fans: 2.5x faster, close in quality — 1.1 GB in Q4_K_M"),
+    ("Qwen/Qwen2.5-7B-Instruct-GGUF", "General model: keeps custom prompts — ~4.4 GB in Q4_K_M"),
     ("Qwen/Qwen2.5-14B-Instruct-GGUF", "Noticeably better translations — ~8.7 GB in Q4_K_M"),
     ("Qwen/Qwen2.5-3B-Instruct-GGUF", "Light — for CPU mode or small GPUs, ~2 GB in Q4_K_M"),
     ("bartowski/gemma-2-9b-it-GGUF", "Google Gemma 2 alternative — ~5.8 GB in Q4_K_M"),

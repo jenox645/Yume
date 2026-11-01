@@ -120,7 +120,9 @@ def _guide_models(cfg: dict) -> None:
     info(f"{C.DIM}Switch any time: Settings → Whisper settings, or live from the runtime menu.{C.RESET}")
 
     section("Translation model (GGUF) — quality vs. VRAM")
-    bullet(f"7B  Q4_K_M  ~4.4 GB → fits {C.GREEN}6 GB{C.RESET} VRAM  {C.DIM}(good default: Qwen2.5-7B){C.RESET}")
+    bullet(f"Hy-MT2-7B   Q4_K_M 4.6 GB → fits {C.GREEN}8 GB{C.RESET} VRAM  {C.DIM}(best in Yume's tests){C.RESET}")
+    bullet(f"Hy-MT2-1.8B Q4_K_M 1.1 GB → fits {C.GREEN}4 GB{C.RESET} VRAM  {C.DIM}(2.5x faster, quieter){C.RESET}")
+    bullet(f"7B  Q4_K_M  ~4.4 GB → fits {C.GREEN}6 GB{C.RESET} VRAM  {C.DIM}(general: Qwen2.5-7B){C.RESET}")
     bullet(f"7B  Q8_0    ~7.7 GB → needs {C.YELLOW}8 GB{C.RESET} VRAM  {C.DIM}(slightly better, 2x size){C.RESET}")
     bullet(
         f"14B Q4_K_M  ~8.7 GB → needs {C.YELLOW}10 GB{C.RESET} VRAM  {C.DIM}(noticeably better translations){C.RESET}"
