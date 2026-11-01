@@ -33,6 +33,7 @@ def ytdlp_exe(monkeypatch, tmp_path):
     exe = tmp_path / "yt-dlp"
     exe.write_text("")
     monkeypatch.setattr(_startup.shutil, "which", lambda name: str(exe))
+    monkeypatch.setattr(_startup._ytdlp, "bundled_ytdlp", lambda: None)
     monkeypatch.setattr(_state, "youtube_auth_method", "cookies")
     return exe
 

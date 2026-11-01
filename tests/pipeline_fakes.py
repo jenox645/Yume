@@ -85,6 +85,8 @@ def pipeline_env(tmp_path):
         w.setframerate(SR)
         w.writeframes((_tone_with_gaps(95) * 32767).astype(np.int16).tobytes())
     saved = (_state.model, _state.store, _state.jobs, _state.user_blacklist, _state.vocal_isolation)
+    saved_ahead = _job.AHEAD_HIGH_S
+    _job.AHEAD_HIGH_S = 10_000  # the fake job has no viewer moving the playhead: run it to the end
     _state.vocal_isolation = False  # never a real separator (or a torch import) in tests
     _state.model = _FakeModel()
     _state.store = _store.Store(tmp_path / "c.db")
@@ -108,6 +110,7 @@ def pipeline_env(tmp_path):
     time.sleep(0.2)  # let a worker mid-region finish before the store closes
     _state.store.close()
     _state.model, _state.store, _state.jobs, _state.user_blacklist, _state.vocal_isolation = saved
+    _job.AHEAD_HIGH_S = saved_ahead
 
 
 def _run(jobs, job, timeout=20, playhead=0):

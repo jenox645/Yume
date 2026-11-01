@@ -584,6 +584,7 @@ const scenarios = {
 
   async 'blacklist'() {
     await seek(200);
+    await sleep(700);  // the line under the old position stays until the page's seek lands
     await firstLine(A, 40);
     const exportBefore = parseSrt((await toTab({ action: 'EXPORT_SRT' })).content);
     let shown = '';

@@ -215,7 +215,7 @@ def print_startup_banner(args):
     threading.Thread(target=_check_tool_versions, daemon=True).start()
 
 
-YTDLP_MAX_AGE_DAYS = 30
+YTDLP_MAX_AGE_DAYS = 1  # stable releases are weeks apart; YouTube changes are fixed within days
 
 
 def maybe_update_ytdlp(version):
@@ -224,7 +224,7 @@ def maybe_update_ytdlp(version):
     pip installs (Deno auth) are left to the CLI, which is told so. Returns the
     version to show."""
     age = _release_age(version)
-    exe = shutil.which("yt-dlp")
+    exe = _ytdlp.bundled_ytdlp() or shutil.which("yt-dlp")
     if age is None or age <= YTDLP_MAX_AGE_DAYS:
         return version
     if _state.youtube_auth_method == "deno":

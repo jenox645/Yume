@@ -134,6 +134,76 @@ def test_a_video_left_during_its_download_is_not_separated(pipeline):
     assert pipeline.jobs.get(job.id) is None and job.key not in pipeline.jobs.by_key
 
 
+def test_a_video_with_a_preview_gets_its_category_too(pipeline):
+    job = _job.Job(("v", "ar", "", "m"), {"language": "ar", "url": "https://x/a"})
+    job.isolate = True
+    with (
+        patch.object(_stream, "get_stream_url") as url,
+        patch.object(_stream, "download_audio_segment", return_value=None) as seg,
+    ):
+        pipeline.jobs._start_preview(job, {})
+        for t in threading.enumerate():
+            if t.name.startswith("preview-"):
+                t.join(timeout=5)
+    url.assert_called_once()
+    seg.assert_called_once()
+    assert not job.category_wanted and job.preview_started == 0.0
+
+
+def _regions_job(count, playhead=0.0):
+    job = _job.Job(("v", "ja", "", "m"), {"language": "ja", "playhead": playhead})
+    job.regions = [(i * 25.0, (i + 1) * 25.0) for i in range(count)]
+    job.region_state = ["pending"] * count
+    return job
+
+
+def test_work_rests_once_enough_is_ready_ahead_of_the_viewer(monkeypatch):
+    monkeypatch.setattr(_job, "AHEAD_HIGH_S", 80)
+    job = _regions_job(20)
+    picked = []
+    while (idx := job.next_region(time.time())) is not None:
+        job.region_state[idx] = "done"
+        picked.append(idx)
+    assert picked == [0, 1, 2, 3]  # 100 s ready: past the high mark
+
+    job.playhead = 30.0  # 70 s left: above the low mark, still resting
+    assert job.next_region(time.time()) is None
+    job.playhead = 65.0  # 35 s left: back to work
+    assert job.next_region(time.time()) == 4
+
+
+def test_skipped_regions_cost_no_gpu(monkeypatch):
+    monkeypatch.setattr(_job, "AHEAD_HIGH_S", 80)
+    job = _regions_job(20, playhead=250.0)
+    picked = []
+    while (idx := job.next_region(time.time())) is not None:
+        job.region_state[idx] = "done"
+        picked.append(idx)
+    assert picked == [10, 11, 12, 13]
+
+
+def test_a_jump_past_what_is_ready_works_at_once(monkeypatch):
+    monkeypatch.setattr(_job, "AHEAD_HIGH_S", 80)
+    job = _regions_job(20)
+    job.resting = True
+    job.playhead = 300.0
+    assert job.next_region(time.time()) == 12
+
+
+def test_a_preview_at_the_playhead_never_becomes_region_0(pipeline):
+    job = _job.Job(("v", "ko", "", "m"), {"language": "ko", "playhead": 600.0})
+    with pipeline.jobs.lock:
+        pipeline.jobs.jobs[job.id] = job
+    pipeline.jobs._preview_heard(job, [{"start": 601.0, "end": 603.0, "text": "뉴스입니다", "confidence": 1}], 600.0)
+    assert job.regions == [(600.0, 630.0)]
+    assert [s["text"] for s in job.segments.values()] == ["뉴스입니다"]
+    with job.lock:
+        job.set_regions([(0.0, 25.0), (600.0, 625.0)], {})
+        pipeline.jobs._adopt_preview(job)
+    assert job.region_state == ["pending", "pending"]  # nothing marked done, nothing cached under region 0
+    assert _state.store.get_transcripts("v", "ko", "m") == {}
+
+
 def test_blacklist_edit_hides_lines_incrementally(pipeline):
     job = pipeline.jobs.create(PARAMS)
     snap = _run(pipeline.jobs, job)
@@ -306,6 +376,7 @@ def test_old_ytdlp_self_updates_once_a_day(tmp_path, monkeypatch):
     sys.argv = ["server"]
     import _startup
 
+    monkeypatch.setattr(_startup._ytdlp, "bundled_ytdlp", lambda: None)
     exe = tmp_path / "yt-dlp.exe"
     exe.write_bytes(b"")
     calls = []
@@ -411,11 +482,10 @@ def test_videos_filed_as_talk_are_not_separated(pipeline, category, separated):
 
 @pytest.mark.parametrize(("isolate", "looked_up"), [(True, 1), (False, 0)])
 def test_a_video_with_no_preview_still_gets_its_category(pipeline, isolate, looked_up):
-    # Yume starting takes ~35 s: the playhead is then past the preview's 30 s
     job = _job.Job(("v", "ar", "", "m"), {"language": "ar", "url": "https://x/a", "playhead": 40})
     job.isolate = isolate
     with patch.object(_stream, "get_stream_url") as url:
-        pipeline.jobs._start_preview(job, {})
+        pipeline.jobs._start_preview(job, {(25.0, 50.0): []})  # the region at the playhead is cached
         for t in threading.enumerate():
             if t.name.startswith("preview-"):
                 t.join(timeout=5)

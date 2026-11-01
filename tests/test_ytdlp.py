@@ -31,8 +31,13 @@ class TestYtdlpCmd(unittest.TestCase):
 
     def test_default_mode_returns_yt_dlp(self):
         _state.youtube_auth_method = "cookies"
-        cmd = _ytdlp.ytdlp_cmd()
-        self.assertEqual(cmd, ["yt-dlp"])
+        with patch.object(_ytdlp, "bundled_ytdlp", return_value=None):
+            self.assertEqual(_ytdlp.ytdlp_cmd(), ["yt-dlp"])
+
+    def test_default_mode_prefers_yumes_own_copy_by_full_path(self):
+        _state.youtube_auth_method = "cookies"
+        with patch.object(_ytdlp, "bundled_ytdlp", return_value="C:/yume/tools/yt-dlp.exe"):
+            self.assertEqual(_ytdlp.ytdlp_cmd(), ["C:/yume/tools/yt-dlp.exe"])
 
     def test_deno_mode_uses_python_module(self):
         _state.youtube_auth_method = "deno"

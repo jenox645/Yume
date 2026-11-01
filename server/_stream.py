@@ -1,16 +1,13 @@
 """A video's stream: its URL, cached so yt-dlp does not run for every region,
-and single segments cut from it. The stream preview and streamed regions use
-these; a full download goes through _download.
+and single segments read from a download. The stream preview and streamed
+regions use these; a full download goes through _download.
 """
 
-import http.client
 import os
 import shutil
 import subprocess
 import tempfile
 import time
-import urllib.request
-from urllib.parse import urlparse
 
 import _state
 import _ytdlp
@@ -18,6 +15,8 @@ from _security import validate_url
 
 
 _WAV_16K_MONO = ("-ar", "16000", "-ac", "1", "-f", "wav")
+_WAV_HEADER = 78  # ffmpeg's, with nothing after it when the download gave no audio
+PIPE_TIMEOUT_S = 60
 
 
 def _is_valid(url):
@@ -118,7 +117,11 @@ def _resolve_stream_url(url):
 
 
 def download_audio_segment(url, start_time, duration):
-    """Download a specific time segment using yt-dlp + ffmpeg (stream URL cached)."""
+    """A stretch of the audio, read from an ordinary download through a pipe: yt-dlp
+    writes the file from its start, ffmpeg keeps the part asked for, and closing the
+    pipe ends the download. 30 s took 4-11 s, also at 10:00 and 20:00, on 8 videos of
+    8. It replaced fetching the stream by byte range, which stopped at about 900 KB
+    and failed on 3 tries in 8, and ffmpeg seeking in the stream, which failed always."""
     if not _is_valid(url):
         return None
 
@@ -129,9 +132,7 @@ def download_audio_segment(url, start_time, duration):
 
     path = None
     try:
-        path = _segment_from_stream(url, start_time, duration, output_path) or _download_audio_segment_fallback(
-            url, start_time, duration, output_path
-        )
+        path = _pipe_segment(url, start_time, duration, output_path)
     except subprocess.TimeoutExpired:
         print("[Yume] Download timed out")
     except Exception as e:
@@ -141,98 +142,25 @@ def download_audio_segment(url, start_time, duration):
     return path
 
 
-def _segment_from_stream(url, start_time, duration, output_path):
-    """The segment cut from the stream, or None: use the fallback."""
-    stream_url = get_stream_url(url)
-    if stream_url is None:
-        return None
-    if not validate_url(stream_url)[0]:
-        print("[Yume] Invalid stream URL from yt-dlp, using fallback")
-        _forget_stream_url(url)
-        return None
-    if start_time == 0 and _fetch_stream_start(stream_url, duration, output_path):
-        return output_path
-    if _ffmpeg_segment(stream_url, start_time, duration, output_path):
-        return output_path
-    _forget_stream_url(url)
-    return None
-
-
-def _ffmpeg_segment(stream_url, start_time, duration, output_path):
-    print(f"[Yume] Extracting {duration}s from {start_time}s via ffmpeg...")
-    cmd = [
-        "ffmpeg", "-protocol_whitelist", _state.FFMPEG_PROTOCOL_WHITELIST, "-ss", str(start_time),
-        "-i", stream_url, "-t", str(duration), *_WAV_16K_MONO, "-y", output_path,
+def _pipe_segment(url, start_time, duration, output_path):
+    print(f"[Yume] Reading {duration}s from {start_time:.0f}s of the download...")
+    ytdlp = [
+        *_ytdlp.ytdlp_cmd(), "--quiet", "--no-warnings", "--format", "bestaudio/best", "--no-playlist",
+        "--output", "-", "--", url,
     ]  # fmt: skip
-    result = subprocess.run(cmd, capture_output=True, timeout=60)
-    if result.returncode == 0 and os.path.exists(output_path):
-        size = os.path.getsize(output_path)
-        print(f"[Yume] Audio segment downloaded: {size / 1024:.1f} KB")
-        return True
-    err_msg = result.stderr[-200:] if result.stderr else b""
-    print(f"[Yume] ffmpeg failed: {err_msg.decode('utf-8', errors='ignore')}")
-    return False
-
-
-# 200 kbps: more than audio-only YouTube streams use (251 is ~110-160). YouTube
-# answers 403 to a range above roughly 800-950 KB, so 30 s must stay under that.
-_STREAM_BYTES_PER_S = 25_000
-
-
-def _fetch_stream_start(stream_url, duration, output_path):
-    """The first `duration` seconds of a YouTube stream, as yt-dlp's own
-    downloader fetches it: by byte range. ffmpeg asking for the whole URL gets
-    403 Forbidden, and so does yt-dlp's --download-sections, which runs ffmpeg:
-    the preview failed on 3 videos out of 5 and subtitles waited 33-70 s for the
-    full download. False: use another way."""
-    if not (urlparse(stream_url).hostname or "").endswith(".googlevideo.com"):
-        return False
-    size = int(duration * _STREAM_BYTES_PER_S)
-    part = output_path + ".part"
+    # After -i: ffmpeg decodes up to the start, it does not seek in the stream
+    ffmpeg = [
+        "ffmpeg", "-y", "-loglevel", "error", "-i", "pipe:0", "-ss", str(start_time), "-t", str(duration),
+        *_WAV_16K_MONO, output_path,
+    ]  # fmt: skip
+    download = subprocess.Popen(ytdlp, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     try:
-        req = urllib.request.Request(f"{stream_url}&range=0-{size}", headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=20) as resp:  # nosec B310 — https, checked by validate_url
-            data = resp.read(size + 1)
-        with open(part, "wb") as f:
-            f.write(data)
-        result = subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-i", part, "-t", str(duration), *_WAV_16K_MONO, output_path],
-            capture_output=True,
-            timeout=30,
-        )
-    except (OSError, http.client.HTTPException, subprocess.TimeoutExpired) as e:  # urllib's errors are OSErrors
-        print(f"[Yume] Could not fetch the start of the stream: {e}")
-        return False
+        result = subprocess.run(ffmpeg, stdin=download.stdout, capture_output=True, timeout=PIPE_TIMEOUT_S)
     finally:
-        if os.path.exists(part):
-            os.remove(part)
-    return result.returncode == 0 and os.path.exists(output_path)
-
-
-def _download_audio_segment_fallback(url, start_time, duration, output_path, _retry=True):
-    """Fallback: use yt-dlp --download-sections directly."""
-    try:
-        print("[Yume] Using yt-dlp fallback download method...")
-        tmp_template = output_path.replace(".wav", ".%(ext)s")
-        auth_args = _ytdlp.build_auth_args(url)
-
-        cmd = [
-            *_ytdlp.ytdlp_cmd(), "--download-sections", f"*{start_time}-{start_time + duration}",
-            "--force-keyframes-at-cuts", "-x", "--audio-format", "wav",
-            "--postprocessor-args", _state.FFMPEG_AUDIO_OPTS, "--no-playlist", "--no-exec", *auth_args,
-            "-o", tmp_template, "--", url,
-        ]  # fmt: skip
-        result = subprocess.run(cmd, capture_output=True, timeout=90)
-
-        if result.returncode == 0 and os.path.exists(output_path):
-            return output_path
-
-        stderr = (result.stderr or b"").decode("utf-8", errors="replace")
-        if _retry and auth_args and _ytdlp.note_cookie_failure(stderr):
-            return _download_audio_segment_fallback(url, start_time, duration, output_path, _retry=False)
-        print(f"[Yume] Fallback also failed: {stderr[-200:]}")
-        return None
-
-    except Exception as e:
-        print(f"[Yume] Fallback error: {e}")
-        return None
+        download.stdout.close()
+        download.terminate()
+        download.wait(timeout=10)
+    if result.returncode == 0 and os.path.getsize(output_path) > _WAV_HEADER:
+        return output_path
+    print(f"[Yume] Could not read the download: {result.stderr[-200:].decode('utf-8', 'replace')}")
+    return None

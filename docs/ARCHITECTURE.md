@@ -54,7 +54,7 @@ from a content script and an MV3 service worker; see "Why server-side" below.)
      and model, the job is done immediately — no download.
    - **Download** the full audio once (`_download.download_full_audio`, several
      yt-dlp auth strategies, ffmpeg fallback; `download_direct` for a custom
-     stream URL). Meanwhile a **stream preview** transcribes the first 30 s
+     stream URL). Meanwhile a **stream preview** transcribes the 30 s at the playhead
      straight from the stream so subtitles start before the download ends.
      The request carries the playhead (`t`): a video resumed later skips it.
    - **Separate the vocals** (`_separate`, optional): with PyTorch (CUDA) +

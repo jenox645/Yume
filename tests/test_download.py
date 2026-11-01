@@ -107,8 +107,10 @@ def test_auth_errors_skip_to_the_next_strategy(monkeypatch):
     tools = Tools(monkeypatch, ytdlp=lambda cmd: (1, "ERROR: Sign in to confirm you're not a bot", False))
     path, err = _download.download_full_audio(YT)
     assert path is None
-    # cookies+default, cookies+tv,web, cookies+mweb, no-auth: one format pass each
-    assert [_fmt(c) for c in tools.ytdlp_calls()] == ["bestaudio"] * 4
+    # no-auth, cookies, then once more: one format pass each
+    assert [_fmt(c) for c in tools.ytdlp_calls()] == ["bestaudio"] * 3
+    assert "--cookies-from-browser" not in tools.ytdlp_calls()[0] and "--cookies-from-browser" in tools.ytdlp_calls()[1]
+    assert not any("player_client" in a for c in tools.ytdlp_calls() for a in c)
     assert "sign-in" in err.lower()
 
 
@@ -116,7 +118,7 @@ def test_other_errors_try_both_format_passes(monkeypatch, no_auth):
     tools = Tools(monkeypatch, ytdlp=lambda cmd: (1, "ERROR: something odd", False))
     path, err = _download.download_full_audio(YT)
     assert path is None
-    assert [_fmt(c) for c in tools.ytdlp_calls()] == ["bestaudio", "nofmt"]
+    assert [_fmt(c) for c in tools.ytdlp_calls()] == ["bestaudio", "nofmt"] * 2  # no-auth, once more
     assert err == "something odd"
 
 
@@ -190,7 +192,7 @@ def test_a_ytdlp_that_cannot_start_counts_as_a_failed_attempt(monkeypatch, no_au
     tools = Tools(monkeypatch, ytdlp=ytdlp, stream_url=None)
     path, err = _download.download_full_audio(YT)
     assert path is None and err == "yt-dlp error: no yt-dlp"
-    assert [_fmt(c) for c in tools.ytdlp_calls()] == ["bestaudio", "nofmt"]
+    assert [_fmt(c) for c in tools.ytdlp_calls()] == ["bestaudio", "nofmt"] * 2  # no-auth, once more
 
 
 def test_no_yt_dlp_is_said_plainly(monkeypatch, no_auth):

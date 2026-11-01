@@ -12,7 +12,6 @@ import tempfile
 import time
 import types
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -229,148 +228,68 @@ def seg_dir(monkeypatch, tmp_path):
     return made
 
 
-def _ffmpeg_writes(monkeypatch, returncode=0, stderr=b"", calls=None):
-    def run(cmd, **kw):
-        if calls is not None:
-            calls.append(cmd)
-        if returncode == 0:
-            Path(cmd[-1]).write_bytes(b"x" * 2048)
-        return types.SimpleNamespace(returncode=returncode, stderr=stderr, stdout=b"")
+class _Download:
+    """What Popen gives for yt-dlp."""
 
+    def __init__(self):
+        self.stdout = types.SimpleNamespace(close=lambda: None)
+        self.stopped = False
+
+    def terminate(self):
+        self.stopped = True
+
+    def wait(self, timeout=None):
+        return 0
+
+
+def _pipe(monkeypatch, returncode=0, audio=b"x" * 1000, error=None):
+    """Fake the two processes of a segment; returns what they were asked."""
+    seen = types.SimpleNamespace(ytdlp=None, ffmpeg=None, download=_Download())
+
+    def popen(cmd, **kw):
+        seen.ytdlp = cmd
+        return seen.download
+
+    def run(cmd, **kw):
+        seen.ffmpeg = cmd
+        if error:
+            raise error
+        Path(cmd[-1]).write_bytes(audio)
+        return _reply(returncode=returncode, stderr=b"broken")
+
+    monkeypatch.setattr(_stream.subprocess, "Popen", popen)
     monkeypatch.setattr(_stream.subprocess, "run", run)
+    return seen
 
 
 def test_an_invalid_url_never_makes_a_temp_dir(seg_dir):
-    assert _stream.download_audio_segment("file:///etc/passwd", 0, 25) is None
-    assert seg_dir == []
+    assert _stream.download_audio_segment("file:///etc/passwd", 0, 30) is None
+    assert not any(Path(d).exists() for d in seg_dir)
 
 
-def test_no_stream_url_uses_the_fallback_in_a_yume_dir(monkeypatch, seg_dir):
-    monkeypatch.setattr(_stream, "get_stream_url", lambda url: None)
-    with patch.object(_stream, "_download_audio_segment_fallback", return_value="seg.wav") as fb:
-        assert _stream.download_audio_segment(YT, 60, 25) == "seg.wav"
-    url, start, duration, out = fb.call_args.args
-    assert (url, start, duration) == (YT, 60, 25)
-    assert Path(out).name == "segment.wav" and Path(out).parent.name.startswith("yume_")
-    assert os.path.isdir(seg_dir[0])  # the caller's remove_temp deletes it
+def test_a_segment_is_read_from_one_ordinary_download(monkeypatch, seg_dir):
+    seen = _pipe(monkeypatch)
+    path = _stream.download_audio_segment("https://www.youtube.com/watch?v=abc", 600, 30)
+    assert Path(path).parent.name.startswith("yume_")
+    assert seen.ytdlp[seen.ytdlp.index("--output") + 1] == "-" and seen.ytdlp[-2:] == [
+        "--",
+        "https://www.youtube.com/watch?v=abc",
+    ]
+    assert not any("download-sections" in a or "range=" in a for a in seen.ytdlp)
+    # ffmpeg decodes up to the start: -ss after the input, not a seek in the stream
+    assert seen.ffmpeg.index("-i") < seen.ffmpeg.index("-ss") and seen.ffmpeg[seen.ffmpeg.index("-ss") + 1] == "600"
+    assert seen.download.stopped  # the download ends with the segment
 
 
-def test_a_fallback_that_fails_removes_the_temp_dir(monkeypatch, seg_dir):
-    monkeypatch.setattr(_stream, "get_stream_url", lambda url: None)
-    with patch.object(_stream, "_download_audio_segment_fallback", return_value=None):
-        assert _stream.download_audio_segment(YT, 60, 25) is None
-    assert not os.path.exists(seg_dir[0])
+@pytest.mark.parametrize("kw", [{"returncode": 1}, {"audio": b"x" * 78}])
+def test_a_segment_without_audio_cleans_up(monkeypatch, seg_dir, kw):
+    seen = _pipe(monkeypatch, **kw)
+    assert _stream.download_audio_segment("https://www.youtube.com/watch?v=abc", 0, 30) is None
+    assert not any(Path(d).exists() for d in seg_dir) and seen.download.stopped
 
 
-def test_an_invalid_stream_url_is_forgotten_and_the_fallback_runs(monkeypatch, seg_dir):
-    _state.stream_url_cache[YT] = {"stream_url": "file:///x", "timestamp": time.time()}
-    monkeypatch.setattr(_stream, "get_stream_url", lambda url: "file:///x")
-    with patch.object(_stream, "_download_audio_segment_fallback", return_value=None) as fb:
-        assert _stream.download_audio_segment(YT, 60, 25) is None
-    fb.assert_called_once()
-    assert YT not in _state.stream_url_cache
-    assert not os.path.exists(seg_dir[0])
-
-
-def test_ffmpeg_extracts_the_segment_from_the_stream(monkeypatch, seg_dir, capsys):
-    monkeypatch.setattr(_stream, "get_stream_url", lambda url: STREAM)
-    calls = []
-    _ffmpeg_writes(monkeypatch, calls=calls)
-    path = _stream.download_audio_segment(YT, 60, 25)
-    assert Path(path).name == "segment.wav" and Path(path).exists()
-    (cmd,) = calls
-    assert cmd[cmd.index("-ss") + 1] == "60" and cmd[cmd.index("-t") + 1] == "25"
-    assert cmd[cmd.index("-i") + 1] == STREAM
-    assert cmd[cmd.index("-protocol_whitelist") + 1] == _state.FFMPEG_PROTOCOL_WHITELIST
-    assert "Audio segment downloaded: 2.0 KB" in capsys.readouterr().out
-
-
-def test_ffmpeg_failure_forgets_the_stream_url_and_cleans_up(monkeypatch, seg_dir, capsys):
-    _state.stream_url_cache[YT] = {"stream_url": STREAM, "timestamp": time.time()}
-    monkeypatch.setattr(_stream, "get_stream_url", lambda url: STREAM)
-    _ffmpeg_writes(monkeypatch, returncode=1, stderr=b"403 Forbidden")
-    with patch.object(_stream, "_download_audio_segment_fallback", return_value=None):
-        assert _stream.download_audio_segment(YT, 60, 25) is None
-    assert YT not in _state.stream_url_cache
-    assert not os.path.exists(seg_dir[0])
-    assert "ffmpeg failed: 403 Forbidden" in capsys.readouterr().out
-
-
-def test_the_start_of_a_youtube_stream_is_fetched_by_range(monkeypatch, seg_dir):
-    monkeypatch.setattr(_stream, "get_stream_url", lambda url: "https://rr1.googlevideo.com/a?x=1")
-    calls = []
-    _ffmpeg_writes(monkeypatch, calls=calls)
-    with patch.object(_stream, "_fetch_stream_start", return_value=True) as start:
-        path = _stream.download_audio_segment(YT, 0, 30.0)
-    assert path == start.call_args.args[2]
-    assert calls == []  # no ffmpeg on the whole URL
-
-
-def test_only_the_very_start_goes_by_range(monkeypatch, seg_dir):
-    monkeypatch.setattr(_stream, "get_stream_url", lambda url: "https://rr1.googlevideo.com/a?x=1")
-    _ffmpeg_writes(monkeypatch)
-    with patch.object(_stream, "_fetch_stream_start", return_value=True) as start:
-        assert _stream.download_audio_segment(YT, 25, 30.0)
-    start.assert_not_called()
-
-
-@pytest.mark.parametrize("error", [subprocess.TimeoutExpired("ffmpeg", 60), RuntimeError("boom")])
+@pytest.mark.parametrize("error", [subprocess.TimeoutExpired("ffmpeg", 60), OSError("no ffmpeg")])
 def test_a_segment_that_blows_up_cleans_up(monkeypatch, seg_dir, error):
-    monkeypatch.setattr(_stream, "get_stream_url", lambda url: STREAM)
-
-    def run(cmd, **kw):
-        raise error
-
-    monkeypatch.setattr(_stream.subprocess, "run", run)
-    assert _stream.download_audio_segment(YT, 60, 25) is None
-    assert not os.path.exists(seg_dir[0])
-
-
-# ── the yt-dlp fallback for one segment ───────────────────────────────────────
-
-
-def test_fallback_cuts_the_section_with_yt_dlp(monkeypatch, tmp_path):
-    out = str(tmp_path / "segment.wav")
-    seen = []
-
-    def run(cmd, **kw):
-        seen.append(cmd)
-        Path(out).write_bytes(b"x")
-        return types.SimpleNamespace(returncode=0, stderr=b"")
-
-    monkeypatch.setattr(_stream.subprocess, "run", run)
-    assert _stream._download_audio_segment_fallback(YT, 60, 25, out) == out
-    (cmd,) = seen
-    assert cmd[cmd.index("--download-sections") + 1] == "*60-85"
-    assert cmd[cmd.index("-o") + 1] == out.replace(".wav", ".%(ext)s")
-    assert cmd[cmd.index("--postprocessor-args") + 1] == _state.FFMPEG_AUDIO_OPTS
-    assert cmd[-2:] == ["--", YT]
-
-
-def test_fallback_retries_once_without_unreadable_cookies(monkeypatch, tmp_path):
-    out = str(tmp_path / "segment.wav")
-    seen = []
-
-    def run(cmd, **kw):
-        seen.append(cmd)
-        return types.SimpleNamespace(returncode=1, stderr=COOKIE_ERROR.encode())
-
-    monkeypatch.setattr(_stream.subprocess, "run", run)
-    assert _stream._download_audio_segment_fallback(YT, 60, 25, out) is None
-    assert ["--cookies-from-browser" in c for c in seen] == [True, False]
-
-
-def test_fallback_reports_a_failure_and_survives_an_exception(monkeypatch, tmp_path, capsys):
-    out = str(tmp_path / "segment.wav")
-    monkeypatch.setattr(
-        _stream.subprocess, "run", lambda cmd, **kw: types.SimpleNamespace(returncode=1, stderr=b"ERROR: nope")
-    )
-    assert _stream._download_audio_segment_fallback(YT, 60, 25, out) is None
-    assert "Fallback also failed: ERROR: nope" in capsys.readouterr().out
-
-    def run(cmd, **kw):
-        raise OSError("no yt-dlp")
-
-    monkeypatch.setattr(_stream.subprocess, "run", run)
-    assert _stream._download_audio_segment_fallback(YT, 60, 25, out) is None
-    assert "Fallback error: no yt-dlp" in capsys.readouterr().out
+    seen = _pipe(monkeypatch, error=error)
+    assert _stream.download_audio_segment("https://www.youtube.com/watch?v=abc", 0, 30) is None
+    assert not any(Path(d).exists() for d in seg_dir) and seen.download.stopped
