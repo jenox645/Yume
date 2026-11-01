@@ -4,6 +4,7 @@ what its errors mean.
 
 import os
 import platform
+import re
 import subprocess
 import sys
 import time
@@ -167,6 +168,7 @@ NOT_INSTALLED = "yt-dlp is not installed. Run the Yume setup wizard to install i
 
 # (conditions, message): the first rule whose every condition matches wins.
 # A condition is a tuple of phrases, any of which may appear in the error.
+_YTDLP_PREFIX = re.compile(r"^ERROR:\s*(\[[\w:]+\]\s*[\w-]*:\s*)?")  # "ERROR: [youtube] aBcDeFgHiJk: "
 _YTDLP_ERRORS = [
     (
         (("drm protected",),),
@@ -188,7 +190,14 @@ _YTDLP_ERRORS = [
         "open DevTools > Network > filter 'm3u8' or 'mp4' > copy the URL. "
         "Also update yt-dlp (Tools → yt-dlp → Install / Update).",
     ),
-    ((("video unavailable", "private video"),), "This video is unavailable or private."),
+    (
+        (("live stream recording is not available", "live event will begin"),),
+        "This live stream has no recording yet. Yume works on the recording once a stream has ended.",
+    ),
+    (
+        (("video unavailable", "video is unavailable", "private video"),),
+        "This video is unavailable: it may be private, deleted or blocked where you are.",
+    ),
     (
         (("age",), ("restricted",)),
         f"Age-restricted video. {_COOKIES_FIX}.",
@@ -219,4 +228,4 @@ def friendlify_ytdlp_error(raw_error):
     for conditions, message in _YTDLP_ERRORS:
         if all(any(phrase in lower for phrase in phrases) for phrases in conditions):
             return message
-    return raw_error
+    return _YTDLP_PREFIX.sub("", raw_error)

@@ -11,8 +11,11 @@ from unittest.mock import patch
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent / "server"))
 
-from yume import health, launch, setup  # noqa: E402
+import _ytdlp  # noqa: E402
+
+from yume import health, launch, service, servers, setup  # noqa: E402
 from yume.menus import whisper_model  # noqa: E402
 
 NVIDIA = {"has_nvidia": True, "has_amd": False, "vram_mb": 12288, "name": "RTX 3060"}
@@ -109,3 +112,81 @@ def test_health_flags_a_yt_dlp_too_old_for_youtube(days_old, method, passed, hin
     with patch.object(health, "find_tool", return_value="/bin/yt-dlp"), patch("yume.utils._run", return_value=reply):
         _name, ok, detail = health._chk_ytdlp_age({"youtube_auth_method": method})
     assert ok is passed and hint in detail
+
+
+class _Proc:
+    def __init__(self, code=None):
+        self.code = code
+        self.returncode = code
+
+    def poll(self):
+        return self.code
+
+
+def _supervisor(monkeypatch, tmp_path, ticks, starts=None):
+    """A supervisor whose loop runs `ticks`: lists of (name, exit code or None)."""
+    monkeypatch.setattr(service, "TICK_S", 0)
+    monkeypatch.setattr(service, "STOP_FILE", tmp_path / "stop")
+    monkeypatch.setattr(service.servers, "build_server_env", dict)
+    sup = service._Supervisor({"auto_stop_minutes": 0})
+    states, ticks = [], iter(ticks)
+    monkeypatch.setattr(sup, "_state", lambda state, message="": states.append((state, message)))
+    monkeypatch.setattr(sup, "_active", lambda: True)
+    monkeypatch.setattr(sup, "_start_translation", lambda env: starts.append(1) or None)
+
+    def dead():
+        try:
+            sup.procs.procs = [(n, _Proc(c)) for n, c in next(ticks)]
+        except StopIteration:
+            sup.procs.procs = []
+            (tmp_path / "stop").write_text("")
+        return servers.Processes.dead(sup.procs)
+
+    monkeypatch.setattr(sup.procs, "dead", dead)
+    return sup, states
+
+
+def test_a_translator_crash_restarts_it_and_keeps_whisper(monkeypatch, tmp_path):
+    starts = []
+    sup, states = _supervisor(monkeypatch, tmp_path, [[("Whisper", None), ("Translation", 1)]], starts)
+    assert sup._supervise() == 0
+    assert starts == [1]
+    assert [n for n, _p in sup.procs.procs] == []  # the fake loop ended
+    assert all(state != "error" for state, _m in states)
+
+
+def test_a_translator_that_keeps_crashing_stops_being_restarted(monkeypatch, tmp_path):
+    starts = []
+    crash = [("Whisper", None), ("Translation", 1)]
+    sup, states = _supervisor(monkeypatch, tmp_path, [crash] * 5, starts)
+    assert sup._supervise() == 0
+    assert len(starts) == service.MAX_TRANSLATION_RESTARTS
+    assert "untranslated" in states[-1][1] and states[-1][0] == "running"
+
+
+def test_a_whisper_crash_still_ends_yume(monkeypatch, tmp_path):
+    sup, states = _supervisor(monkeypatch, tmp_path, [[("Whisper", 1), ("Translation", None)]], [])
+    assert sup._supervise() == 1
+    assert states[-1][0] == "error" and "Whisper" in states[-1][1]
+
+
+def test_forget_dead_keeps_what_runs():
+    procs = servers.Processes()
+    alive = _Proc()
+    procs.procs = [("Whisper", alive), ("Translation", _Proc(1))]
+    procs.forget_dead()
+    assert procs.procs == [("Whisper", alive)]
+
+
+@pytest.mark.parametrize(
+    ("raw", "shown"),
+    [
+        ("ERROR: [youtube] aaaaaaaaaaa: This video is unavailable", "it may be private, deleted"),
+        ("ERROR: [youtube] jfKfPfyJRdk: This live stream recording is not available.", "once a stream has ended"),
+        ("ERROR: [generic] Something else went wrong", "Something else went wrong"),
+        ("ERROR: [twitch:stream] some_channel: Nothing here", "Nothing here"),
+    ],
+)
+def test_download_errors_read_as_sentences(raw, shown):
+    message = _ytdlp.friendlify_ytdlp_error(raw)
+    assert shown in message and not message.startswith("ERROR")

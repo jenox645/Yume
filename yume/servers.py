@@ -312,6 +312,9 @@ class Processes:
         """Servers that exited, as "Name (exit code N)"."""
         return [f"{n} (exit code {p.returncode})" for n, p in self.procs if p.poll() is not None]
 
+    def forget_dead(self) -> None:
+        self.procs = [(n, p) for n, p in self.procs if p.poll() is None]
+
     def stop(self, cfg: dict, timeout: float = 10) -> None:
         """Stop every server Yume started, newest first, then free their ports if
         a child of theirs lingers (and the PO-token helper the Whisper server ran)."""

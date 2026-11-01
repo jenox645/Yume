@@ -822,3 +822,14 @@ def test_translation_models_are_asked_of_the_backend(monkeypatch, backend, url, 
     out = _api.list_translation_models()
     assert asked == [url]
     assert out["models"] == models and out["translation_url"] == "http://127.0.0.1:5000"
+
+
+@pytest.mark.parametrize(
+    ("message", "tries"),
+    [("HTTP 503: Loading model", 0), ("translation server unreachable: refused", 0), ("HTTP 500: broke", 1)],
+)
+def test_a_translator_that_is_coming_back_costs_a_line_no_retry(message, tries):
+    job = _job.Job(("v", "ja", "English", "m"), {"language": "ja", "target": "English"})
+    line = {"tries": 0, "translation": None}
+    _jobs.JobManager._llm_failed(job, "translate", [line], _translate.TranslationError(message))
+    assert line["tries"] == tries and job.llm_backoff_until > 0

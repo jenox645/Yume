@@ -461,12 +461,13 @@ class JobManager:
     @staticmethod
     def _llm_failed(job, kind, batch, e):
         unreachable = isinstance(e, TranslationError) and "unreachable" in str(e)
+        loading = isinstance(e, TranslationError) and "HTTP 503" in str(e)  # llama.cpp restarting, its model not in yet
         with job.lock:
             # Server down: wait for it, don't burn the lines' retries
-            job.llm_backoff_until = time.time() + (30 if unreachable else 10)
+            job.llm_backoff_until = time.time() + (30 if unreachable else 5 if loading else 10)
             what = "Translation server error" if isinstance(e, TranslationError) else "Translation failed"
             job.event(f"{what}: {e}", "error")
-            for s in batch if not unreachable else ():
+            for s in batch if not (unreachable or loading) else ():
                 s["tries"] += 1
                 if s["tries"] >= MAX_TRANSLATE_TRIES:
                     # Give up on this line: show the original only
