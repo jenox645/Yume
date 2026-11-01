@@ -191,11 +191,10 @@ def _show_crash(result: servers.StartResult) -> None:
         info(f"Full log: {LOGS_DIR / result.log_name}")
 
 
-def _report(result: servers.StartResult, spin: Spinner, ready_msg: str, slow_msg: list[str]) -> bool:
+def _report(result: servers.StartResult, spin: Spinner, slow_msg: list[str]) -> bool:
     """Show how starting a server went. False = stop launching (after a pause)."""
     if result.ok:
         spin.finish("ok")
-        success(ready_msg)
         return True
     if result.timed_out:  # a large model can take longer: keep going
         spin.finish("timeout")
@@ -283,22 +282,20 @@ def _start_llamacpp(cfg: dict, procs: servers.Processes, bi: dict, env: dict) ->
         error(f"Port {cfg['translation_port']} is still in use — cannot start the translation server.")
         pause()
         return False
-    info(f"Starting llama.cpp server with {Path(gp).name}...")
     _describe_engine(native)
-    info(f"Log: {LOGS_DIR / servers.TRANSLATION_LOG}")
-    spin = Spinner("Loading translation model...")
+    spin = Spinner("Translator", f"loading {Path(gp).stem}", expected=20)
     r = servers.start_llamacpp(cfg, bi, procs, env, tick=spin.tick)
-    return _report(r, spin, "Translation server ready!", ["Still loading — large models may take a few minutes"])
+    return _report(r, spin, ["Still loading — large models may take a few minutes"])
 
 
 def _describe_engine(native: bool) -> None:
-    """Say what will run the translation model (and warn when it is the CPU)."""
+    """Warn when something less than the GPU build will run the translation model."""
     from yume import llama_server
 
+    if native:  # llama.cpp's own server, built for this GPU: nothing to warn about
+        return
     gpu = detect_gpu()
-    if native:
-        info(f"Engine: {llama_server.build_label()}")
-    elif gpu["has_nvidia"] or (gpu["has_amd"] and not IS_WIN):
+    if gpu["has_nvidia"] or (gpu["has_amd"] and not IS_WIN):
         if llama_server.python_engine_on_gpu():
             info("GPU offloading enabled (--n_gpu_layers -1)")
         else:
@@ -349,11 +346,7 @@ def _start_whisper(cfg: dict, procs: servers.Processes, env: dict) -> bool:
         error(f"Port {cfg['whisper_port']} is still in use — cannot start the Whisper server.")
         pause()
         return False
-    info("Starting Whisper server...")
-    dev, comp = servers.resolve_whisper_device(cfg)
-    info(f"Device: {dev} | Compute: {comp} | Port: {cfg['whisper_port']}")
-    info(f"Log: {LOGS_DIR / servers.WHISPER_LOG}")
-    spin = Spinner(f"Loading Whisper model ({cfg['whisper_model']})...")
+    spin = Spinner("Whisper", f"loading {cfg['whisper_model']}", expected=25)
     r = servers.start_whisper(cfg, procs, env, tick=spin.tick)
     if r.error and not r.timed_out and not r.diagnosis:
         r.diagnosis = [
@@ -365,7 +358,6 @@ def _start_whisper(cfg: dict, procs: servers.Processes, env: dict) -> bool:
     return _report(
         r,
         spin,
-        "Whisper server ready!",
         [
             "Still loading — first run takes 30-60s while the Whisper model downloads.",
             "This is a one-time download. Future launches will start much faster.",

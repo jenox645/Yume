@@ -28,7 +28,7 @@ CFG = {
 
 
 class Spin:
-    def __init__(self, message=""):
+    def __init__(self, message="", doing="", expected=0):
         self.finished = []
         self.tick = MagicMock()
 
@@ -56,14 +56,14 @@ def has(lines, text):
 
 def test_a_ready_server_goes_on(said):
     spin = Spin()
-    assert launch._report(StartResult(), spin, "Ready!", ["slow"]) is True
-    assert spin.finished == ["ok"] and said == ["success: Ready!"]
+    assert launch._report(StartResult(), spin, ["slow"]) is True
+    assert spin.finished == ["ok"] and said == []
 
 
 def test_a_slow_server_warns_and_goes_on(said):
     spin = Spin()
     result = StartResult(error="x: did not become ready in time", timed_out=True)
-    assert launch._report(result, spin, "Ready!", ["Still loading", "Hang on"]) is True
+    assert launch._report(result, spin, ["Still loading", "Hang on"]) is True
     assert spin.finished == ["timeout"] and said == ["warn: Still loading", "info: Hang on"]
 
 
@@ -71,7 +71,7 @@ def test_a_crash_shows_the_log_and_the_diagnosis_then_waits(said, monkeypatch, c
     spin = Spin()
     monkeypatch.setattr(launch.servers, "log_tail", lambda name: [f"line {i}" for i in range(12)])
     result = StartResult(error="Whisper: exited with code 1", log_name="w.log", diagnosis=["Too big.", "Use small."])
-    assert launch._report(result, spin, "Ready!", []) is False
+    assert launch._report(result, spin, []) is False
     assert spin.finished == ["failed"]
     out = capsys.readouterr().out
     assert "line 11" in out and "line 2" in out and "line 1\x1b" not in out  # the last ten
@@ -81,7 +81,7 @@ def test_a_crash_shows_the_log_and_the_diagnosis_then_waits(said, monkeypatch, c
 
 
 def test_a_failure_without_a_log_says_only_what_it_knows(said):
-    assert launch._report(StartResult(error="no model"), Spin(), "Ready!", []) is False
+    assert launch._report(StartResult(error="no model"), Spin(), []) is False
     assert said == ["error: no model", "pause"]
 
 
@@ -133,8 +133,7 @@ def test_the_built_in_engine_starts_and_says_which_model(said, monkeypatch):
     monkeypatch.setitem(sys.modules, "llama_cpp", None)  # not needed with llama-server
     assert llama.go() is True
     assert llama.spawned == ["m.gguf"]
-    assert has(said, "Starting llama.cpp server with m.gguf") and has(said, "Engine: llama-server b1 (cuda)")
-    assert "success: Translation server ready!" in said
+    assert said == []
 
 
 def test_an_auto_selected_model_is_named(said, monkeypatch):
@@ -153,7 +152,7 @@ def test_the_engine_installed_from_the_offer_is_used(said, monkeypatch):
 
     monkeypatch.setattr(launch, "_offer_llama_server", offer)
     assert llama.go() is True
-    assert llama.spawned == ["m.gguf"] and has(said, "Engine: llama-server")
+    assert llama.spawned == ["m.gguf"]
 
 
 def test_no_engine_offers_llama_cpp_python(said, monkeypatch):
@@ -392,7 +391,7 @@ def test_a_busy_whisper_port_stops_the_launch(said, monkeypatch):
 def test_whisper_started(said, monkeypatch):
     ok, _ = whisper(monkeypatch)
     assert ok is True
-    assert "info: Device: cuda | Compute: float16 | Port: 5001" in said and "success: Whisper server ready!" in said
+    assert said == []
 
 
 def test_a_first_run_download_keeps_going(said, monkeypatch):

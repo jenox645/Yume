@@ -218,7 +218,7 @@ def test_reports_run_as_commands_do_not_wait_for_enter(monkeypatch):
     monkeypatch.setattr(cli, "pause", lambda *a: waited.append(1))
     assert cli._then_pause(lambda cfg, args: "report")({}, []) == "report" and waited == [1]
     menu = {label: fn for label, _d, fn in cli.MAIN_MENU}
-    for label, command in (("System Status", cli._status), ("Health Check", cli._health)):
+    for label, command in (("Status", cli._status), ("Health check", cli._health)):
         assert menu[label].__closure__[0].cell_contents is command  # the menu waits...
     assert cli.COMMANDS["status"].run is cli._status  # ...the command does not
     assert "pause" in tools._fonts.__code__.co_names

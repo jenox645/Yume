@@ -5,7 +5,7 @@ from __future__ import annotations
 from yume import servers
 from yume.constants import LOGS_DIR, backend_info
 from yume.network import check_server, check_translation_server
-from yume.ui import C, ask_arrow, ask_yn, clear, error, info, panel, pause, section, success, warn
+from yume.ui import C, ask_arrow, ask_yn, clear, error, info, pause, section, success, warn
 
 
 def _stop_all(cfg: dict, procs: servers.Processes) -> None:
@@ -86,15 +86,11 @@ def _status_panel(cfg: dict, bi: dict) -> None:
 
     # Word + colour so status is readable without colour vision
     def state(up: bool) -> str:
-        return f"{C.GREEN}● up{C.RESET}  " if up else f"{C.RED}● DOWN{C.RESET}"
+        return f"{C.GREEN}running{C.RESET}" if up else f"{C.RED}down{C.RESET}"
 
     print()
-    panel(
-        f"  {state(ws_up)} Whisper     {cfg['whisper_host']}:{cfg['whisper_port']}\n"
-        f"  {state(ts_up)} Translation {cfg['translation_host']}:{cfg['translation_port']}",
-        title=f"{C.GREEN}Yume Running{C.RESET}",
-        style=C.GREEN,
-    )
+    print(f"  Whisper     {cfg['whisper_host']}:{cfg['whisper_port']}  {state(ws_up)}")
+    print(f"  Translator  {cfg['translation_host']}:{cfg['translation_port']}  {state(ts_up)}")
 
 
 def _runtime_actions() -> list[tuple[str, str, object]]:

@@ -11,12 +11,13 @@ import os
 import sys
 import threading
 import traceback
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Callable
 
 from config import CONFIG_DIR, config_export, config_import, load_config, save_config
-from yume.constants import BACKEND_INFO, GGUF_DIR, LOGS_DIR, MODELS_DIR, SERVER_DIR, TOOLS_DIR, VERSION
-from yume.ui import C, ask_arrow, enable_ansi, error, header, info, panel, pause
+from yume.constants import GGUF_DIR, LOGS_DIR, MODELS_DIR, SERVER_DIR, TOOLS_DIR, VERSION
+from yume.ui import C, ask_arrow, enable_ansi, error, header, info, pause
 
 
 # ── Commands ──────────────────────────────────────────────────────────────────
@@ -247,27 +248,23 @@ def _hardware_label() -> str:
     from yume.hardware import _detect_cpu_name, detect_gpu
 
     gpu = detect_gpu()
-    if gpu["has_nvidia"]:
-        return f"{C.GREEN}{gpu['name']}{C.RESET}"
-    if gpu["has_amd"]:
-        return f"{C.RED}{gpu['name']} (AMD){C.RESET}"
-    cpu_name = _detect_cpu_name()
-    color = C.BLUE if "intel" in cpu_name.lower() else C.RED if "amd" in cpu_name.lower() else C.YELLOW
-    return f"{color}CPU: {cpu_name}{C.RESET}"
+    if gpu["has_nvidia"] or gpu["has_amd"]:
+        return gpu["name"].replace("NVIDIA GeForce ", "")
+    return f"CPU {_detect_cpu_name()}"
 
 
 def _servers_label(cfg: dict) -> str:
     """An instant local port probe (not a health check): enough to tell a
-    returning user whether they still need to Launch."""
+    returning user whether they still need to start Yume."""
     from yume.ports import is_port_free
 
     w_up = not is_port_free(cfg["whisper_port"], cfg.get("whisper_host", "127.0.0.1"))
     t_up = not is_port_free(cfg["translation_port"], cfg.get("translation_host", "127.0.0.1"))
     if w_up and t_up:
-        return f"{C.GREEN}● running{C.RESET}"
+        return f"{C.GREEN}Yume is running{C.RESET}"
     if w_up or t_up:
-        return f"{C.YELLOW}● partially running{C.RESET}  {C.DIM}(one server is down — use Launch Yume){C.RESET}"
-    return f"{C.DIM}○ stopped — choose Launch Yume to start{C.RESET}"
+        return f"{C.YELLOW}One server is down{C.RESET}"
+    return "Yume is stopped"
 
 
 def _update_notice() -> None:
@@ -306,9 +303,7 @@ def _auto_start(cfg, args):
 def _auto_start_label() -> str:
     from yume.native_host import registered_browsers
 
-    if registered_browsers():
-        return f"{C.GREEN}on{C.RESET}  {C.DIM}Enable in the browser starts Yume{C.RESET}"
-    return f"{C.DIM}off{C.RESET}  {C.DIM}turn it on below{C.RESET}"
+    return "auto start on" if registered_browsers() else "auto start off"
 
 
 def _uninstall(cfg, args):
@@ -331,15 +326,15 @@ def _then_pause(fn):
 
 # (label, description, handler); a handler returning a dict replaces the config
 MAIN_MENU = [
-    ("Launch Yume", "Start servers + runtime menu", _launch),
-    ("Auto start", "Let the browser start and stop Yume by itself", _auto_start),
-    ("System Status", "Hardware, tools, packages, ports", _then_pause(_status)),
-    ("Health Check", "Test every component end-to-end", _then_pause(_health)),
-    ("Settings", "Whisper, translation, addresses, subtitles", _settings),
-    ("Tools & Fonts", "Install, update, manage components, detect fonts", _tools),
-    ("Help & Guides", "Step-by-step recipes: first subtitles, models, fixes", _guide),
-    ("Re-run Setup", "Guided first-time configuration", _setup),
-    ("Uninstall", "Remove Yume and all data", _uninstall),
+    ("Start Yume", "servers and live menu", _launch),
+    ("Auto start", "let the browser start and stop Yume", _auto_start),
+    ("Status", "hardware, tools, ports", _then_pause(_status)),
+    ("Health check", "test everything end to end", _then_pause(_health)),
+    ("Settings", "models, translation, addresses", _settings),
+    ("Tools and fonts", "install and update", _tools),
+    ("Help", "step-by-step guides", _guide),
+    ("Setup again", "guided configuration", _setup),
+    ("Uninstall", "remove Yume and its data", _uninstall),
 ]
 
 
@@ -351,24 +346,15 @@ def main_menu() -> None:
         cfg = setup_wizard(cfg)
 
     while True:
-        header(version=VERSION)
-        bn = BACKEND_INFO.get(cfg.get("translation_backend", "llamacpp"), {}).get("name", "?")
-        panel(
-            f"{C.DIM}Hardware   {C.RESET}  {_hardware_label()}\n"
-            f"{C.DIM}Speech AI  {C.RESET}  {C.CYAN}{cfg['whisper_model']}{C.RESET}  on  {cfg['whisper_host']}:{cfg['whisper_port']}\n"
-            f"{C.DIM}Translator {C.RESET}  {C.MAGENTA}{bn}{C.RESET}  on  {cfg['translation_host']}:{cfg['translation_port']}\n"
-            f"{C.DIM}Servers    {C.RESET}  {_servers_label(cfg)}\n"
-            f"{C.DIM}Auto start {C.RESET}  {_auto_start_label()}",
-            style=C.DIM,
-        )
+        header("What would you like to do?", VERSION)
+        translator = Path(cfg.get("gguf_model_path") or cfg.get("translation_model") or "?").stem
+        print(f"  {C.DIM}{_hardware_label()}, Whisper {cfg['whisper_model']}, {translator}{C.RESET}")
+        print(f"  {C.DIM}{_servers_label(cfg)}, {_auto_start_label()}{C.RESET}\n")
         _update_notice()
-        print(
-            f"  {C.DIM}Tip: 'python pocket_yume.py help' lists direct CLI commands (launch, status, stats...){C.RESET}"
-        )
 
         ch = ask_arrow(
-            "What would you like to do?",
-            [(label, desc) for label, desc, _fn in MAIN_MENU] + [("Exit", None)],
+            "",
+            [(label, desc) for label, desc, _fn in MAIN_MENU] + [("Exit", "")],
             default=0,
             allow_back=False,
         )
