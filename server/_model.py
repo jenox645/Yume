@@ -33,10 +33,15 @@ def set_low_priority():
         pass
 
 
-def _silence():
+def _warm_up():
+    """One real decode of 1 s of silence: transcribe() is lazy, nothing runs
+    until its segments are read."""
     import numpy as np
 
-    return np.zeros(16000, dtype=np.float32)
+    segments, _info = _state.model.transcribe(
+        np.zeros(16000, dtype=np.float32), language="en", beam_size=1, temperature=0.0
+    )
+    list(segments)
 
 
 def _fall_back_to_cpu(reason, fix):
@@ -53,7 +58,7 @@ def _fall_back_to_cpu(reason, fix):
         _state.device = "cpu"
         _state.compute_type = "int8"
         _state.model = WhisperModel(_state.model_name, device="cpu", compute_type="int8")
-        list(_state.model.transcribe(_silence(), language="en"))
+        _warm_up()
         print("  CPU fallback:     done")
         return True
     except Exception as cpu_err:
@@ -92,8 +97,8 @@ def _prewarm(args):
         print("  Prewarm:          skipped (use --prewarm to enable)")
         return True
     try:
-        list(_state.model.transcribe(_silence(), language="en"))
-        print("  Prewarm:          done (CUDA kernels compiled)")
+        _warm_up()
+        print(f"  Prewarm:          done ({_state.device})")
         return True
     except Exception as pw_err:
         pw_msg = str(pw_err)

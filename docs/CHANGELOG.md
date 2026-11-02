@@ -3,7 +3,7 @@
 ### Unreleased
 
 - **Whisper on AMD:** CTranslate2 has no AMD backend, yet Yume sent AMD cards on Linux to CUDA and saved a GPU precision that the CPU refuses too, so Whisper did not start. Whisper now runs on the CPU with `int8` on every OS, the recommended model follows the CPU, a saved GPU precision is ignored and running setup again repairs it. The translator still uses the AMD GPU.
-- **CUDA that cannot run no longer stops Whisper:** with no device or a broken driver the server falls back to the CPU and says why. The settings menu shows the precision that really runs, and picking the CPU with a GPU precision saved no longer stops Whisper either.
+- **CUDA that cannot run no longer stops Whisper:** with no device or a broken driver the server falls back to the CPU and says why. The startup warm-up now really decodes: it never ran inference, so missing cuBLAS only showed up on the first video instead of moving Whisper to the CPU. The settings menu shows the precision that really runs, and picking the CPU with a GPU precision saved no longer stops Whisper either.
 
 ### v0.2.0
 

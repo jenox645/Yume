@@ -388,9 +388,15 @@ class TestCpuFallback(unittest.TestCase):
         def whisper(name, device, compute_type):
             if device == "cuda":
                 raise RuntimeError(message)
-            return MagicMock(device=device, compute_type=compute_type)
+            return TestCpuFallback._loaded(device, compute_type)
 
         return whisper
+
+    @staticmethod
+    def _loaded(device, compute_type="int8", segments=()):
+        model = MagicMock(device=device, compute_type=compute_type)
+        model.transcribe.return_value = (segments, MagicMock())
+        return model
 
     def test_cuda_that_cannot_run_falls_back_to_the_cpu(self):
         for raw in (
@@ -420,12 +426,15 @@ class TestCpuFallback(unittest.TestCase):
         self.assertIn("No module named", _state.load_error)
         self.assertIn("pocket_yume.py setup", _state.load_error)
 
+    @staticmethod
+    def _no_cublas():
+        raise RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+        yield
+
     def test_a_warm_up_without_cublas_falls_back_to_the_cpu(self):
         def whisper(name, device, compute_type):
-            model = MagicMock(device=device)
-            if device == "cuda":
-                model.transcribe.side_effect = RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
-            return model
+            # As in faster-whisper: transcribe() returns, the error comes from reading the segments
+            return self._loaded(device, segments=self._no_cublas() if device == "cuda" else ())
 
         self._load(whisper)
         self.assertEqual((_state.device, _state.compute_type, _state.load_error), ("cpu", "int8", ""))
