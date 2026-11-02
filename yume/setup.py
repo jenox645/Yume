@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import os
 import shutil
@@ -17,6 +18,7 @@ from yume.constants import (
     GGUF_DIR,
     LOGS_DIR,
     EXT_DIR,
+    IS_MAC,
     IS_WIN,
     EXE,
     MiB,
@@ -614,6 +616,7 @@ def setup_wizard(cfg: dict, rerun: bool = False) -> dict:
 
 # Other programs use these too: the uninstaller leaves them installed
 _SHARED_LIBS = {"numpy", "av", "yt-dlp"}
+_TORCH_PACKAGES = ["torch", "torchaudio"]
 
 
 def _yume_pip_packages() -> list[str]:
@@ -628,21 +631,75 @@ def _yume_pip_packages() -> list[str]:
     return list(dict.fromkeys(n for n in names if n not in _SHARED_LIBS))
 
 
-def _uninstall_targets() -> list[tuple[str, Path]]:
-    from config import CONFIG_DIR
-    from yume.utils import hf_hub_dir
+# The cached repos of the models Yume can load, as faster_whisper.utils names them.
+# The cache is shared and does not say who downloaded what.
+_WHISPER_REPOS = (
+    *(
+        f"models--Systran--faster-whisper-{m}"
+        for m in ("tiny", "base", "small", "medium", "large-v1", "large-v2", "large-v3")
+    ),
+    "models--mobiuslabsgmbh--faster-whisper-large-v3-turbo",
+)
+_HTDEMUCS_WEIGHTS = "955717e8-8726e21a.th"
 
-    hf_hub = hf_hub_dir()
-    whisper_caches = sorted(hf_hub.glob("models--*faster*whisper*")) if hf_hub.exists() else []
+
+def _uninstall_targets() -> list[tuple[str, Path]]:
+    """Yume's own folders, inside its install."""
+    from config import CONFIG_DIR
+
     return [
-        ("Tools (yt-dlp, ffmpeg, deno)", TOOLS_DIR),
+        ("Tools (yt-dlp, ffmpeg, deno, whisper.cpp)", TOOLS_DIR),
         ("Translation models (downloaded AI model files)", GGUF_DIR),
+        ("Whisper models for AMD GPUs", MODELS_DIR / "whisper"),
         ("Configuration, blacklist, saved subtitles", CONFIG_DIR),
         ("Logs", LOGS_DIR),
-    ] + [(f"Whisper model {d.name.split('--')[-1]}", d) for d in whisper_caches]
+    ]
+
+
+def _deno_cache() -> Path:
+    if os.environ.get("DENO_DIR"):
+        return Path(os.environ["DENO_DIR"])
+    if IS_WIN:
+        return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "deno"
+    return Path.home() / ("Library/Caches/deno" if IS_MAC else ".cache/deno")
+
+
+def _shared_targets() -> list[tuple[str, Path]]:
+    """What Yume used outside its install and other programs may use too: asked one by one."""
+    from yume.utils import hf_hub_dir
+
+    cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    torch_hub = Path(os.environ["TORCH_HOME"]) / "hub" if os.environ.get("TORCH_HOME") else cache / "torch" / "hub"
+    whisper = [(f"Whisper model {r.split('faster-whisper-')[-1]}", hf_hub_dir() / r) for r in _WHISPER_REPOS]
+    return [
+        *whisper,
+        ("Demucs model (vocal isolation)", torch_hub / "checkpoints" / _HTDEMUCS_WEIGHTS),
+        ("yt-dlp cache", cache / "yt-dlp"),
+        ("Deno cache", _deno_cache()),
+    ]
+
+
+def _ask_shared(targets: list[tuple[str, Path]]) -> list[tuple[str, Path]]:
+    found = [(label, p) for label, p in targets if p.exists()]
+    if found:
+        info("Other programs may use these too, so they stay unless you say otherwise:")
+    return [t for t in found if ask_yn(f"Remove {t[0]} ({_folder_mb(t[1]):.0f} MB)?", False)]
+
+
+def _in_own_venv() -> bool:
+    """A venv inside Yume's folder goes with the folder, PyTorch included."""
+    return sys.prefix != sys.base_prefix and Path(sys.prefix).resolve().is_relative_to(BASE_DIR.resolve())
+
+
+def _ask_torch() -> list[str]:
+    if _in_own_venv() or importlib.util.find_spec("torch") is None:
+        return []
+    return _TORCH_PACKAGES if ask_yn("Remove PyTorch (~3 GB)? Other programs may use it.", False) else []
 
 
 def _folder_mb(d: Path) -> float:
+    if d.is_file():
+        return d.stat().st_size / MiB
     size = 0
     for f in d.rglob("*") if d.exists() else ():
         try:
@@ -664,7 +721,7 @@ def _remove_data(dirs: list[tuple[str, Path]]) -> None:
     for label, d in dirs:
         if d.exists():
             try:
-                shutil.rmtree(d)
+                d.unlink() if d.is_file() else shutil.rmtree(d)
                 success(f"Removed: {label}")
             except Exception as e:
                 error(f"Failed to remove {label}: {e}")
@@ -675,7 +732,8 @@ def _remove_packages(packages: list[str]) -> None:
     info("Uninstalling pip packages...")
     for pkg in packages:
         try:
-            if _run([sys.executable, "-m", "pip", "uninstall", "-y", pkg], timeout=30).returncode == 0:
+            # PyTorch is thousands of files
+            if _run([sys.executable, "-m", "pip", "uninstall", "-y", pkg], timeout=300).returncode == 0:
                 success(f"  Removed: {pkg}")
         except Exception as e:
             _log.debug("[uninstall_yume] pip-remove failed: %s", e)
@@ -694,7 +752,6 @@ def uninstall_yume() -> None:
     packages = _yume_pip_packages()
     info("Pip packages that can be removed:")
     print(f"    {', '.join(packages)}")
-    info(f"{C.DIM}PyTorch (vocal isolation, ~3 GB) is left installed — other programs may use it.{C.RESET}")
     print()
 
     ch = ask_arrow(
@@ -712,12 +769,18 @@ def uninstall_yume() -> None:
         pause()
         return
     if ch in (0, 1):
+        dirs += _ask_shared(_shared_targets())
+    if ch in (0, 2):
+        packages += _ask_torch()
+    if ch in (0, 1):
         _remove_data(dirs)
     if ch in (0, 2):
         _remove_packages(packages)
 
     print()
     success("Uninstall complete!")
-    info("You can delete pocket_yume.py and the extension/ folder manually.")
-    info("To remove the browser extension: go to chrome://extensions and remove Yume.")
+    info("Two things Yume can't do from here:")
+    info("  1. Remove Yume from your browser's extensions page.")
+    info(f"  2. Delete this folder, which also holds any Python environment made for Yume: {C.CYAN}{BASE_DIR}{C.RESET}")
+    info(f"{C.DIM}pip keeps its downloads, PyTorch included, for all your programs: python -m pip cache purge{C.RESET}")
     pause()

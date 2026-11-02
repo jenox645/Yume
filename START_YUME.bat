@@ -26,11 +26,11 @@ REM Find Python: try "python" first, then the "py" launcher, which exists
 REM even when "Add to PATH" was left unchecked during installation.
 set "PY=python"
 python --version >nul 2>&1
-if %errorlevel% equ 0 goto :run
+if %errorlevel% equ 0 goto :env
 py -3 --version >nul 2>&1
 if %errorlevel% equ 0 (
     set "PY=py -3"
-    goto :run
+    goto :env
 )
 
 echo ERROR: Python not found!
@@ -43,6 +43,23 @@ set /p OPEN="Open the Python download page now? [Y/n] "
 if /i not "%OPEN%"=="n" start "" "https://www.python.org/downloads/"
 pause
 exit /b 1
+
+:env
+REM First run: Yume's packages go in a private environment, so they stay out of
+REM the system Python. An activated environment, or Yume already installed in
+REM this Python, stays as it is.
+if defined VIRTUAL_ENV goto :run
+%PY% -c "import importlib.util,sys; sys.exit(importlib.util.find_spec('faster_whisper') is None)" >nul 2>&1
+if not errorlevel 1 goto :run
+if not exist "yume-env\Scripts\python.exe" (
+    echo Creating a private Python environment in yume-env...
+    %PY% -m venv yume-env
+)
+if exist "yume-env\Scripts\python.exe" (
+    set "PY=yume-env\Scripts\python.exe"
+) else (
+    echo Could not create it: Yume will install into your system Python.
+)
 
 :run
 if not exist "pocket_yume.py" (
