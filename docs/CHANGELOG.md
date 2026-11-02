@@ -3,7 +3,9 @@
 ### v0.2.0
 
 - **New look:** the popup is one window with tabs (Watch, Look, Models, More) that never scrolls past the browser's limit, in a light and a dark theme, with a brushed 夢 that draws itself while Yume wakes up. Six subtitle styles and three ways for a line to appear. The terminal is plain aligned rows, with Auto start in its main menu and progress bars while Yume starts.
-- **Songs keep their opening lines:** Whisper turned the silence before a singer into one invented line and lost what came after. It now hears from the voice on: on our test songs, 37% fewer words lost. Song transcripts saved before this are heard again.
+- **Songs keep their lines:** Whisper turned the silence before a singer into one invented line and lost what came after. It now hears from the voice on: on our test songs, 44% fewer words lost. Song transcripts saved before this are heard again.
+- **A second listen:** when everything heard in a section is rejected, or you blacklist what filled it, Yume hears that section again a different way instead of leaving a blank.
+- **An empty subtitle window no longer covers the video,** and the popup says when Yume was updated while running.
 - **New translator:** Hy-MT2-7B is recommended, one line at a time, with half the serious errors of Qwen2.5-7B in a blind reading. Hy-MT2-1.8B suits small cards.
 - **Quieter GPU:** Yume keeps 40 to 80 seconds ready ahead of you and rests in between, and says so instead of showing a count that looks frozen. In one test the GPU was busy 34 s of 150 s, not 88 s.
 - **Faster start on a video you resume:** the first line at 10:00 takes about 12 s. The preview is an ordinary download through a pipe, and yt-dlp keeps itself current.

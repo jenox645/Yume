@@ -56,6 +56,15 @@ def test_a_region_starting_with_a_voice_is_heard_whole():
     assert _regions.voice_start(np.zeros(10, dtype=np.float32)) == 0.0  # too short to judge
 
 
+def test_reverb_before_a_voice_is_not_the_voice():
+    stem = np.zeros(SR * 20, dtype=np.float32)
+    stem[SR * 5 : SR * 10] = 0.02  # bleed: Whisper fills this with an invented line
+    stem[SR * 15 :] = 0.14
+    level = _regions.voice_level(stem)
+    assert _regions.voice_start(stem, level=level) == pytest.approx(14.7)
+    assert _regions.voice_start(stem[: SR * 12], level=level) is None
+
+
 def test_region_index_at():
     regions = [(0.0, 30.0), (30.0, 55.0), (55.0, 80.0)]
     assert _regions.region_index_at(regions, 0) == 0

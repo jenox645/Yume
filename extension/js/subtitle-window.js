@@ -25,7 +25,7 @@ function hexRGB(hex, fallback) {
 function windowStyle(s) {
   const [r, g, b] = hexRGB(s.windowBgColor || '#08080c', [8, 8, 12]);
   const opacity = (s.windowOpacity ?? 88) / 100;
-  const radius = s.glassRadius ?? 20;  // 20 = the popup slider's default
+  const radius = s.glassRadius ?? 2;  // the popup slider's default
   const glass = Boolean(s.glassEnabled);
   const blur = `blur(${s.glassBlur ?? 18}px) saturate(1.3)`;
   return {
@@ -366,6 +366,7 @@ class SubtitleWindow {
       [q('.subtitle-english'), english, s.showEnglish !== false, s.targetLanguage === 'Arabic'],
       [q('.subtitle-romaji'), romaji, s.showRomaji === true, null],
     ];
+    if (this.element.dataset) this.element.dataset.empty = String(!original && !english);
     if (!original && !english) {
       for (const [el] of lines) if (el) { el.textContent = ''; el.style.display = 'none'; }
       this.currentOriginal = ''; this.currentEnglish = ''; this.currentRomaji = '';
@@ -424,6 +425,7 @@ class SubtitleWindow {
 
   updateStatus(message, type = 'info') {
     if (this.isPlaying || !this.element) return;
+    if (this.element.dataset) this.element.dataset.empty = 'false';
     const statusEl = this.element.querySelector('.subtitle-status');
     if (statusEl) {
       statusEl.textContent = message;

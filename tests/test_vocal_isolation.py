@@ -59,6 +59,87 @@ def test_a_talk_keeps_its_preview():
     assert job.region_state[0] == "done" and not all(s["hidden"] for s in job.segments.values())
 
 
+def _line(text, start=1.0):
+    return {"start": start, "end": start + 2, "text": text, "confidence": -0.2}
+
+
+def _song_job():
+    job = _job.Job(("v", "ja", "", "m"), {"language": "ja"})
+    job.regions = [(0.0, 10.0), (10.0, 20.0)]
+    job.region_state = ["done", "done"]
+    job.audio = np.full(16000 * 20, 0.2, dtype=np.float32)
+    job.mix = np.full(16000 * 20, 0.5, dtype=np.float32)
+    return job
+
+
+def test_a_region_heard_as_only_an_invented_line_is_heard_again_from_the_mix(pipeline, monkeypatch):
+    heard = []
+
+    def whisper(audio, language, offset=0.0, **kw):
+        heard.append(float(audio[0]))
+        return [_line("本当の歌詞")] if len(heard) == 2 else [_line("ご視聴ありがとうございました")]
+
+    monkeypatch.setattr(_jobs, "transcribe_audio", whisper)
+    job = _song_job()
+    raw, _audio_heard = pipeline.jobs._hear(job, 0, job.audio[: 16000 * 10])
+    assert heard == pytest.approx([0.2, 0.5]) and raw[0]["text"] == "本当の歌詞"
+
+
+def test_a_second_listen_that_also_invents_changes_nothing(pipeline, monkeypatch):
+    monkeypatch.setattr(_jobs, "transcribe_audio", lambda *a, **k: [_line("ご視聴ありがとうございました")])
+    job = _song_job()
+    raw, _audio_heard = pipeline.jobs._hear(job, 0, job.audio[: 16000 * 10])
+    assert raw[0]["text"] == "ご視聴ありがとうございました"
+
+
+def test_a_talk_gets_its_second_listen_from_a_warmer_decode(pipeline, monkeypatch):
+    temperatures = []
+
+    def whisper(audio, language, offset=0.0, temperature=0.0, **kw):
+        temperatures.append(temperature)
+        return [_line("real" if temperature else "ご視聴ありがとうございました")]
+
+    monkeypatch.setattr(_jobs, "transcribe_audio", whisper)
+    job = _song_job()
+    job.mix = None
+    pipeline.jobs._hear(job, 0, job.audio[: 16000 * 10])
+    assert temperatures == [0.0, 0.4]
+
+
+def test_blacklisting_what_filled_a_region_hears_it_again(pipeline, monkeypatch):
+    job = _song_job()
+    job.segments = {}
+    job.add_region(0, [_line("次回予告")])
+    job.add_region(1, [_line("a real line", 11.0)])
+    pipeline.jobs.jobs[job.id] = job
+    monkeypatch.setattr(_jobs, "is_unwanted", lambda text: text == "次回予告")
+    pipeline.jobs.refilter()
+    assert job.region_state == ["pending", "done"] and job.listen_again == {0}
+    assert all(s["orphan"] for s in job.segments.values() if s["region"] == (0.0, 10.0))
+
+
+def test_a_blacklisted_line_beside_real_ones_leaves_its_region_alone(pipeline, monkeypatch):
+    job = _song_job()
+    job.segments = {}
+    job.add_region(0, [_line("次回予告"), _line("a real line", 5.0)])
+    pipeline.jobs.jobs[job.id] = job
+    monkeypatch.setattr(_jobs, "is_unwanted", lambda text: text == "次回予告")
+    pipeline.jobs.refilter()
+    assert job.region_state[0] == "done" and not job.listen_again
+
+
+def test_a_blacklisted_region_of_a_finished_job_is_heard_on_the_next_visit(pipeline, monkeypatch):
+    job = _song_job()
+    job.audio = job.mix = None
+    job.segments = {}
+    job.add_region(0, [_line("次回予告")])
+    _state.store.put_transcript(job.video_key, job.lang_key, job.model, 0.0, 10.0, [_line("次回予告")])
+    pipeline.jobs.jobs[job.id] = job
+    monkeypatch.setattr(_jobs, "is_unwanted", lambda text: text == "次回予告")
+    pipeline.jobs.refilter()
+    assert _state.store.get_transcripts(job.video_key, job.lang_key, job.model) == {}
+
+
 def test_the_progress_says_when_whisper_rests_and_how_far_is_ready():
     job = _job.Job(("v", "ja", "", "m"), {"language": "ja"})
     job.regions = [(0.0, 50.0), (50.0, 100.0), (100.0, 150.0)]

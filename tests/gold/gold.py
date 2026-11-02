@@ -426,7 +426,7 @@ def _transcribe_clip(clip, what):
     t0 = time.time()
     for i, (start, end) in enumerate(regions):
         piece = audio[int(start * SR) : int(end * SR)]
-        skip = _regions.voice_start(piece) if what == "trim" else 0.0
+        skip = _regions.voice_start(piece, level=_regions.voice_level(audio)) if what == "trim" else 0.0
         if skip is None:
             raws.append([])
             continue

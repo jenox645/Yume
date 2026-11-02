@@ -30,6 +30,13 @@
   opacity: 0;
 }
 
+/* Between two lines the window must not cover the video: only the pointer brings it back */
+.subtitle-window[data-empty="true"]:not(:hover) {
+  background: transparent !important;
+  box-shadow: none !important;
+  border-color: transparent !important;
+}
+
 /* Styles picked in the popup. !important: the window's colours are inline */
 .subtitle-window[data-look="outline"] {
   background: transparent !important;

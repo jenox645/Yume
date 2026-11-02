@@ -68,6 +68,9 @@ class Job:
         self.status = "starting"  # starting|downloading|separating|transcribing|translating|done|error
         self.error = ""
         self.audio = None
+        self.mix = None  # a song's whole mix, while `audio` is its vocals: the second listen
+        self.voice_level = _regions.QUIET_RMS
+        self.listen_again = set()  # region indexes the viewer blacklisted away
         self.mode = "full"  # "full": slice local audio; "stream": download each region
         self.regions = []  # [(start, end)]
         self.region_state = []  # pending|running|done|failed
@@ -218,7 +221,7 @@ class Job:
                 failed = sum(st == "failed" for st in self.region_state)
                 self.event(f"Finished ({failed} region(s) failed)" if failed else "Finished", "ok")
             self.status = "done"
-            self.audio = None  # every region is cached; free the memory
+            self.audio = self.mix = None  # every region is cached; free the memory
 
     def pending_llm(self):
         return [
@@ -252,6 +255,11 @@ class Job:
                 break
             end = region[1]
         return end - self.playhead
+
+    def heard_nothing_in(self, region):
+        """Lines of a region all hidden: what is left is a blank, not a clean region."""
+        lines = [s for s in self.segments.values() if s["region"] == region and not s["orphan"]]
+        return lines if all(s["hidden"] for s in lines) else []
 
     def _ready_to(self):
         if not self.resting or not self.regions:

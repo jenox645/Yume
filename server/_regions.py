@@ -32,6 +32,7 @@ SMOOTH_S = 0.3  # energy smoothing window
 
 QUIET_FRAME_S = 0.1
 QUIET_RMS = 0.003  # a stem's silence reads 0.000, a sung line 0.1
+VOICE_LEVEL = 0.25  # of a loud frame: below it a stem holds reverb and bleed, which Whisper also fills
 QUIET_PAD_S = 0.3  # kept before the voice: a soft first consonant
 
 
@@ -46,7 +47,17 @@ def _energy(audio, sr):
     return np.convolve(rms, np.ones(k, dtype=np.float32) / k, mode="same")
 
 
-def voice_start(audio, sr=SAMPLE_RATE):
+def voice_level(vocals, sr=SAMPLE_RATE):
+    """The level a voice reaches in this stem. A percentile: one shout must not raise it."""
+    n = int(sr * QUIET_FRAME_S)
+    frames = len(vocals) // n
+    if not frames:
+        return QUIET_RMS
+    rms = np.sqrt(np.mean(vocals[: frames * n].reshape(frames, n) ** 2, axis=1))
+    return max(QUIET_RMS, VOICE_LEVEL * float(np.percentile(rms, 95)))
+
+
+def voice_start(audio, sr=SAMPLE_RATE, level=QUIET_RMS):
     """Seconds of silence to skip before Whisper hears a region, None if it is all silence.
 
     A vocal stem is digital silence until the singer starts. Whisper given 18 s of
@@ -57,7 +68,7 @@ def voice_start(audio, sr=SAMPLE_RATE):
     if not frames:
         return 0.0
     rms = np.sqrt(np.mean(audio[: frames * n].reshape(frames, n) ** 2, axis=1))
-    voiced = np.flatnonzero(rms >= QUIET_RMS)
+    voiced = np.flatnonzero(rms >= level)
     if not len(voiced):
         return None
     return max(0.0, float(voiced[0]) * QUIET_FRAME_S - QUIET_PAD_S)

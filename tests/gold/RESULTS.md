@@ -28,9 +28,14 @@ Change against the base, per clip:
 | Hide lines over compression ratio 2.4 | All | +1.9 speech, 0.0 songs | - | same | No: 34% more song words lost, repeated lyrics are real lines |
 
 Later, a user's song showed what the table missed: a vocal stem is digital silence until the singer starts, and Whisper
-turned 18 s of it into one invented line over its whole window, losing the line sung at 19 s. Skipping a region's leading
-silence (`_regions.voice_start`) took songs from 497 words lost to 311, mean error 5.9 points lower, 7 songs better and
-2 worse by under half a point. One Russian song went from 47.6% to 8.7%. Adopted.
+turned 18 s of it into one invented line over its whole window, losing the line sung at 19 s. Whisper now hears each
+region from the voice on (`_regions.voice_start`, at a quarter of the stem's loud level, which also skips bleed). Songs
+went from 497 words lost to 276, median error 2.7 points lower, mean 7.1, 10 songs better and 1 worse. One Russian song
+went from 47.6% to 8.7%. Adopted.
+
+When everything heard in a region is rejected, Yume listens once more, from the mix or with a warmer decode. Alone this
+barely moved the gold songs (0 better, 1 worse by 0.1), but on a song outside the set it recovered a line at 1:33, and
+it is what stands behind a blacklisted line. Adopted for that.
 
 Filters: raw Whisper against shown lines improves most clips (one Korean talk 142% → 25%), and costs 0.7 and
 1.2 points on two Chinese talks. Nothing to win there.

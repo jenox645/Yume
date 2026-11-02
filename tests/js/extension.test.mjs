@@ -626,6 +626,19 @@ test('a resting job says how far is ready, not a count that looks frozen', () =>
   assert.equal(badge.textContent, 'Listening 4/11');
 });
 
+test('an empty window does not cover the video', () => {
+  const { ctx } = load('subtitle-window.js');
+  const el = () => ({ style: {}, textContent: '', classList: { remove: noop, add: noop } });
+  const parts = {};
+  const win = Object.create(ctx.SubtitleWindow.prototype);
+  win.settings = {};
+  win.element = { dataset: {}, querySelector: (s) => (parts[s] ??= el()) };
+  win.updateSubtitle('', '', '');
+  assert.equal(win.element.dataset.empty, 'true');
+  win.updateSubtitle('line', 'ligne', '');
+  assert.equal(win.element.dataset.empty, 'false');
+});
+
 test('vertical is for Japanese and Chinese: other scripts keep the plain box', () => {
   const { ctx } = load('subtitle-window.js');
   const look = (sourceLanguage) => {

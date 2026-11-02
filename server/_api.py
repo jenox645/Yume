@@ -152,6 +152,7 @@ def health():
     if token_ok(request.headers.get("X-API-Token", "")):
         base.update(
             {
+                "outdated": _code_stamp() > _STARTED_CODE,
                 "model": _state.model_name,
                 "device": _state.device,
                 "compute_type": _state.compute_type,
@@ -477,6 +478,14 @@ def update_blacklist():
     if not isinstance(incoming, list):
         return jsonify({"error": "blacklist must be a list"}), 400
     return _change_blacklist(lambda _current: incoming)
+
+
+def _code_stamp():
+    """When the server's code last changed: an update does not reach a server already running."""
+    return max(p.stat().st_mtime for p in Path(__file__).parent.glob("*.py"))
+
+
+_STARTED_CODE = _code_stamp()
 
 
 @app.route("/blacklist/add", methods=["POST"])

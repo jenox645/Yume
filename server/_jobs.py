@@ -107,6 +107,7 @@ class JobManager:
             jobs = list(self.jobs.values())
         for job in jobs:
             with job.lock:
+                newly_hidden = set()
                 for seg in job.segments.values():
                     if seg["orphan"]:
                         continue
@@ -114,8 +115,29 @@ class JobManager:
                     if hidden != seg["hidden"]:
                         seg["hidden"] = hidden
                         job._touch(seg)
+                        if hidden:
+                            newly_hidden.add(seg["region"])
+                for region in newly_hidden:
+                    self._listen_again(job, region)
                 job._update_status()
         self._notify()
+
+    @staticmethod
+    def _listen_again(job, region):
+        """A blacklisted line left its region blank: hear that region again. Audio already
+        freed: the transcript goes, so the next visit hears it."""
+        lines = job.heard_nothing_in(region)
+        if not lines or region not in job.regions:
+            return
+        if job.mode == "full" and job.audio is None:
+            _state.store.drop_transcript(job.video_key, job.lang_key, job.model, *region)
+            return
+        for seg in lines:
+            seg["orphan"] = True
+        idx = job.regions.index(region)
+        job.region_state[idx] = "pending"
+        job.listen_again.add(idx)
+        job.event(f"Listening again to {region[0]:.0f}-{region[1]:.0f}s")
 
     def drop_all(self, reason):
         """Forget every job (model switch: new jobs pick up the new model).
@@ -279,7 +301,8 @@ class JobManager:
             if job.isolate:
                 vocals = self._isolate(job, path, len(audio) / SR)
                 if vocals is not None:
-                    audio = vocals
+                    job.mix, audio = audio, vocals
+                    job.voice_level = _regions.voice_level(vocals)
                 else:  # transcripts of the mix are cached as the mix's
                     job.model = _state.model_name
                     cached = _state.store.get_transcripts(job.video_key, job.lang_key, job.model)
@@ -427,6 +450,33 @@ class JobManager:
             self._transcribe_region(job, idx)
             self._notify()
 
+    def _hear(self, job, idx, audio):
+        """A region's raw lines, and the audio they came from. Whisper hears from the
+        voice on: the silence and bleed before it become an invented line that hides it."""
+        start, end = job.regions[idx]
+        skip = _regions.voice_start(audio, level=job.voice_level)
+        if skip is None:
+            return [], audio[:0]
+        heard, at = audio[int(skip * SR) :], start + skip
+        first = idx == 0
+        if idx in job.listen_again:
+            job.listen_again.discard(idx)
+            return self._second_listen(job, heard, at, end, first) or [], heard
+        raw = transcribe_audio(heard, job.language, at, is_first_region=first)
+        if raw and all(is_unwanted(s["text"]) for s in raw):
+            raw = self._second_listen(job, heard, at, end, first) or raw
+        return raw, heard
+
+    @staticmethod
+    def _second_listen(job, heard, at, end, first):
+        """Whisper repeats itself on the same input, so this one differs: a song's mix
+        (it wrote the line its vocals lost), else a warmer decode. None: nothing usable."""
+        if job.mix is not None:
+            raw = transcribe_audio(job.mix[int(at * SR) : int(end * SR)], job.language, at, is_first_region=first)
+        else:
+            raw = transcribe_audio(heard, job.language, at, is_first_region=first, temperature=0.4)
+        return raw if any(not is_unwanted(s["text"]) for s in raw) else None
+
     def _transcribe_region(self, job, idx):
         start, end = job.regions[idx]
         path = None
@@ -438,10 +488,7 @@ class JobManager:
                 if not path:
                     raise RuntimeError("stream segment download failed")
                 audio = _audio.load_audio(path)
-            # Whisper hears from the voice on, not from the silence before it
-            skip = _regions.voice_start(audio)
-            audio = audio[:0] if skip is None else audio[int(skip * SR) :]
-            raw = transcribe_audio(audio, job.language, start + (skip or 0.0), is_first_region=(idx == 0))
+            raw, audio = self._hear(job, idx, audio)
             if job.lang_checks < LANG_CHECKS:
                 heard, prob = detect_language(audio)
                 with job.lock:

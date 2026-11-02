@@ -61,7 +61,7 @@ These numbers come from our own tests on an RTX 3060 with 12 GB. Your hardware a
 | Wrong, in % | Japanese | Chinese | Korean | Russian | Arabic |
 |---|---|---:|---:|---:|---:|
 | Talks | 9.1 | 6.2 | 11.3 | 18.5 | 17.4 |
-| Songs | 8.4 | 25.0 | 7.0 | 12.6 | 51.5 |
+| Songs | 7.5 | 24.2 | 6.1 | 8.7 | 50.5 |
 
 Songs are hard, and Arabic songs are not reliable yet. Korean has only 3 talks and 2 songs behind it, and Russian and Arabic have 2 songs each, so treat those as a rough guide. The method and every rejected idea are in [tests/gold/RESULTS.md](tests/gold/RESULTS.md).
 
@@ -104,7 +104,7 @@ NVIDIA is the best supported. AMD works on Linux, and everything else runs on th
 
 - **Live streams:** Yume needs the whole recording, so it works once a stream has ended.
 - **Protected video:** Netflix and most paid services can't be read. Yume works where [yt-dlp](https://github.com/yt-dlp/yt-dlp) can download the audio. We test YouTube, NicoNico, Bilibili and Twitch.
-- **Perfect lyrics:** Whisper still mishears songs. If it invents a line, report it from the popup and that line stays hidden.
+- **Perfect lyrics:** Whisper still mishears songs. If it invents a line, report it from the popup: the line stays hidden and Yume listens to that part again.
 - **Skipping ahead for free:** a jump past what is ready takes a few seconds to catch up. Export only covers the parts already heard.
 
 ## Your data

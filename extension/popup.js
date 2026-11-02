@@ -151,7 +151,7 @@ const DEFAULTS = {
   romajiFontSize: 13, romajiColor: '#ffc88c',
   translationFontSize: 14, translationColor: '#b4beff',
   timingOffset: 0,
-  glassEnabled: false, glassBlur: 18, glassRadius: 20,
+  glassEnabled: false, glassBlur: 18, glassRadius: 2,
   popupTheme: 'auto', subtitleStyle: 'plain', subtitleEntrance: 'fade',
 };
 
@@ -184,7 +184,9 @@ document.addEventListener('DOMContentLoaded', () => {
 async function migrateStorage() {
   const all = await chrome.storage.local.get(null);
   const settings = all.settings || {};
-  if (OBSOLETE_SETTINGS.some(k => k in settings)) {
+  const oldCorners = settings.glassRadius === 20;  // the old default, saved with the form
+  if (oldCorners) settings.glassRadius = DEFAULTS.glassRadius;
+  if (oldCorners || OBSOLETE_SETTINGS.some(k => k in settings)) {
     for (const k of OBSOLETE_SETTINGS) delete settings[k];
     await chrome.storage.local.set({ settings });
   }
@@ -489,8 +491,10 @@ async function checkServers() {
   document.getElementById('serviceStart').style.display = svc.ok && !st && !starting ? '' : 'none';
   document.getElementById('serviceStop').style.display = svc.ok && svc.managed && svc.state !== 'stopped' ? '' : 'none';
   const hint = document.getElementById('serverHint');
-  hint.textContent = serverHint(st, svc, starting);
-  hint.style.display = !st || translation.state !== 'connected' ? '' : 'none';
+  const outdated = h.data?.outdated === true;
+  hint.textContent = outdated ? 'Yume was updated while running. Press Stop Yume, then turn subtitles on.'
+    : serverHint(st, svc, starting);
+  hint.style.display = outdated || !st || translation.state !== 'connected' ? '' : 'none';
 }
 
 // What a status light means, for screen readers (the colour alone says nothing)
