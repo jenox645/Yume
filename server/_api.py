@@ -146,6 +146,8 @@ def health():
     }
     if _state.load_error:
         base["error"] = _state.load_error
+    elif is_ready and _model.notice():
+        base["notice"] = _model.notice()
     if safe_caller:
         base["api_token"] = _state.API_TOKEN
 

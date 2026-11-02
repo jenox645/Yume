@@ -93,7 +93,9 @@ def _recommend(gpu, ram):
         return hw.recommend_whisper_model(gpu)
 
 
-@pytest.mark.parametrize(("ram", "model"), [(32.0, "small"), (12.0, "base"), (4.0, "tiny")])
+@pytest.mark.parametrize(
+    ("ram", "model"), [(32.0, "small"), (15.8, "small"), (12.0, "base"), (7.7, "base"), (4.0, "tiny")]
+)  # a "16 GB" PC reports 15.8
 def test_amd_gets_the_cpu_recommendation_whatever_its_vram(ram, model):
     amd = {**NONE, "has_amd": True, "vendor": "amd", "name": "Radeon RX 7900 XTX", "vram_mb": 24576}
     rec, reason = _recommend(amd, ram)

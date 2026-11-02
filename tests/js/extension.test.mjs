@@ -485,6 +485,16 @@ test('popup: a destructive button acts on the second click only', () => {
   assert.equal(ctx.confirmedClick(btn, 'Click again to clear all'), false);  // armed again from scratch
 });
 
+test('popup: the line under the lights puts what is broken before a notice', () => {
+  const { ctx } = loadPopup();
+  const svc = { ok: true };
+  const notice = 'CUDA could not run, so Whisper is on the CPU.';
+  assert.equal(ctx.statusHint({ status: 'ready', notice }, false, svc, false), notice);
+  assert.equal(ctx.statusHint({ status: 'ready' }, false, svc, false), '');
+  assert.match(ctx.statusHint({ status: 'ready', notice }, true, svc, false), /Translation server/);
+  assert.match(ctx.statusHint({ status: 'ready', notice, outdated: true }, false, svc, false), /updated while running/);
+});
+
 test('popup: exports are named after the video', () => {
   const { ctx } = loadPopup();
   assert.equal(ctx.exportName('周杰倫 Jay Chou【等你下課】', 'srt'), 'yume-周杰倫_Jay_Chou【等你下課】.srt');

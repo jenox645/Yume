@@ -13,9 +13,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "server"))
 
+import _settings  # noqa: E402
 import _ytdlp  # noqa: E402
 
-from yume import health, launch, service, servers, setup  # noqa: E402
+from yume import hardware, health, launch, service, servers, setup  # noqa: E402
 from yume.menus import whisper_model  # noqa: E402
 
 NVIDIA = {"has_nvidia": True, "has_amd": False, "vram_mb": 12288, "name": "RTX 3060"}
@@ -36,9 +37,19 @@ def test_the_first_setup_takes_the_recommended_model():
 
 
 def test_running_setup_again_keeps_the_chosen_device_and_precision():
+    cfg = {"whisper_device": "cpu", "whisper_compute_type": "float32"}
+    setup._pick_whisper_device(cfg, NVIDIA, rerun=True)
+    assert cfg == {"whisper_device": "cpu", "whisper_compute_type": "float32"}
+
+
+def test_choosing_the_cpu_stays_but_its_precision_is_repaired():
     cfg = {"whisper_device": "cpu", "whisper_compute_type": "int8_float16"}
     setup._pick_whisper_device(cfg, NVIDIA, rerun=True)
-    assert cfg == {"whisper_device": "cpu", "whisper_compute_type": "int8_float16"}
+    assert cfg == {"whisper_device": "cpu", "whisper_compute_type": "int8"}
+
+
+def test_the_server_and_the_cli_agree_on_what_only_cuda_runs():
+    assert _settings._CUDA_ONLY_COMPUTE == hardware.CUDA_ONLY_COMPUTE
 
 
 def test_a_gpu_that_is_gone_does_not_stay_the_device():

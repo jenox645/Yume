@@ -368,8 +368,9 @@ def test_a_model_ollama_does_not_have_is_pulled(said, monkeypatch, pulled, pulls
 # ── _start_whisper ────────────────────────────────────────────────────────────
 
 
-def whisper(monkeypatch, *, up=False, freed=True, result=None):
+def whisper(monkeypatch, *, up=False, freed=True, result=None, notice=""):
     monkeypatch.setattr(launch.servers, "whisper_up", lambda cfg: up)
+    monkeypatch.setattr(launch.servers, "whisper_notice", lambda cfg: notice)
     monkeypatch.setattr(launch, "kill_port_process", lambda port: freed)
     monkeypatch.setattr(launch.servers, "resolve_whisper_device", lambda cfg: ("cuda", "float16"))
     start = MagicMock(return_value=result or StartResult())
@@ -380,6 +381,17 @@ def whisper(monkeypatch, *, up=False, freed=True, result=None):
 def test_whisper_already_running(said, monkeypatch):
     ok, start = whisper(monkeypatch, up=True)
     assert ok is True and not start.called and said == ["success: Whisper already running!"]
+
+
+@pytest.mark.parametrize("up", [True, False])
+def test_the_server_notice_is_shown(said, monkeypatch, up):
+    ok, _ = whisper(monkeypatch, up=up, notice="CUDA could not run, so Whisper is on the CPU.")
+    assert ok is True and has(said, "warn: CUDA could not run")
+
+
+def test_a_failed_start_has_no_notice_to_show(said, monkeypatch):
+    ok, _ = whisper(monkeypatch, result=StartResult(error="Whisper: exited with code 1"), notice="unused")
+    assert ok is False and not has(said, "unused")
 
 
 def test_a_busy_whisper_port_stops_the_launch(said, monkeypatch):

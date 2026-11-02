@@ -404,6 +404,13 @@ def whisper_up(cfg: dict) -> bool:
     return check_server(cfg["whisper_host"], cfg["whisper_port"], "/health")["up"]
 
 
+def whisper_notice(cfg: dict) -> str:
+    """What the running Whisper server wants the user to know ("" for nothing)."""
+    from yume.network import check_server
+
+    return check_server(cfg["whisper_host"], cfg["whisper_port"], "/health")["data"].get("notice", "")
+
+
 def translation_up(cfg: dict, backend: dict) -> bool:
     from yume.network import check_translation_server
 

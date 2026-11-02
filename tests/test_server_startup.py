@@ -368,12 +368,44 @@ class TestCpuFallback(unittest.TestCase):
     NO_DEVICE = "CUDA failed with error no CUDA-capable device is detected"
 
     def setUp(self):
-        self._orig = (_state.model, _state.load_error, _state.device, _state.compute_type)
-        _state.model, _state.load_error = None, ""
-        _state.device, _state.compute_type = "cuda", "float16"
+        self._orig = (
+            _state.model, _state.load_error, _state.device, _state.compute_type, _state.device_notice,
+            _state.model_name,
+        )  # fmt: skip
+        _state.model, _state.load_error, _state.device_notice = None, "", ""
+        _state.device, _state.compute_type, _state.model_name = "cuda", "float16", "small"
 
     def tearDown(self):
-        _state.model, _state.load_error, _state.device, _state.compute_type = self._orig
+        (
+            _state.model, _state.load_error, _state.device, _state.compute_type, _state.device_notice,
+            _state.model_name,
+        ) = self._orig  # fmt: skip
+
+    def _health(self):
+        result = TestModelLoadFailure._health(self)
+        return result[0] if isinstance(result, tuple) else result
+
+    def test_the_fallback_reaches_health_with_what_to_do(self):
+        self._load(self._cuda_fails(self.NO_DEVICE))
+        self.assertIn("update its driver", self._health()["notice"])
+        self.assertNotIn("slow on the CPU", self._health()["notice"])
+
+    def test_a_big_model_on_the_cpu_gets_a_notice_also_after_a_fallback(self):
+        _state.model_name = "large-v3-turbo"
+        self._load(self._cuda_fails(self.NO_DEVICE))
+        notice = self._health()["notice"]
+        self.assertIn("update its driver", notice)
+        self.assertIn("large-v3-turbo is slow on the CPU", notice)
+
+    def test_no_notice_for_what_runs_as_it_should(self):
+        _state.model = MagicMock()
+        for device, name in (("cuda", "large-v3-turbo"), ("cpu", "small")):
+            _state.device, _state.model_name = device, name
+            self.assertNotIn("notice", self._health(), (device, name))
+
+    def test_no_notice_before_the_model_is_ready(self):
+        _state.device, _state.model_name, _state.model = "cpu", "large-v3", None
+        self.assertNotIn("notice", self._health())
 
     def _load(self, whisper):
         with (
@@ -439,6 +471,30 @@ class TestCpuFallback(unittest.TestCase):
         self._load(whisper)
         self.assertEqual((_state.device, _state.compute_type, _state.load_error), ("cpu", "int8", ""))
         self.assertEqual(_state.model.device, "cpu")
+
+
+class TestServerStartedByHand(unittest.TestCase):
+    """The launcher resolves the device; a server started by hand must not fail on it."""
+
+    def setUp(self):
+        self._orig = (_state.device, _state.compute_type)
+
+    def tearDown(self):
+        _state.device, _state.compute_type = self._orig
+
+    def _resolved(self, device, compute):
+        _state.device, _state.compute_type = device, compute
+        with patch("builtins.print"):
+            _settings._resolve_auto_device()
+        return _state.device, _state.compute_type
+
+    def test_the_cpu_drops_a_precision_only_cuda_runs(self):
+        for compute in ("float16", "int8_float16"):
+            self.assertEqual(self._resolved("cpu", compute), ("cpu", "int8"))
+
+    def test_other_choices_are_kept(self):
+        self.assertEqual(self._resolved("cpu", "float32"), ("cpu", "float32"))
+        self.assertEqual(self._resolved("cuda", "float16"), ("cuda", "float16"))
 
 
 class TestModelLoadFailure(unittest.TestCase):

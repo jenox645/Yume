@@ -240,9 +240,10 @@ def recommend_whisper_model(gpu_info: dict | None = None) -> tuple[str, str]:
 
     if not gpu_info.get("has_nvidia"):
         cpu = "CPU (Whisper can't use AMD GPUs)" if gpu_info.get("has_amd") else "CPU"
-        if ram >= 16:
+        # 15 and 7.5: a "16 GB" PC reports less, here 15.8
+        if ram >= 15:
             return "small", f"{cpu} with 16+ GB RAM → small model (best CPU balance)"
-        elif ram >= 8:
+        elif ram >= 7.5:
             return "base", f"{cpu} with 8-16 GB RAM → base model"
         else:
             return "tiny", f"{cpu} with <8 GB RAM → tiny model (fastest)"

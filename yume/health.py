@@ -108,13 +108,13 @@ def _chk_llama_cuda():
         return None  # not relevant on CPU-only machines
     on_gpu = llama_server.python_engine_on_gpu()
     if on_gpu is None:
-        return ("llama-cpp CUDA support", False, "llama-cpp-python not installed")
+        return ("llama-cpp GPU support", False, "llama-cpp-python not installed")
     if on_gpu:
-        return ("llama-cpp CUDA support", True, "GPU offloading available")
+        return ("llama-cpp GPU support", True, "GPU offloading available")
     return (
-        "llama-cpp CUDA support",
+        "llama-cpp GPU support",
         False,
-        "CPU-only build — model will use RAM, not VRAM. Re-run setup to reinstall with CUDA",
+        "CPU-only build — model will use RAM, not VRAM. Re-run setup to install the GPU translation engine",
     )
 
 
@@ -292,7 +292,7 @@ _ADVICE = [
     (lambda n: "yt-dlp" in n or "ffmpeg" in n or "ffprobe" in n, _advice_tool),
     (lambda n: n == "Server packages", _advice_packages),
     (
-        lambda n: n == "llama-cpp CUDA support",
+        lambda n: n == "llama-cpp GPU support",
         lambda n, d: [
             "Translation will run on the CPU (slow).",
             f"  Install the GPU translation engine: {tools_menu_path()} → Translation Engine",

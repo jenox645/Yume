@@ -302,7 +302,8 @@ def _describe_engine(native: bool) -> None:
             warn("llama-cpp-python is a CPU-only build — model will load into RAM, not VRAM.")
             warn("Run: python pocket_yume.py setup → reinstall packages to fix this.")
     else:
-        info("No supported GPU found — running translation model on CPU")
+        reason = "llama-cpp-python has no AMD GPU build here" if gpu["has_amd"] else "No supported GPU found"
+        info(f"{reason} — running translation model on CPU")
 
 
 def _start_ollama(cfg: dict, procs: servers.Processes, env: dict) -> bool:
@@ -337,10 +338,17 @@ def _start_ollama(cfg: dict, procs: servers.Processes, env: dict) -> bool:
     return True
 
 
+def _warn_whisper_notice(cfg: dict) -> None:
+    notice = servers.whisper_notice(cfg)
+    if notice:
+        warn(notice)
+
+
 def _start_whisper(cfg: dict, procs: servers.Processes, env: dict) -> bool:
     """Start the Whisper server. False = launching cannot go on."""
     if servers.whisper_up(cfg):
         success("Whisper already running!")
+        _warn_whisper_notice(cfg)
         return True
     if not kill_port_process(cfg["whisper_port"]):  # asks before killing another program
         error(f"Port {cfg['whisper_port']} is still in use — cannot start the Whisper server.")
@@ -355,7 +363,7 @@ def _start_whisper(cfg: dict, procs: servers.Processes, env: dict) -> bool:
             f"  2. Use a smaller model: {C.CYAN}python pocket_yume.py settings{C.RESET} -> model = small",
             f"  3. Re-run setup: {C.CYAN}python pocket_yume.py setup{C.RESET}",
         ]
-    return _report(
+    ok = _report(
         r,
         spin,
         [
@@ -363,3 +371,6 @@ def _start_whisper(cfg: dict, procs: servers.Processes, env: dict) -> bool:
             "This is a one-time download. Future launches will start much faster.",
         ],
     )
+    if ok:
+        _warn_whisper_notice(cfg)
+    return ok

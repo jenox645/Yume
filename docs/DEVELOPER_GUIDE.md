@@ -84,7 +84,7 @@ All endpoints except `/health` need the `X-API-Token` header.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/health` | `loading` / `ready` / `error` (+ token for extension origins) |
+| GET | `/health` | `loading` / `ready` / `error` (+ token for extension origins, `notice` when Whisper is on the CPU for a reason) |
 | POST | `/jobs` | Create or rejoin a job: `url`, `video_id`, `language`, `target`, `romanize`, `title`, `duration`, `stream_url` |
 | GET | `/jobs/<id>?since=&t=&events=1` | Poll: segments changed since revision `since`; `t` = playhead |
 | POST | `/jobs/<id>/options` | `{"romanize": bool}` |

@@ -60,12 +60,21 @@ def _fall_back_to_cpu(reason, fix):
         _state.model = WhisperModel(_state.model_name, device="cpu", compute_type="int8")
         _warm_up()
         print("  CPU fallback:     done")
+        _state.device_notice = f"CUDA could not run, so Whisper is on the CPU. {fix}"
         return True
     except Exception as cpu_err:
         print(f"  CPU fallback:     failed too: {cpu_err}")
         _state.model = None
         _state.load_error = with_advice(f"{reason} and CPU fallback failed: {cpu_err}")
         return False
+
+
+def notice():
+    """What the user should know about a working Whisper: the launcher and the popup show it."""
+    notes = [_state.device_notice]
+    if _state.device == "cpu" and _state.model_name.startswith(_BIG_MODELS):
+        notes.append(f"{_state.model_name} is slow on the CPU: a smaller model such as small keeps up better.")
+    return " ".join(n for n in notes if n)
 
 
 def _cuda_unusable(message):
@@ -135,6 +144,7 @@ def load_model(args):
         _state.load_error = with_advice(str(e) or type(e).__name__)
 
 
+_BIG_MODELS = ("medium", "large")
 # What CTranslate2 says when CUDA cannot run at all
 _NO_CUDA = ("cuda failed with error", "not compiled with cuda support")
 _WHISPER_SETTINGS = "python pocket_yume.py settings → Whisper settings"

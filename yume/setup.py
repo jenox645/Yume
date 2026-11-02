@@ -224,8 +224,12 @@ def _pick_whisper_model(cfg: dict, gpu: dict, rerun: bool = False) -> None:
 def _pick_whisper_device(cfg: dict, gpu: dict, rerun: bool = False) -> None:
     # A saved choice stays while it can run: without NVIDIA that rules out the
     # GPU device and the GPU precisions, which is what older setups saved on AMD
-    cuda_only = cfg.get("whisper_device") == "cuda" or cfg.get("whisper_compute_type") in CUDA_ONLY_COMPUTE
-    if rerun and (gpu["has_nvidia"] or not cuda_only):
+    gpu_precision = cfg.get("whisper_compute_type") in CUDA_ONLY_COMPUTE
+    if rerun and cfg.get("whisper_device") == "cpu" and gpu["has_nvidia"]:
+        if gpu_precision:  # the CPU stays the user's choice
+            cfg["whisper_compute_type"] = "int8"
+        return
+    if rerun and (gpu["has_nvidia"] or not (cfg.get("whisper_device") == "cuda" or gpu_precision)):
         return
     if gpu["has_nvidia"]:
         cfg["whisper_device"] = "cuda"

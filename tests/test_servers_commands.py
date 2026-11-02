@@ -133,6 +133,14 @@ class TestWhisperCommand:
         cfg = {**CFG, "whisper_compute_type": "int8_float16"}
         assert servers.resolve_whisper_device(cfg) == ("cuda", "int8_float16")
 
+    def test_the_notice_comes_from_health(self, monkeypatch):
+        import yume.network
+
+        monkeypatch.setattr(yume.network, "check_server", lambda *a: {"up": True, "data": {"notice": "on the CPU"}})
+        assert servers.whisper_notice(CFG) == "on the CPU"
+        monkeypatch.setattr(yume.network, "check_server", lambda *a: {"up": False, "data": {}})
+        assert servers.whisper_notice(CFG) == ""
+
     def test_command_passes_the_config_only_when_it_exists(self, tmp_path, monkeypatch):
         import config
 
