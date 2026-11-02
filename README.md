@@ -9,26 +9,30 @@
 
 </div>
 
-Yume listens to the video you are watching, writes down what is said, translates it and shows it on the video. It does all of this on your PC, with no cloud service and no account. It was made for songs and talks in **Japanese, Chinese, Korean, Russian and Arabic**, and you can see the original, how it is read, and the translation together.
+Yume listens to the video you are watching, writes down what is said, translates it and shows it on the video. It all happens on your PC, with no cloud service and no account. It was made for songs and talks in **Japanese, Chinese, Korean, Russian and Arabic**, and you can see the original, how it is read, and the translation together.
 
-https://github.com/user-attachments/assets/48ee3790-7635-4321-8246-308689e53210
+<a href="https://github.com/jenox645/Yume/releases/download/v0.2.0/Yume-demo.mp4"><img src="docs/images/demo.webp" alt="Demo: turning Yume on for a song, subtitles appearing, then changing the subtitle style" width="100%"></a>
+
+<p align="center"><a href="https://github.com/jenox645/Yume/releases/download/v0.2.0/Yume-demo.mp4">Watch the demo with sound</a></p>
 
 ## See it
 
 Press one button in your browser. Yume starts by itself, and stops by itself when you are done.
 
+<img src="docs/images/in-use.jpg" alt="Yume on a Japanese song: the line, its reading and its English translation over the video, with the popup open" width="100%">
+
+Six subtitle styles. Pick one in the Look tab. Vertical is for Japanese and Chinese.
+
+<img src="docs/images/subtitle-styles.png" alt="One line of a song in six styles: plain box, outline, paper slip, night, karaoke and vertical" width="100%">
+
+Light and dark, and a terminal for everything else.
+
 <p align="center">
-  <img src="docs/images/popup-light.png" alt="The Yume popup in its light theme, with subtitles on" width="300">
-  <img src="docs/images/popup-dark.png" alt="The Yume popup in its dark theme, with subtitles on" width="300">
+  <img src="docs/images/popup-light.png" alt="The Yume popup in its light theme" width="240">
+  <img src="docs/images/popup-dark.png" alt="The Yume popup in its dark theme" width="240">
 </p>
 
-Six subtitle styles, in every script Yume reads. Vertical is for Japanese and Chinese.
-
-<img src="docs/images/subtitle-styles.png" alt="The same line in six styles: plain box, outline, paper slip, night, karaoke and vertical, in Japanese, Korean, Russian, Arabic and Chinese" width="100%">
-
-A terminal for everything else.
-
-<img src="docs/images/terminal.png" alt="The Yume terminal menu: Start Yume, Auto start, Status, Health check and more" width="640">
+<img src="docs/images/terminal.png" alt="The Yume terminal menu: Start Yume, Auto start, Status, Health check and more" width="100%">
 
 ## Get started
 
