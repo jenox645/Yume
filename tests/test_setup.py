@@ -64,7 +64,7 @@ class Wizard:
     def _save(self, cfg):
         self.saved += 1
 
-    def run(self, cfg):
+    def run(self, cfg, rerun=False):
         import yume
         import yume.installers
         import yume.llama_server
@@ -118,7 +118,7 @@ class Wizard:
             stack.enter_context(patch.object(yume.menus, "browse_hf", self._installer("hf-browse")))
             stack.enter_context(patch("config.save_config", side_effect=self._save))
             stack.enter_context(patch("config.config_export"))
-            return setup.setup_wizard(cfg)
+            return setup.setup_wizard(cfg, rerun=rerun)
 
 
 def test_everything_present_finishes_after_the_scan():
@@ -147,10 +147,21 @@ def test_whisper_device_and_precision_follow_the_gpu(gpu, device, compute):
     assert (cfg["whisper_device"], cfg["whisper_compute_type"]) == (device, compute)
 
 
-def test_amd_uses_rocm_off_windows():
-    with patch.object(setup, "IS_WIN", False):
+@pytest.mark.parametrize("win", [True, False])
+def test_amd_runs_whisper_on_the_cpu_on_every_os(win):
+    with patch.object(setup, "IS_WIN", win), patch("yume.hardware.detect_ram_gb", return_value=32.0):
         cfg = Wizard(AMD_8GB).run({})
-    assert (cfg["whisper_device"], cfg["whisper_compute_type"]) == ("auto", "float16")
+    assert (cfg["whisper_device"], cfg["whisper_compute_type"]) == ("cpu", "int8")
+    assert cfg["whisper_model"] == "small"  # the CPU's pick, not one for 8 GB of VRAM
+
+
+@pytest.mark.parametrize("compute", ["float16", "int8_float16"])
+def test_running_setup_again_repairs_what_the_old_amd_setup_saved(compute):
+    w = Wizard(AMD_8GB)
+    cfg = w.run({"whisper_model": "large-v3-turbo", "whisper_device": "auto", "whisper_compute_type": compute}, True)
+    assert (cfg["whisper_device"], cfg["whisper_compute_type"]) == ("cpu", "int8")
+    assert cfg["whisper_model"] == "large-v3-turbo"  # the model stays the user's choice
+    assert w.saved
 
 
 def test_a_custom_whisper_model_path_is_kept():

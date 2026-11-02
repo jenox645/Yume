@@ -491,10 +491,14 @@ async function checkServers() {
   document.getElementById('serviceStart').style.display = svc.ok && !st && !starting ? '' : 'none';
   document.getElementById('serviceStop').style.display = svc.ok && svc.managed && svc.state !== 'stopped' ? '' : 'none';
   const hint = document.getElementById('serverHint');
-  const outdated = h.data?.outdated === true;
-  hint.textContent = outdated ? 'Yume was updated while running. Press Stop Yume, then turn subtitles on.'
-    : serverHint(st, svc, starting);
-  hint.style.display = outdated || !st || translation.state !== 'connected' ? '' : 'none';
+  hint.textContent = statusHint(h.data, !st || translation.state !== 'connected', svc, starting);
+  hint.style.display = hint.textContent ? '' : 'none';
+}
+
+// The line under the lights: what to fix first, else what the server wants known
+function statusHint(health, down, svc, starting) {
+  if (health?.outdated === true) return 'Yume was updated while running. Press Stop Yume, then turn subtitles on.';
+  return down ? serverHint(health?.status, svc, starting) : health?.notice || '';
 }
 
 // What a status light means, for screen readers (the colour alone says nothing)

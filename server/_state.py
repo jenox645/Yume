@@ -25,6 +25,7 @@ compute_type = "float16"
 # Set by the model-loader thread when loading fails; /health reports it as
 # status "error" instead of "loading" forever.
 load_error = ""
+device_notice = ""  # why Whisper left the GPU, for /health
 
 # Prevent garbage collection of Windows console handler ctypes callback
 _win_console_handler_ref = None

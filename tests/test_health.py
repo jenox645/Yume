@@ -167,7 +167,7 @@ def test_a_cpu_only_llama_cpp_python_points_at_the_gpu_engine(monkeypatch):
     monkeypatch.setitem(sys.modules, "llama_cpp", types.ModuleType("llama_cpp"))
     monkeypatch.setitem(sys.modules, "llama_cpp.llama_cpp", lib)
     c = Check(native_llama=False).go()
-    assert c.row("llama-cpp CUDA support")[1] is False
+    assert c.row("llama-cpp GPU support")[1] is False
     assert any("Translation Engine" in line for line in c.advice)
 
 

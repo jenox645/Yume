@@ -362,6 +362,141 @@ class TestWriteTokenFile(unittest.TestCase):
                 _state.TOKEN_FILE = orig_token_file
 
 
+class TestCpuFallback(unittest.TestCase):
+    """CUDA that cannot run must not stop Whisper: the CPU takes over."""
+
+    NO_DEVICE = "CUDA failed with error no CUDA-capable device is detected"
+
+    def setUp(self):
+        self._orig = (
+            _state.model, _state.load_error, _state.device, _state.compute_type, _state.device_notice,
+            _state.model_name,
+        )  # fmt: skip
+        _state.model, _state.load_error, _state.device_notice = None, "", ""
+        _state.device, _state.compute_type, _state.model_name = "cuda", "float16", "small"
+
+    def tearDown(self):
+        (
+            _state.model, _state.load_error, _state.device, _state.compute_type, _state.device_notice,
+            _state.model_name,
+        ) = self._orig  # fmt: skip
+
+    def _health(self):
+        result = TestModelLoadFailure._health(self)
+        return result[0] if isinstance(result, tuple) else result
+
+    def test_the_fallback_reaches_health_with_what_to_do(self):
+        self._load(self._cuda_fails(self.NO_DEVICE))
+        self.assertIn("update its driver", self._health()["notice"])
+        self.assertNotIn("slow on the CPU", self._health()["notice"])
+
+    def test_a_big_model_on_the_cpu_gets_a_notice_also_after_a_fallback(self):
+        _state.model_name = "large-v3-turbo"
+        self._load(self._cuda_fails(self.NO_DEVICE))
+        notice = self._health()["notice"]
+        self.assertIn("update its driver", notice)
+        self.assertIn("large-v3-turbo is slow on the CPU", notice)
+
+    def test_no_notice_for_what_runs_as_it_should(self):
+        _state.model = MagicMock()
+        for device, name in (("cuda", "large-v3-turbo"), ("cpu", "small")):
+            _state.device, _state.model_name = device, name
+            self.assertNotIn("notice", self._health(), (device, name))
+
+    def test_no_notice_before_the_model_is_ready(self):
+        _state.device, _state.model_name, _state.model = "cpu", "large-v3", None
+        self.assertNotIn("notice", self._health())
+
+    def _load(self, whisper):
+        with (
+            patch.object(_model, "WhisperModel", side_effect=whisper),
+            patch.object(_model, "set_low_priority"),
+            patch("builtins.print"),
+        ):
+            _model.load_model(MagicMock(prewarm=False, port=5001))
+
+    @staticmethod
+    def _cuda_fails(message):
+        def whisper(name, device, compute_type):
+            if device == "cuda":
+                raise RuntimeError(message)
+            return TestCpuFallback._loaded(device, compute_type)
+
+        return whisper
+
+    @staticmethod
+    def _loaded(device, compute_type="int8", segments=()):
+        model = MagicMock(device=device, compute_type=compute_type)
+        model.transcribe.return_value = (segments, MagicMock())
+        return model
+
+    def test_cuda_that_cannot_run_falls_back_to_the_cpu(self):
+        for raw in (
+            self.NO_DEVICE,
+            "CUDA failed with error CUDA driver version is insufficient for CUDA runtime version",
+            "This CTranslate2 package was not compiled with CUDA support",
+        ):
+            _state.model, _state.device, _state.compute_type = None, "cuda", "float16"
+            self._load(self._cuda_fails(raw))
+            self.assertEqual((_state.device, _state.compute_type, _state.load_error), ("cpu", "int8", ""), raw)
+            self.assertEqual((_state.model.device, _state.model.compute_type), ("cpu", "int8"), raw)
+
+    def test_out_of_memory_is_no_reason_to_leave_the_gpu(self):
+        for raw in ("CUDA failed with error out of memory", "CUDA out of memory"):
+            _state.load_error = ""
+            self._load(self._cuda_fails(raw))
+            self.assertEqual(_state.device, "cuda")
+            self.assertIn("smaller model", _state.load_error)
+
+    def test_a_cpu_that_fails_too_publishes_both_reasons(self):
+        def whisper(name, device, compute_type):
+            raise RuntimeError(self.NO_DEVICE if device == "cuda" else "No module named 'ctranslate2'")
+
+        self._load(whisper)
+        self.assertIsNone(_state.model)
+        self.assertIn(self.NO_DEVICE, _state.load_error)
+        self.assertIn("No module named", _state.load_error)
+        self.assertIn("pocket_yume.py setup", _state.load_error)
+
+    @staticmethod
+    def _no_cublas():
+        raise RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+        yield
+
+    def test_a_warm_up_without_cublas_falls_back_to_the_cpu(self):
+        def whisper(name, device, compute_type):
+            # As in faster-whisper: transcribe() returns, the error comes from reading the segments
+            return self._loaded(device, segments=self._no_cublas() if device == "cuda" else ())
+
+        self._load(whisper)
+        self.assertEqual((_state.device, _state.compute_type, _state.load_error), ("cpu", "int8", ""))
+        self.assertEqual(_state.model.device, "cpu")
+
+
+class TestServerStartedByHand(unittest.TestCase):
+    """The launcher resolves the device; a server started by hand must not fail on it."""
+
+    def setUp(self):
+        self._orig = (_state.device, _state.compute_type)
+
+    def tearDown(self):
+        _state.device, _state.compute_type = self._orig
+
+    def _resolved(self, device, compute):
+        _state.device, _state.compute_type = device, compute
+        with patch("builtins.print"):
+            _settings._resolve_auto_device()
+        return _state.device, _state.compute_type
+
+    def test_the_cpu_drops_a_precision_only_cuda_runs(self):
+        for compute in ("float16", "int8_float16"):
+            self.assertEqual(self._resolved("cpu", compute), ("cpu", "int8"))
+
+    def test_other_choices_are_kept(self):
+        self.assertEqual(self._resolved("cpu", "float32"), ("cpu", "float32"))
+        self.assertEqual(self._resolved("cuda", "float16"), ("cuda", "float16"))
+
+
 class TestModelLoadFailure(unittest.TestCase):
     """A failed model load must be visible, not an endless 'loading'."""
 

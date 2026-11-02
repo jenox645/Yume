@@ -7,6 +7,8 @@ import types
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import yume.hardware as hw  # noqa: E402
@@ -84,3 +86,24 @@ def test_cim_is_only_asked_on_windows():
 def test_no_gpu_tools_at_all():
     missing = FileNotFoundError("not installed")
     assert detect({"nvidia-smi": missing, "rocm-smi": missing, "rocminfo": missing}) == NONE
+
+
+def _recommend(gpu, ram):
+    with patch.object(hw, "detect_ram_gb", return_value=ram):
+        return hw.recommend_whisper_model(gpu)
+
+
+@pytest.mark.parametrize(
+    ("ram", "model"), [(32.0, "small"), (15.8, "small"), (12.0, "base"), (7.7, "base"), (4.0, "tiny")]
+)  # a "16 GB" PC reports 15.8
+def test_amd_gets_the_cpu_recommendation_whatever_its_vram(ram, model):
+    amd = {**NONE, "has_amd": True, "vendor": "amd", "name": "Radeon RX 7900 XTX", "vram_mb": 24576}
+    rec, reason = _recommend(amd, ram)
+    assert rec == model
+    assert "CPU" in reason and "AMD" in reason
+    assert rec == _recommend(NONE, ram)[0]
+
+
+def test_nvidia_is_still_picked_by_vram():
+    rtx = {**NONE, "has_nvidia": True, "vendor": "nvidia", "name": "RTX 3060", "vram_mb": 12288}
+    assert _recommend(rtx, 8.0)[0] == "large-v3-turbo"

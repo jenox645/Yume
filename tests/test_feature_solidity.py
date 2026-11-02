@@ -13,12 +13,14 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "server"))
 
+import _settings  # noqa: E402
 import _ytdlp  # noqa: E402
 
-from yume import health, launch, service, servers, setup  # noqa: E402
+from yume import hardware, health, launch, service, servers, setup  # noqa: E402
 from yume.menus import whisper_model  # noqa: E402
 
 NVIDIA = {"has_nvidia": True, "has_amd": False, "vram_mb": 12288, "name": "RTX 3060"}
+AMD = {"has_nvidia": False, "has_amd": True, "vram_mb": 8192, "name": "RX 6800"}
 NO_GPU = {"has_nvidia": False, "has_amd": False, "vram_mb": 0, "name": None}
 
 
@@ -35,15 +37,41 @@ def test_the_first_setup_takes_the_recommended_model():
 
 
 def test_running_setup_again_keeps_the_chosen_device_and_precision():
+    cfg = {"whisper_device": "cpu", "whisper_compute_type": "float32"}
+    setup._pick_whisper_device(cfg, NVIDIA, rerun=True)
+    assert cfg == {"whisper_device": "cpu", "whisper_compute_type": "float32"}
+
+
+def test_choosing_the_cpu_stays_but_its_precision_is_repaired():
     cfg = {"whisper_device": "cpu", "whisper_compute_type": "int8_float16"}
-    setup._pick_whisper_device(cfg, NVIDIA, rocm=False, rerun=True)
-    assert cfg == {"whisper_device": "cpu", "whisper_compute_type": "int8_float16"}
+    setup._pick_whisper_device(cfg, NVIDIA, rerun=True)
+    assert cfg == {"whisper_device": "cpu", "whisper_compute_type": "int8"}
+
+
+def test_the_server_and_the_cli_agree_on_what_only_cuda_runs():
+    assert _settings._CUDA_ONLY_COMPUTE == hardware.CUDA_ONLY_COMPUTE
 
 
 def test_a_gpu_that_is_gone_does_not_stay_the_device():
     cfg = {"whisper_device": "cuda", "whisper_compute_type": "float16"}
-    setup._pick_whisper_device(cfg, NO_GPU, rocm=False, rerun=True)
+    setup._pick_whisper_device(cfg, NO_GPU, rerun=True)
     assert cfg == {"whisper_device": "cpu", "whisper_compute_type": "int8"}
+
+
+@pytest.mark.parametrize(
+    ("device", "compute"), [("auto", "float16"), ("auto", "int8_float16"), ("cpu", "float16"), ("cuda", "float16")]
+)
+def test_a_precision_only_cuda_can_run_does_not_stay_without_nvidia(device, compute):
+    cfg = {"whisper_device": device, "whisper_compute_type": compute}
+    setup._pick_whisper_device(cfg, AMD, rerun=True)
+    assert cfg == {"whisper_device": "cpu", "whisper_compute_type": "int8"}
+
+
+@pytest.mark.parametrize(("device", "compute"), [("auto", "auto"), ("auto", "int8"), ("cpu", "float32")])
+def test_a_choice_that_can_run_stays_on_amd(device, compute):
+    cfg = {"whisper_device": device, "whisper_compute_type": compute}
+    setup._pick_whisper_device(cfg, AMD, rerun=True)
+    assert cfg == {"whisper_device": device, "whisper_compute_type": compute}
 
 
 @pytest.mark.parametrize(("installed", "method"), [(True, "deno"), (False, "cookies")])

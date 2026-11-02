@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from yume.constants import TOOLS_DIR, SERVER_DIR, LOGS_DIR, IS_WIN, HEALTH_PATH_OLLAMA, CREATE_NO_WINDOW
-from yume.hardware import detect_gpu
+from yume.hardware import CUDA_ONLY_COMPUTE, detect_gpu
 from yume.utils import _run, find_gguf_models, find_ollama
 
 _log = logging.getLogger("pocket_yume")
@@ -100,13 +100,15 @@ def resolve_whisper_device(cfg: dict) -> tuple[str, str]:
     comp = cfg["whisper_compute_type"]
     gpu = detect_gpu()
     if dev == "auto":
-        dev = "cuda" if gpu["has_nvidia"] or (gpu.get("has_amd") and not IS_WIN) else "cpu"
+        dev = "cuda" if gpu["has_nvidia"] else "cpu"
     if comp == "auto":
         comp = (
             "float16"
             if dev == "cuda" and gpu.get("vram_mb", 0) >= 8000
             else ("int8_float16" if dev == "cuda" else "int8")
         )
+    elif dev == "cpu" and comp in CUDA_ONLY_COMPUTE:
+        comp = "int8"  # saved for a GPU (older setups, on AMD too): Whisper would not load
     return dev, comp
 
 
@@ -400,6 +402,13 @@ def whisper_up(cfg: dict) -> bool:
     from yume.network import check_server
 
     return check_server(cfg["whisper_host"], cfg["whisper_port"], "/health")["up"]
+
+
+def whisper_notice(cfg: dict) -> str:
+    """What the running Whisper server wants the user to know ("" for nothing)."""
+    from yume.network import check_server
+
+    return check_server(cfg["whisper_host"], cfg["whisper_port"], "/health")["data"].get("notice", "")
 
 
 def translation_up(cfg: dict, backend: dict) -> bool:

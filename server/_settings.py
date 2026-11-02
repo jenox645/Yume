@@ -144,6 +144,10 @@ def _load_blacklist(path):
         print(f"[Yume] Blacklist load failed: {e}")
 
 
+# Same as yume.hardware.CUDA_ONLY_COMPUTE: on the CPU these raise ValueError
+_CUDA_ONLY_COMPUTE = ("float16", "int8_float16")
+
+
 def _resolve_auto_device():
     # 'auto' goes by CTranslate2's own detection. (This used to test
     # `"cuda" in get_supported_compute_types("cuda")` — a set of compute types like
@@ -158,6 +162,9 @@ def _resolve_auto_device():
 
     if _state.compute_type == "auto":
         _state.compute_type = "float16" if _state.device == "cuda" else "int8"
+    elif _state.device == "cpu" and _state.compute_type in _CUDA_ONLY_COMPUTE:
+        print(f"  [cpu]             compute_type {_state.compute_type} needs CUDA, using int8")
+        _state.compute_type = "int8"
 
 
 def persist_whisper_model(model):
