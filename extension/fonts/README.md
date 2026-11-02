@@ -28,3 +28,7 @@ Place `.ttf` or `.otf` font files here to use them in Yume subtitles.
 | Multi-CJK | Noto Sans CJK | [GitHub](https://github.com/googlefonts/noto-cjk) |
 
 All Noto fonts are licensed under the SIL Open Font License.
+
+## Fonts of the popup
+
+`ZenKakuGothicNew-*.woff2` and `ShipporiMinchoB1-800.woff2` are Latin subsets the popup loads itself. The big 夢 in the popup is an outline of Yuji Boku. All three are under the SIL Open Font License: see the `OFL-*.txt` files here.

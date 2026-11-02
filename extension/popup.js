@@ -151,7 +151,8 @@ const DEFAULTS = {
   romajiFontSize: 13, romajiColor: '#ffc88c',
   translationFontSize: 14, translationColor: '#b4beff',
   timingOffset: 0,
-  glassEnabled: false, glassBlur: 18, glassRadius: 20,
+  glassEnabled: false, glassBlur: 18, glassRadius: 2,
+  popupTheme: 'auto', subtitleStyle: 'plain', subtitleEntrance: 'fade',
 };
 
 // Settings that moved to the server (translation runs there now) or died with
@@ -169,6 +170,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('yumeVersion').textContent = 'v' + chrome.runtime.getManifest().version;
   restoreCollapsibleState();
   setupCollapsibleSections();
+  setupTabs();
   populateFontDropdowns();
   setupEventListeners();
   migrateStorage().catch(e => console.warn('[Yume] migration:', e.message));
@@ -182,7 +184,9 @@ document.addEventListener('DOMContentLoaded', () => {
 async function migrateStorage() {
   const all = await chrome.storage.local.get(null);
   const settings = all.settings || {};
-  if (OBSOLETE_SETTINGS.some(k => k in settings)) {
+  const oldCorners = settings.glassRadius === 20;  // the old default, saved with the form
+  if (oldCorners) settings.glassRadius = DEFAULTS.glassRadius;
+  if (oldCorners || OBSOLETE_SETTINGS.some(k => k in settings)) {
     for (const k of OBSOLETE_SETTINGS) delete settings[k];
     await chrome.storage.local.set({ settings });
   }
@@ -228,6 +232,45 @@ function loadSectionData(sid) {
   else if (sid === 'stats') startStatsPolling();
   else if (sid === 'whisper-model') fetchStats().catch(warn);
   else if (sid === 'history') loadHistory().catch(warn);
+}
+
+// One pane at a time, so the popup never grows past what a browser allows (600 px)
+function showPane(tab) {
+  document.querySelectorAll('[role="tab"]').forEach((t) => {
+    const on = t === tab;
+    t.setAttribute('aria-selected', String(on));
+    t.tabIndex = on ? 0 : -1;
+    $(t.dataset.pane).hidden = !on;
+  });
+}
+
+function setupTabs() {
+  const tabs = [...document.querySelectorAll('[role="tab"]')];
+  tabs.forEach((tab, i) => {
+    tab.addEventListener('click', () => showPane(tab));
+    tab.addEventListener('keydown', (e) => {
+      const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+      if (!step) return;
+      e.preventDefault();
+      const next = tabs[(i + step + tabs.length) % tabs.length];
+      showPane(next);
+      next.focus();
+    });
+  });
+}
+
+// What Yume is doing. The big character brushes itself in while it wakes up
+const YUME_STATES = { asleep: 'Asleep', busy: 'Waking up', awake: 'Listening to this tab' };
+
+function showYumeState(name) {
+  document.documentElement?.setAttribute('data-state', name);
+  $('yumeState').textContent = YUME_STATES[name];
+}
+
+function applyTheme() {
+  const theme = $('popupTheme').value;
+  if (theme === 'auto') document.documentElement?.removeAttribute('data-theme');
+  else document.documentElement?.setAttribute('data-theme', theme);
 }
 
 function restoreCollapsibleState() {
@@ -358,6 +401,7 @@ async function toggleSubtitles() {
   const button = document.getElementById('toggleSubtitles');
   const statusMsg = document.getElementById('statusMessage');
   button.disabled = true;
+  showYumeState('busy');
   flash(statusMsg, 'Working...', '', 0);
   try {
     const tab = await activeTab();
@@ -375,6 +419,7 @@ async function toggleSubtitles() {
     updateToggleButton(response.active);
     flash(statusMsg, response.active ? 'Starting — progress shows in the subtitle window' : 'Subtitles disabled', response.active ? '' : 'success', 3000);
   } catch (error) {
+    showYumeState(button.classList.contains('active') ? 'awake' : 'asleep');
     flash(statusMsg, error.message, 'error', 0);
   } finally { button.disabled = false; }
 }
@@ -383,7 +428,8 @@ function updateToggleButton(isActive) {
   const button = document.getElementById('toggleSubtitles');
   button.classList.toggle('active', isActive);
   button.setAttribute('aria-checked', String(isActive));
-  document.getElementById('toggleText').textContent = isActive ? 'Disable' : 'Enable';
+  document.getElementById('toggleText').textContent = isActive ? 'Subtitles on' : 'Turn subtitles on';
+  showYumeState(isActive ? 'awake' : 'asleep');
 }
 
 async function checkSubtitleStatus() {
@@ -445,8 +491,10 @@ async function checkServers() {
   document.getElementById('serviceStart').style.display = svc.ok && !st && !starting ? '' : 'none';
   document.getElementById('serviceStop').style.display = svc.ok && svc.managed && svc.state !== 'stopped' ? '' : 'none';
   const hint = document.getElementById('serverHint');
-  hint.textContent = serverHint(st, svc, starting);
-  hint.style.display = !st || translation.state !== 'connected' ? '' : 'none';
+  const outdated = h.data?.outdated === true;
+  hint.textContent = outdated ? 'Yume was updated while running. Press Stop Yume, then turn subtitles on.'
+    : serverHint(st, svc, starting);
+  hint.style.display = outdated || !st || translation.state !== 'connected' ? '' : 'none';
 }
 
 // What a status light means, for screen readers (the colour alone says nothing)
@@ -547,6 +595,7 @@ async function loadSettings() {
   $('glassControls').style.display = s.glassEnabled ? 'block' : 'none';
   updateRomajiLabel();
   updateTranslationFontVisibility();
+  applyTheme();
 }
 
 async function saveSettings(notify = true) {
@@ -909,6 +958,8 @@ function setupEventListeners() {
   }
   on('sourceLanguage', 'change', () => { updateRomajiLabel(); populateFontDropdowns(); return saveSettings(true); });
   on('targetLanguage', 'change', () => { updateTranslationFontVisibility(); return saveSettings(true); });
+  on('popupTheme', 'change', () => { applyTheme(); return saveSettings(true); });
+  for (const id of ['subtitleStyle', 'subtitleEntrance']) on(id, 'change', () => saveSettings(true));
 
   on('windowOpacity', 'input', () => { $('opacityVal').textContent = $('windowOpacity').value + '%'; return saveSettings(false); });
   for (const id of ['windowBgColor', 'originalColor', 'romajiColor', 'translationColor']) on(id, 'input', () => saveSettings(false));

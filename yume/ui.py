@@ -14,6 +14,15 @@ from yume.constants import IS_WIN
 # ── Colour codes ──────────────────────────────────────────────────────────────
 
 
+def _tone(rgb: tuple, c256: int, c16: int) -> str:
+    """One colour at the depth this terminal has. Mid tones: readable on dark and on light."""
+    if os.environ.get("COLORTERM", "").lower() in ("truecolor", "24bit") or os.environ.get("WT_SESSION"):
+        return "\033[38;2;{};{};{}m".format(*rgb)
+    if "256color" in os.environ.get("TERM", ""):
+        return f"\033[38;5;{c256}m"
+    return f"\033[{c16}m"
+
+
 class C:
     RESET = "\033[0m"
     BOLD = "\033[1m"
@@ -24,8 +33,8 @@ class C:
     BLUE = "\033[94m"
     MAGENTA = "\033[95m"
     CYAN = "\033[96m"
-    GOLD = "\033[38;5;220m"
-    PURPLE = "\033[38;5;141m"
+    GOLD = _tone((209, 73, 91), 167, 91)  # YUME-chan's red: prompts, the seal
+    PURPLE = _tone((91, 141, 239), 69, 94)  # her cobalt
 
     @classmethod
     def disable(cls):
@@ -64,33 +73,12 @@ def _safe_box():
     return BOX_CHARS["rounded"]
 
 
-def panel(text: str, title: str = "", style: str = "", width: int | None = None, pad: int = 1) -> None:
-    """Draw a rounded panel/box around text."""
-    b = _safe_box()
-    w = width or min(tw() - 2, 80)
-    inner = w - 2 - (pad * 2)
-    lines = []
-    for raw_line in text.split("\n"):
-        while len(raw_line) > inner:
-            lines.append(raw_line[:inner])
-            raw_line = raw_line[inner:]
-        lines.append(raw_line)
-
+def panel(text: str, title: str = "", style: str = "") -> None:
+    """A titled block of lines: text aligned on the page, no box around it."""
     if title:
-        t = f" {title} "
-        t_visible = len(ANSI_ESCAPE_RE.sub("", t))
-        top = f"{b['tl']}{t}{b['h'] * max(0, w - 2 - t_visible)}{b['tr']}"
-    else:
-        top = f"{b['tl']}{b['h'] * (w - 2)}{b['tr']}"
-    bot = f"{b['bl']}{b['h'] * (w - 2)}{b['br']}"
-
-    color = style or C.DIM
-    print(f"  {color}{top}{C.RESET}")
-    for line in lines:
-        clean = ANSI_ESCAPE_RE.sub("", line)
-        padding = inner - len(clean)
-        print(f"  {color}{b['v']}{C.RESET}{' ' * pad}{line}{' ' * max(0, padding)}{' ' * pad}{color}{b['v']}{C.RESET}")
-    print(f"  {color}{bot}{C.RESET}")
+        print(f"  {C.BOLD}{title}{C.RESET}")
+    for line in text.split("\n"):
+        print(f"  {line}{C.RESET}")
 
 
 def _width(text) -> int:
@@ -99,40 +87,17 @@ def _width(text) -> int:
 
 
 def table(headers: list, rows: list, col_styles: list | None = None, title: str = "") -> None:
-    """Render a formatted table."""
-    col_styles = col_styles or [C.RESET] * len(headers)
-    widths = [_width(h) for h in headers]
-    for row in rows:
-        for i, cell in enumerate(row):
-            if i < len(widths):
-                widths[i] = max(widths[i], _width(cell))
-
-    # Too wide (a long path in the last column): only the last column gives way.
-    # Cells are never cut, so shrinking every column pushed each row's later
-    # cells out of line ("Translation server responding   PASS").
-    max_w = tw() - 6
-    total = sum(widths) + (len(widths) - 1) * 3
-    if total > max_w:
-        widths[-1] = max(4, widths[-1] - (total - max_w))
-
-    def _row(cells, styles=None):
-        parts = []
-        for i, cell in enumerate(cells):
-            s = styles[i] if styles and i < len(styles) else C.RESET
-            last = i == len(cells) - 1
-            pad = 0 if last or i >= len(widths) else widths[i] - _width(cell)
-            parts.append(f"{s}{cell}{C.RESET}{' ' * max(0, pad)}")
-        return "   ".join(parts)
-
-    sep = f"  {C.DIM}{'─' * (sum(widths) + (len(widths) - 1) * 3)}{C.RESET}"
+    """Rows in aligned columns, headed by a title. No borders: the alignment is the table."""
+    widths = [max([_width(str(h))] + [_width(str(r[i])) for r in rows]) for i, h in enumerate(headers)]
+    print()
     if title:
-        print(f"\n  {C.BOLD}{title}{C.RESET}")
-    print(sep)
-    print(f"  {_row(headers, [C.BOLD + C.DIM] * len(headers))}")
-    print(sep)
+        print(f"  {C.BOLD}{title}{C.RESET}")
     for row in rows:
-        print(f"  {_row(row, col_styles)}")
-    print(sep)
+        cells = []
+        for i, cell in enumerate(row):
+            style = col_styles[i] if col_styles and i < len(col_styles) else ""
+            cells.append(f"{style}{cell}{C.RESET}{' ' * (widths[i] - _width(str(cell)))}")
+        print("  " + "  ".join(cells).rstrip())
 
 
 # ── Spinner ───────────────────────────────────────────────────────────────────
@@ -153,30 +118,40 @@ def _pick_spinner() -> list:
     return SPINNERS["dots"]
 
 
-class Spinner:
-    """A one-line spinner driven from outside: tick(elapsed) while waiting, then
-    finish(). Used as the progress callback of yume.servers.wait_ready."""
+BAR_CELLS = 20
 
-    def __init__(self, message: str):
-        self.message = message
-        self.frames = _pick_spinner()
-        self.i = 0
+
+class Spinner:
+    """One line with a progress bar, driven from outside: tick(elapsed) while
+    waiting, then finish(). A server gives no percentage, so the bar follows the
+    time it usually takes and stops short of full until it is really ready."""
+
+    def __init__(self, name: str, doing: str = "", expected: float = 30):
+        self.name = name
+        self.doing = doing
+        self.expected = expected
         self.elapsed = 0
 
-    def _line(self, mark: str, note: str) -> None:
-        sys.stdout.write(f"\r  {mark}  {self.message} {C.DIM}({note}){C.RESET}   ")
+    def _line(self, filled: int, note: str, tone: str = "") -> None:
+        bar = "#" * filled + "-" * (BAR_CELLS - filled)
+        sys.stdout.write(f"\r  {self.name:<11} {C.PURPLE}[{bar}]{C.RESET}  {tone}{note}{C.RESET}\033[K")
         sys.stdout.flush()
 
     def tick(self, elapsed: float = 0) -> None:
         self.elapsed = int(elapsed)
-        self._line(f"{C.CYAN}{self.frames[self.i % len(self.frames)]}{C.RESET}", f"{self.elapsed}s")
-        self.i += 1
+        filled = min(BAR_CELLS - 1, int(BAR_CELLS * elapsed / self.expected))
+        self._line(filled, f"{self.doing} {self.elapsed} s".strip(), C.DIM)
 
     def finish(self, outcome: str) -> None:
         """outcome: "ok", "timeout", "failed" or "cancelled"."""
-        marks = {"ok": f"{C.GREEN}✓", "timeout": f"{C.YELLOW}⏱", "failed": f"{C.RED}✗", "cancelled": f"{C.RED}✗"}
-        notes = {"timeout": f"timed out after {self.elapsed}s", "cancelled": "cancelled"}
-        self._line(f"{marks[outcome]}{C.RESET}", notes.get(outcome, f"{self.elapsed}s"))
+        if outcome == "ok":
+            self._line(BAR_CELLS, f"ready in {self.elapsed} s", C.GREEN)
+        else:
+            notes = {"timeout": f"still going after {self.elapsed} s", "failed": "failed", "cancelled": "cancelled"}
+            tones = {"timeout": C.YELLOW, "failed": C.RED, "cancelled": C.DIM}
+            self._line(
+                min(BAR_CELLS - 1, int(BAR_CELLS * self.elapsed / self.expected)), notes[outcome], tones[outcome]
+            )
         sys.stdout.write("\n")
         sys.stdout.flush()
 
@@ -235,32 +210,21 @@ def center(t: str) -> str:
 def header(sub: str | None = None, version: str = "") -> None:
     clear()
     print()
-    # The product is YUME — the logo spells the product, not the launcher.
+    name = f"{C.BOLD}Yume{C.RESET}" + (f" {C.BOLD}{version}{C.RESET}" if version else "")
+    where = f"  {C.DIM}{sub}{C.RESET}" if sub else ""
     try:
-        logo = [
-            f"{C.GOLD}╦ ╦  ╦ ╦  ╔╦╗  ╔═╗{C.RESET}",
-            f"{C.GOLD}╚╦╝  ║ ║  ║║║  ║╣ {C.RESET}",
-            f"{C.GOLD} ╩   ╚═╝  ╩ ╩  ╚═╝{C.RESET}",
-        ]
-        for line in logo:
-            print(center(line))
-    except UnicodeEncodeError:
-        print(center(f"{C.GOLD}{C.BOLD}Y  U  M  E{C.RESET}"))
-    print(center(f"{C.PURPLE}YUME-chan · You'll Understand More Easily{C.RESET}"))
-    tag = "Pocket Yume CLI" + (f" · v{version}" if version else "")
-    print(center(f"{C.DIM}{tag}{C.RESET}"))
-    if sub:
-        print(center(f"{C.BOLD}{sub}{C.RESET}"))
+        print(f"  {C.GOLD}\033[7m 夢 {C.RESET} {name}{where}")
+    except UnicodeEncodeError:  # a legacy console code page
+        print(f"  {name}{where}")
     print()
 
 
 def section(t: str) -> None:
-    w = max(1, tw() - len(t) - 8)
-    print(f"\n  {C.GOLD}─── {C.BOLD}{t} {C.GOLD}{'─' * w}{C.RESET}\n")
+    print(f"\n  {C.BOLD}{t}{C.RESET}")
 
 
 def info(m: str) -> None:
-    print(f"  {C.CYAN}i{C.RESET}  {m}")
+    print(f"  {m}")
 
 
 def success(m: str) -> None:
@@ -391,20 +355,30 @@ def _posix_keys(termios, tty, fd: int):
         yield key
 
 
+def _fit(text: str, room: int) -> str:
+    """Text cut to `room` columns: a wrapped row would break the menu's redraw."""
+    if _width(text) <= room:
+        return text
+    out = ""
+    for ch in text:
+        if _width(out + ch) > room - 3:
+            break
+        out += ch
+    return out.rstrip() + "..." if room > 3 else ""
+
+
 def _render_arrow_menu(prompt: str, options: list, sel: int, allow_back: bool) -> int:
     """Draw the menu; return the number of lines written (to rewind the cursor)."""
-    # Every option gets a description line (blank unless selected): constant height
-    has_any_desc = any(desc for _, desc in options)
-    out = [f"\n  {C.GOLD}?{C.RESET}  {prompt}\n\n"]
+    labels = max(_width(label) for label, _ in options)
+    out = [f"\n  {C.DIM}{prompt}{C.RESET}\n\n" if prompt else ""]
     for i, (label, desc) in enumerate(options):
-        num = f"{C.DIM}{i + 1}.{C.RESET} " if i < 9 else "   "
-        if i == sel:
-            out.append(f"  {C.GREEN}▶{C.RESET} {num}{C.BOLD}{label}{C.RESET}\n")
-        else:
-            out.append(f"    {num}{label}\n")
-        if has_any_desc:
-            out.append(f"      {C.DIM}{desc}{C.RESET}\n" if i == sel and desc else "\n")
-    hint = "↑↓ navigate  1-9 jump  Enter select" + ("  Esc back" if allow_back else "")
+        mark = ">" if i == sel else " "
+        key = str(i + 1) if i < 9 else " "
+        name = f"{C.BOLD}{label}{C.RESET}" if i == sel else label
+        gap = " " * (labels - _width(label) + 2)
+        hint = _fit(desc or "", tw() - labels - 10)
+        out.append(f"  {C.GOLD}{mark} {key}{C.RESET}  {name}{gap}{C.DIM}{hint}{C.RESET}\n")
+    hint = "Arrows move  1-9 jump  Enter selects" + ("  Esc back" if allow_back else "")
     out.append(f"\n  {C.DIM}{hint}{C.RESET}")
     text = "".join(out)
     sys.stdout.write(text)

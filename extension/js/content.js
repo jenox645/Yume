@@ -164,7 +164,8 @@
   const toWindow = (fn) => (e) => { if (state.window) fn(state.window, e.detail || {}); };
   window.addEventListener('pipeline-reset', toWindow((w) => w.resetProgress()));
   window.addEventListener('prefetch-ready', toWindow((w) => w.showReady()));
-  window.addEventListener('display-subtitle', toWindow((w, d) => w.updateSubtitle(d.original, d.english, d.romaji, d.confidence)));
+  window.addEventListener('display-subtitle', toWindow((w, d) => w.updateSubtitle(d.original, d.english, d.romaji, d.confidence, d.timing)));
+  window.addEventListener('video-playing', toWindow((w, d) => w.setPlaying(d.playing)));
   window.addEventListener('display-error', toWindow((w, d) => w.showError(d.message)));
   // The session is over: Enable must start a new one, not stop this one first
   window.addEventListener('display-error', () => {

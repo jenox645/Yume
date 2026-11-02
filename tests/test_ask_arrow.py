@@ -171,7 +171,7 @@ def test_ask_choice_marks_the_default_and_shows_descriptions(capsys):
     assert "default=2" in prompts[0] and "b=back" not in prompts[0]
 
 
-def test_the_selected_description_is_shown():
+def test_every_description_is_beside_its_option():
     out = []
     stdout = MagicMock(write=out.append)
     msvcrt = types.SimpleNamespace(getch=lambda: b"\r")
@@ -183,5 +183,5 @@ def test_the_selected_description_is_shown():
     ):
         ui.ask_arrow("Pick", OPTS, default=2)
     text = "".join(out)
-    assert "third" in text and "first" not in text
+    assert "third" in text and "first" in text
     assert "Esc back" in text

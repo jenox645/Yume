@@ -177,6 +177,7 @@ const setControl = (popup, id, value, event) => popup.evaluate(([id, value, even
 // Expand a collapsed popup section (loads its data)
 const openSection = (popup, name) => popup.evaluate((name) => {
   const s = document.querySelector(`[data-section="${name}"]`);
+  document.getElementById(`tab-${s.closest('.yume-pane').id.replace('pane-', '')}`).click();
   if (s.classList.contains('collapsed')) s.querySelector('.section-toggle').click();
 }, name);
 
@@ -279,11 +280,12 @@ test('popup: every control has a name, and sections open from the keyboard', asy
   // What a screen reader would announce: aria-label, a <label>, or a button's own text
   const unnamed = await popup.evaluate(() => [...document.querySelectorAll('input, select, button, [role="button"]')]
     .filter((el) => !(el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') ||
-      (el.id && document.querySelector(`label[for="${el.id}"]`)) ||
+      (el.id && document.querySelector(`label[for="${el.id}"]`)) || el.closest('label') ||
       ((el.tagName === 'BUTTON' || el.getAttribute('role') === 'button') && /\w/.test(el.textContent))))
     .map((el) => el.id || el.outerHTML.slice(0, 80)));
   assert.deepEqual(unnamed, []);
 
+  await popup.click('#tab-more');
   const toggle = '[data-section="history"] .section-toggle';
   const state = () => popup.evaluate((sel) => {
     const t = document.querySelector(sel);
@@ -329,6 +331,7 @@ test('popup: server lists render as markup, and their text stays text', async ()
   const evil = '<img src=x onerror=alert(1)>"quoted"';
   await popup.evaluate((text) => new Promise((res) => chrome.runtime.sendMessage(
     { type: 'API', request: { method: 'POST', path: '/blacklist/add', body: { text } } }, res)), evil);
+  await popup.click('#tab-more');
   await popup.evaluate(() => {
     for (const s of ['hallucination', 'stats', 'model']) document.querySelector(`[data-section="${s}"] .section-toggle`).click();
     document.getElementById('toggleBlacklistView').click();

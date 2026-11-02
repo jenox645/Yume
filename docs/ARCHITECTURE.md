@@ -61,7 +61,7 @@ from a content script and an MV3 service worker; see "Why server-side" below.)
      demucs installed and `vocal_isolation` on, a video up to 10 min is
      downloaded as 44.1 kHz stereo and htdemucs separates the whole song on the
      GPU (~8 s for 4 min); everything below then uses the vocals, and the
-     transcripts are cached under `<model>+htdemucs`. Any failure falls back to
+     transcripts are cached under `<model>+htdemucs3`. Any failure falls back to
      the mix. (Separating Yume's 16 kHz mono instead made transcription worse.)
    - **Plan regions** (`_regions.plan_regions`): region 0 ends at the quietest
      point in [20, 30] s (the stream preview covers it; its lines after the cut

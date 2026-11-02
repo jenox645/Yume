@@ -243,7 +243,7 @@ def runtime(choices, yns=(), procs=None, tmp=None):
         st.enter_context(patch.object(rt, "check_server", lambda *a: {"up": True}))
         st.enter_context(patch.object(rt, "check_translation_server", lambda *a: {"up": False}))
         st.enter_context(patch.object(rt, "LOGS_DIR", tmp or Path("does-not-exist")))
-        for name in ("clear", "panel", "pause", "section"):
+        for name in ("clear", "pause", "section"):
             st.enter_context(patch.object(rt, name, lambda *a, **k: None))
         rt.runtime_menu(cfg, procs, "llamacpp")
     return procs, called

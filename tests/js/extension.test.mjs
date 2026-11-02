@@ -583,6 +583,75 @@ test('a finished run fading its badge does not hide the next run\'s badge', () =
   assert.equal(badge.className, 'chunk-badge active');
 });
 
+test('a new line restarts its entrance; "at once" has none', () => {
+  const { ctx } = load('subtitle-window.js');
+    const box = { classes: new Set(), classList: { add(c) { box.classes.add(c); }, remove(...c) { c.forEach((x) => box.classes.delete(x)); } }, offsetWidth: 1 };
+  const win = Object.create(ctx.SubtitleWindow.prototype);
+  win.settings = { subtitleEntrance: 'ink' };
+  win._animateLine(box);
+  assert.deepEqual([...box.classes], ['line-ink']);
+  win.settings = { subtitleEntrance: 'cut' };
+  win._animateLine(box);
+  assert.deepEqual([...box.classes], []);
+});
+
+test('karaoke sweeps a line over its own time on screen, from where it is now', () => {
+  const { ctx } = load('subtitle-window.js');
+  const props = {};
+  const classes = new Set();
+  const el = {
+    offsetWidth: 1,
+    style: { setProperty: (k, v) => { props[k] = v; } },
+    classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c) },
+  };
+  const win = Object.create(ctx.SubtitleWindow.prototype);
+  win.settings = { subtitleStyle: 'karaoke' };
+  win._singLine(el, { elapsed: 1.5, duration: 4 });
+  assert.deepEqual(props, { '--sing-s': '4s', '--sing-from': '-1.5s' });
+  assert.ok(classes.has('line-sing'));
+  win.settings = { subtitleStyle: 'plain' };
+  win._singLine(el, { elapsed: 0, duration: 4 });
+  assert.ok(!classes.has('line-sing'));
+});
+
+test('a resting job says how far is ready, not a count that looks frozen', () => {
+  const { ctx } = load('subtitle-window.js');
+  const badge = { style: {}, classList: { contains: () => false }, textContent: '', title: '', className: '' };
+  const win = Object.create(ctx.SubtitleWindow.prototype);
+  win.settings = {};
+  win.element = { querySelector: () => badge };
+  win.updateChunkProgress({ done: 4, total: 11, status: 'transcribing', readyTo: 97 });
+  assert.equal(badge.textContent, 'Ready to 1:37');
+  win.updateChunkProgress({ done: 4, total: 11, status: 'transcribing', readyTo: 0 });
+  assert.equal(badge.textContent, 'Listening 4/11');
+});
+
+test('an empty window does not cover the video', () => {
+  const { ctx } = load('subtitle-window.js');
+  const el = () => ({ style: {}, textContent: '', classList: { remove: noop, add: noop } });
+  const parts = {};
+  const win = Object.create(ctx.SubtitleWindow.prototype);
+  win.settings = {};
+  win.element = { dataset: {}, querySelector: (s) => (parts[s] ??= el()) };
+  win.updateSubtitle('', '', '');
+  assert.equal(win.element.dataset.empty, 'true');
+  win.updateSubtitle('line', 'ligne', '');
+  assert.equal(win.element.dataset.empty, 'false');
+});
+
+test('vertical is for Japanese and Chinese: other scripts keep the plain box', () => {
+  const { ctx } = load('subtitle-window.js');
+  const look = (sourceLanguage) => {
+    const win = Object.create(ctx.SubtitleWindow.prototype);
+    const dataset = {};
+    win.settings = { subtitleStyle: 'vertical', sourceLanguage };
+    win.element = { dataset, style: {}, querySelector: () => null };
+    win.applyCustomStyles();
+    return dataset.look;
+  };
+  assert.deepEqual(['ja', 'zh', 'ko', 'ar', 'ru'].map(look), ['vertical', 'vertical', 'plain', 'plain', 'plain']);
+});
+
 test('popup: add-on store pages are not offered (no browser runs content scripts there)', () => {
   const { ctx } = loadPopup();
   for (const url of ['https://chromewebstore.google.com/detail/x', 'https://chrome.google.com/webstore/detail/x',

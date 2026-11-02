@@ -180,6 +180,14 @@ class Store:
             (video_key, language, model, start, end, json.dumps(segments, ensure_ascii=False), time.time()),
         )
 
+    def drop_transcript(self, video_key, language, model, start, end):
+        with self._lock:
+            self._db.execute(
+                "DELETE FROM transcripts WHERE video_key=? AND language=? AND model=? AND region_start=? AND region_end=?",
+                (video_key, language, model, start, end),
+            )
+            self._db.commit()
+
     # ── translations / romanizations ──────────────────────────────────────────
 
     def get_translations(self, src, tgt, model, texts):

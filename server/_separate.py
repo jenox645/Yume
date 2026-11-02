@@ -23,7 +23,9 @@ import _state
 
 MODEL = "htdemucs"
 MAX_S = 10 * 60  # 15 min made 8-14 min news wait 19-39 s for vocals it does not need
-MODEL_SUFFIX = "+" + MODEL  # transcripts of separated vocals are cached apart
+# Transcripts of separated vocals are cached apart. 3: before it, Whisper heard the stem's
+# leading silence and bleed, and the mix's preview stood in for region 0: heard again
+MODEL_SUFFIX = "+" + MODEL + "3"
 # Not "Entertainment" or "Film & Animation": that is where anime openings are
 SPOKEN_CATEGORIES = {"News & Politics", "Education", "Science & Technology"}
 

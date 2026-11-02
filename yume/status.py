@@ -56,7 +56,7 @@ def _status_packages(cfg: dict) -> None:
     if cfg.get("translation_backend", "llamacpp") == "llamacpp" and not llama_server.server_path():
         packages.append(("llama_cpp", "llama-cpp-python"))
     rows = [
-        [display, f"{C.GREEN}✓{C.RESET}" if _try_import(pkg) else f"{C.RED}✗  not installed{C.RESET}"]
+        [display, f"{C.GREEN}ready{C.RESET}" if _try_import(pkg) else f"{C.RED}not installed{C.RESET}"]
         for pkg, display in packages
     ]
     table(["Package", "Status"], rows, col_styles=[C.CYAN, C.RESET], title="Python Packages")
@@ -70,7 +70,7 @@ def _status_servers(cfg: dict) -> None:
         ts = check_server(cfg["translation_host"], cfg["translation_port"], HEALTH_PATH_OPENAI)
 
     def state(up: bool) -> str:
-        return f"{C.GREEN}● running{C.RESET}" if up else f"{C.DIM}○ stopped{C.RESET}"
+        return f"{C.GREEN}running{C.RESET}" if up else f"{C.DIM}stopped{C.RESET}"
 
     table(
         ["Server", "Address", "Status"],
@@ -124,7 +124,7 @@ def _status_ports(cfg: dict) -> None:
 
 def show_status(cfg: dict) -> None:
     """Display system status overview."""
-    header("System Status")
+    header("Status")
     _status_hardware()
     _status_tools(cfg)
     _status_packages(cfg)

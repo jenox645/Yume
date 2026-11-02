@@ -70,7 +70,6 @@ def _menu(choices, handlers):
         patch.object(cli, "load_config", return_value=cfg),
         patch.object(cli, "ask_arrow", side_effect=choices),
         patch.object(cli, "header"),
-        patch.object(cli, "panel"),
         patch.object(cli, "_hardware_label", return_value=""),
         patch.object(cli, "_servers_label", return_value=""),
         patch.object(cli, "_update_notice"),

@@ -82,7 +82,7 @@ See `docs/ARCHITECTURE.md`. In short:
 
 **Translation:** `_translate.Translator` uses structured output (JSON schema with exactly N strings), falling back to `json_object`, then numbered lines; the working mode is remembered per endpoint. The model name is sent for every backend except llama.cpp. One single-line retry for missing lines / CJK leaks. Dedicated translation models (Hy-MT2, recognised by the configured model name) go line by line with their own template and sampling, neighbours as background; a custom prompt keeps the JSON route.
 
-**Cache:** `config/yume_cache.db` (SQLite, `_store.py`): videos + region plans, raw transcripts per (video, language, Whisper model — `+htdemucs` when separated, region), translations per (source, target, LLM model, text), LLM romanizations.
+**Cache:** `config/yume_cache.db` (SQLite, `_store.py`): videos + region plans, raw transcripts per (video, language, Whisper model — `+htdemucs3` when separated, region), translations per (source, target, LLM model, text), LLM romanizations.
 
 **Romanization:** JA by word with cutlet (MeCab + UniDic via fugashi/unidic-lite; vendored in `server/_vendor/cutlet` without its mojimoji dependency, which has no Python 3.13+ wheels), falling back to pykakasi; pypinyin (ZH); built-in KO/RU tables. `None` from `_romanize.romanize()` means "LLM needed" (Arabic, or JA/ZH without the libraries). The JA romanizer is pre-loaded in a background thread at startup. `server/_vendor/` is excluded from ruff/bandit/radon/coverage.
 

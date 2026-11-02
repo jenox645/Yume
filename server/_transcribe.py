@@ -8,7 +8,7 @@ SAMPLE_RATE = 16000
 BEAM_SIZE = 5  # 1 and 2 are faster but gave more repetition loops: tests/gold/RESULTS.md
 
 
-def transcribe_audio(audio, language, offset=0.0, is_first_region=False):
+def transcribe_audio(audio, language, offset=0.0, is_first_region=False, temperature=0.0):
     """Transcribe a float32 16 kHz mono array. Returns RAW segments (unfiltered):
     [{"start", "end", "text", "confidence"}], times shifted by `offset` seconds.
 
@@ -37,7 +37,7 @@ def transcribe_audio(audio, language, offset=0.0, is_first_region=False):
         vad_filter=False,
         word_timestamps=False,
         condition_on_previous_text=False,
-        temperature=0.0,
+        temperature=temperature,
         compression_ratio_threshold=2.4,
         log_prob_threshold=-2.0,
         no_speech_threshold=0.7 if is_first_region else 0.6,
