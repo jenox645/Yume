@@ -210,9 +210,17 @@ def test_auto_device_and_precision_are_resolved_for_display():
 
 def test_amd_shows_the_cpu_and_the_precision_that_really_runs():
     amd = {"has_nvidia": False, "has_amd": True, "vram_mb": 8192}
-    assert settings([BACK], gpu=amd).rows[0][1][1] == "cpu (auto) / int8 (auto)"
-    cfg = {**SETTINGS_CFG, "whisper_compute_type": "float16"}
-    assert settings([BACK], cfg, gpu=amd).rows[0][1][1] == "cpu (auto) / int8 (float16 needs CUDA)"
+    with patch("yume.whisper_cpp.server_path", return_value=None):
+        assert settings([BACK], gpu=amd).rows[0][1][1] == "cpu (auto) / int8 (auto)"
+        cfg = {**SETTINGS_CFG, "whisper_compute_type": "float16"}
+        assert settings([BACK], cfg, gpu=amd).rows[0][1][1] == "cpu (auto) / int8 (float16 needs CUDA)"
+
+
+def test_amd_with_whisper_cpp_shows_vulkan():
+    amd = {"has_nvidia": False, "has_amd": True, "vram_mb": 8192}
+    with patch("yume.whisper_cpp.server_path", return_value=Path("whisper-server")):
+        shown = settings([BACK], gpu=amd).rows[0][1][1]
+    assert "vulkan" in shown and "q5 (auto)" in shown
 
 
 def test_export_and_import_from_a_listed_backup():
@@ -627,7 +635,7 @@ def test_blacklist_menu_says_when_a_change_was_not_saved(tmp_path):
     assert b.said.count("Failed to save") == 2
 
 
-@pytest.mark.parametrize("answer", [3, -1])
+@pytest.mark.parametrize("answer", [4, -1])
 def test_keeping_the_current_device_saves_nothing(answer):
     saved, said = MagicMock(), MagicMock()
     with (

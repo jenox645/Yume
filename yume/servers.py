@@ -94,13 +94,21 @@ def build_server_env() -> dict:
     return env
 
 
+def _vulkan_ready() -> bool:
+    from yume import whisper_cpp
+
+    return whisper_cpp.server_path() is not None
+
+
 def resolve_whisper_device(cfg: dict) -> tuple[str, str]:
     """(device, compute_type) with "auto" resolved for this machine."""
     dev = cfg["whisper_device"]
     comp = cfg["whisper_compute_type"]
     gpu = detect_gpu()
     if dev == "auto":
-        dev = "cuda" if gpu["has_nvidia"] else "cpu"
+        dev = "cuda" if gpu["has_nvidia"] else ("vulkan" if gpu.get("has_amd") and _vulkan_ready() else "cpu")
+    if dev == "vulkan":
+        return dev, "q5"  # whisper.cpp's models carry their precision: nothing to choose
     if comp == "auto":
         comp = (
             "float16"

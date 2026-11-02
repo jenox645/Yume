@@ -84,6 +84,7 @@ def _status_servers(cfg: dict) -> None:
 
 
 def _status_models(cfg: dict) -> None:
+    from yume import whisper_cpp
     from yume.benchmark import _is_whisper_model_cached
     from yume.utils import hf_hub_dir
 
@@ -91,6 +92,9 @@ def _status_models(cfg: dict) -> None:
     wm = cfg.get("whisper_model", "large-v3")
     if Path(wm).is_dir():
         info(f"Whisper:      {C.BOLD}{Path(wm).name}{C.RESET}  {C.DIM}(custom: {wm}){C.RESET}")
+    elif detect_gpu().get("has_amd") and whisper_cpp.model_downloaded(wm):
+        info(f"Whisper:      {C.BOLD}{wm}{C.RESET}")
+        info(f"              {C.GREEN}downloaded{C.RESET}  {C.DIM}{whisper_cpp.model_path(wm)}{C.RESET}")
     elif _is_whisper_model_cached(wm):
         info(f"Whisper:      {C.BOLD}{wm}{C.RESET}")
         info(f"              {C.GREEN}downloaded{C.RESET}  {C.DIM}{hf_hub_dir()}{C.RESET}")

@@ -261,10 +261,12 @@ def _swap_model(new_model):
         return jsonify({"error": f"Switch failed: {str(e)}", "model": old_model}), 500
 
     with _state.transcribe_lock:
+        replaced = _state.model
         _state.model_name = new_model
         _state.model = new_whisper
         # The friendly name from config described the OLD model
         _state.model_display_name = ""
+        _model.close_whisper(replaced)
     # Jobs belong to the old model; clients recreate theirs on the next poll
     # (404) and get transcripts for the new model.
     if _state.jobs:

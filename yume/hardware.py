@@ -130,6 +130,19 @@ def _windows_amd() -> dict | None:
     return None
 
 
+def _linux_amd(drm: Path = Path("/sys/class/drm")) -> dict | None:
+    """AMD on Linux from the kernel: Vulkan needs only Mesa, so most cards have no ROCm tools."""
+    vrams = []
+    for card in drm.glob("card[0-9]*/device"):
+        try:
+            if (card / "vendor").read_text().strip() != "0x1002":
+                continue
+            vrams.append(int((card / "mem_info_vram_total").read_text()) // MiB)
+        except (OSError, ValueError):
+            continue
+    return _amd("AMD GPU", max(vrams)) if vrams else None
+
+
 def _detect_gpu_uncached() -> dict:
     nvidia = _nvidia()
     if nvidia:
@@ -140,7 +153,7 @@ def _detect_gpu_uncached() -> dict:
     info_name = _rocminfo_name()
     if info_name is not None:
         return _amd(info_name or (smi["name"] if smi else "AMD GPU (ROCm)"), smi["vram_mb"] if smi else 0)
-    return _windows_amd() or smi or dict(_NO_GPU)
+    return _windows_amd() or smi or (None if IS_WIN or IS_MAC else _linux_amd()) or dict(_NO_GPU)
 
 
 def _win_cim(cls: str, props: str) -> list[str]:
@@ -219,8 +232,8 @@ def disk_free_gb(p=None) -> float:
         return 0.0
 
 
-# Whisper runs on CUDA or the CPU: ctranslate2 has no AMD backend. On the CPU
-# these two precisions raise ValueError instead of loading.
+# faster-whisper runs on CUDA or the CPU (AMD cards hear through whisper.cpp on
+# Vulkan). On the CPU these two precisions raise ValueError instead of loading.
 CUDA_ONLY_COMPUTE = ("float16", "int8_float16")
 
 
@@ -231,6 +244,14 @@ def whisper_compute_type(vram_mb: int) -> str:
     return "int8_float16" if vram_mb >= 4000 else "int8"
 
 
+def vulkan_whisper_model(vram: int) -> tuple[str, str]:
+    """(model, reason) for an AMD card with whisper.cpp. Quantised, and Windows reports at
+    most 4095 MB of an AMD card: 2.2 GB is what counts."""
+    if vram >= 3000:
+        return "large-v3-turbo", f"GPU with {vram} MB VRAM on Vulkan → turbo (about 2.2 GB)"
+    return "base", f"GPU with {vram} MB VRAM on Vulkan → base"
+
+
 def recommend_whisper_model(gpu_info: dict | None = None) -> tuple[str, str]:
     """Return (model_name, reason) for the given hardware."""
     if gpu_info is None:
@@ -238,15 +259,18 @@ def recommend_whisper_model(gpu_info: dict | None = None) -> tuple[str, str]:
     vram = gpu_info.get("vram_mb", 0)
     ram = detect_ram_gb()
 
+    from yume import whisper_cpp
+
+    if gpu_info.get("has_amd") and whisper_cpp.server_path():
+        return vulkan_whisper_model(vram)
     if not gpu_info.get("has_nvidia"):
-        cpu = "CPU (Whisper can't use AMD GPUs)" if gpu_info.get("has_amd") else "CPU"
         # 15 and 7.5: a "16 GB" PC reports less, here 15.8
         if ram >= 15:
-            return "small", f"{cpu} with 16+ GB RAM → small model (best CPU balance)"
+            return "small", "CPU with 16+ GB RAM → small model (best CPU balance)"
         elif ram >= 7.5:
-            return "base", f"{cpu} with 8-16 GB RAM → base model"
+            return "base", "CPU with 8-16 GB RAM → base model"
         else:
-            return "tiny", f"{cpu} with <8 GB RAM → tiny model (fastest)"
+            return "tiny", "CPU with <8 GB RAM → tiny model (fastest)"
     else:
         if vram >= 5000:
             # Even with VRAM for large-v3: on two Japanese songs measured against

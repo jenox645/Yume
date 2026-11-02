@@ -1,0 +1,56 @@
+{
+  "tag": "whisper-vulkan-v1.9.5",
+  "model_repo": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main",
+  "builds": {
+    "win32": {
+      "name": "whisper-v1.9.5-vulkan-windows-x64.zip",
+      "sha256": "7bb3afe7f23bf4ad766b13903eac13bf02ba2442257e5da5bf631785d534d58a"
+    },
+    "linux": {
+      "name": "whisper-v1.9.5-vulkan-linux-x64.tar.gz",
+      "sha256": "66147b3c7c33e919a0937ac40cc19ebdb6c51256bcc979039303d484bbad0422"
+    }
+  },
+  "models": {
+    "tiny": {
+      "file": "ggml-tiny-q5_1.bin",
+      "mb": 31,
+      "sha256": "818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7"
+    },
+    "base": {
+      "file": "ggml-base-q5_1.bin",
+      "mb": 57,
+      "sha256": "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898"
+    },
+    "small": {
+      "file": "ggml-small-q5_1.bin",
+      "mb": 181,
+      "sha256": "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb"
+    },
+    "medium": {
+      "file": "ggml-medium-q5_0.bin",
+      "mb": 514,
+      "sha256": "19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f"
+    },
+    "large-v2": {
+      "file": "ggml-large-v2-q5_0.bin",
+      "mb": 1031,
+      "sha256": "3a214837221e4530dbc1fe8d734f302af393eb30bd0ed046042ebf4baf70f6f2"
+    },
+    "large-v3": {
+      "file": "ggml-large-v3-q5_0.bin",
+      "mb": 1031,
+      "sha256": "d75795ecff3f83b5faa89d1900604ad8c780abd5739fae406de19f23ecd98ad1"
+    },
+    "large-v3-turbo": {
+      "file": "ggml-large-v3-turbo-q5_0.bin",
+      "mb": 547,
+      "sha256": "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2"
+    },
+    "turbo": {
+      "file": "ggml-large-v3-turbo-q5_0.bin",
+      "mb": 547,
+      "sha256": "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2"
+    }
+  }
+}

@@ -1,7 +1,8 @@
-"""The Whisper model: loading at startup (in a background thread, with a CUDA
-warm-up, falling back to the CPU when CUDA cannot run: no device, a broken
+"""The Whisper model: loading at startup (in a background thread, with a GPU
+warm-up, falling back to the CPU when the GPU cannot run: no device, a broken
 driver, cuBLAS/cuDNN missing), loading another one for a hot swap, and advice
-when loading fails.
+when loading fails. CUDA goes through faster-whisper, Vulkan (AMD) through
+whisper.cpp, the CPU through faster-whisper again.
 """
 
 import os
@@ -10,11 +11,20 @@ import sys
 from faster_whisper import WhisperModel
 
 import _state
+from _whispercpp import WhisperCpp
 
 
 def load_whisper(name):
-    """A WhisperModel on the server's device (for a hot swap)."""
+    """The model on the server's device, at startup and for a hot swap."""
+    if _state.device == "vulkan":
+        return WhisperCpp(name)
     return WhisperModel(name, device=_state.device, compute_type=_state.compute_type)
+
+
+def close_whisper(model):
+    """Free what a replaced model holds: whisper.cpp is a process of its own."""
+    if hasattr(model, "close"):
+        model.close()
 
 
 def set_low_priority():
@@ -45,7 +55,7 @@ def _warm_up():
 
 
 def _fall_back_to_cpu(reason, fix):
-    """Load the model on the CPU after CUDA failed. False (load_error set) when that fails too."""
+    """Load the model on the CPU after the GPU failed. False (load_error set) when that fails too."""
     print("")
     print(f"  WARNING: {reason}.")
     print("  Falling back to CPU mode automatically.")
@@ -60,7 +70,7 @@ def _fall_back_to_cpu(reason, fix):
         _state.model = WhisperModel(_state.model_name, device="cpu", compute_type="int8")
         _warm_up()
         print("  CPU fallback:     done")
-        _state.device_notice = f"CUDA could not run, so Whisper is on the CPU. {fix}"
+        _state.device_notice = f"The GPU could not run, so Whisper is on the CPU. {fix}"
         return True
     except Exception as cpu_err:
         print(f"  CPU fallback:     failed too: {cpu_err}")
@@ -77,6 +87,11 @@ def notice():
     return " ".join(n for n in notes if n)
 
 
+def cpu_after_losing_vulkan(reason):
+    """whisper-server died mid-video and would not start again: the job goes on on the CPU."""
+    return _fall_back_to_cpu(f"Vulkan stopped ({reason})", _VULKAN_FIX)
+
+
 def _cuda_unusable(message):
     """CUDA itself cannot run (no device, a broken driver), so the CPU can take over.
     Out of memory is about this model and keeps its own advice."""
@@ -85,24 +100,25 @@ def _cuda_unusable(message):
 
 
 def _open_model():
-    """Load the model on the configured device, or on the CPU when CUDA cannot run.
+    """Load the model on the configured device, or on the CPU when the GPU cannot run.
     False (load_error set) when nothing loaded."""
     try:
-        _state.model = WhisperModel(_state.model_name, device=_state.device, compute_type=_state.compute_type)
+        _state.model = load_whisper(_state.model_name)
         return True
     except Exception as e:
+        if _state.device == "vulkan":
+            return _fall_back_to_cpu(f"Vulkan cannot run ({e})", _VULKAN_FIX)
         if _state.device != "cuda" or not _cuda_unusable(str(e)):
             raise
-        return _fall_back_to_cpu(
-            f"CUDA cannot run ({e})", "With an NVIDIA GPU, update its driver. AMD GPUs can't run Whisper."
-        )
+        return _fall_back_to_cpu(f"CUDA cannot run ({e})", "Update the NVIDIA driver.")
 
 
 def _prewarm(args):
     """False (load_error set) when a warm-up found CUDA broken and the CPU failed too."""
-    # On CUDA a 1 s warm-up is cheap and is the only way to find out NOW that
-    # cuBLAS/cuDNN are missing (the model itself loads fine without them).
-    if not (args.prewarm or _state.device == "cuda"):
+    # On a GPU a 1 s warm-up is cheap: on CUDA it is the only way to find out NOW
+    # that cuBLAS/cuDNN are missing (the model itself loads fine without them), and
+    # on Vulkan it builds the shaders the first real region would otherwise wait for.
+    if not (args.prewarm or _state.device in ("cuda", "vulkan")):
         print("  Prewarm:          skipped (use --prewarm to enable)")
         return True
     try:
@@ -145,6 +161,7 @@ def load_model(args):
 
 
 _BIG_MODELS = ("medium", "large")
+_VULKAN_FIX = "Update the graphics driver, or run python pocket_yume.py setup to install whisper.cpp."
 # What CTranslate2 says when CUDA cannot run at all
 _NO_CUDA = ("cuda failed with error", "not compiled with cuda support")
 _WHISPER_SETTINGS = "python pocket_yume.py settings → Whisper settings"

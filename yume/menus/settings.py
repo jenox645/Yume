@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from yume import whisper_cpp
 from yume.constants import BASE_DIR, backend_info
 from yume.hardware import CUDA_ONLY_COMPUTE, detect_gpu, recommend_whisper_model
 from yume.ui import (
@@ -40,10 +41,14 @@ def _device_labels(cfg: dict) -> tuple[str, str]:
     gpu = detect_gpu()
     device = cfg["whisper_device"]
     if device == "auto":
-        device = f"{C.GREEN}cuda{C.RESET} (auto)" if gpu["has_nvidia"] else "cpu (auto)"
+        vulkan = gpu.get("has_amd") and whisper_cpp.server_path()
+        resolved = "cuda" if gpu["has_nvidia"] else ("vulkan" if vulkan else "")
+        device = f"{C.GREEN}{resolved}{C.RESET} (auto)" if resolved else "cpu (auto)"
     compute = cfg["whisper_compute_type"]
     if compute == "auto":
-        if "cuda" not in device:
+        if "vulkan" in device:
+            compute = "q5 (auto)"
+        elif "cuda" not in device:
             compute = "int8 (auto)"
         else:
             compute = f"{'float16' if gpu.get('vram_mb', 0) >= 8000 else 'int8_float16'} (auto)"
@@ -186,8 +191,9 @@ def _set_whisper(cfg: dict) -> None:
             "whisper_device",
             "Where should Whisper run?",
             [
-                ("auto", "Auto-detect", "Uses an NVIDIA GPU if there is one, otherwise the CPU"),
+                ("auto", "Auto-detect", "Uses an NVIDIA or AMD GPU if there is one, otherwise the CPU"),
                 ("cuda", "GPU (NVIDIA CUDA)", "Fastest — requires an NVIDIA graphics card"),
+                ("vulkan", "GPU (Vulkan)", "For AMD cards: whisper.cpp, installed by Setup"),
                 ("cpu", "CPU", "Works on any computer, but slower"),
             ],
         )

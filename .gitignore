@@ -52,6 +52,7 @@ yume_config_backup_*.json
 # ── Yume: downloaded models (can be gigabytes) ──
 models/translation/*.gguf
 models/translation/*.bin
+models/whisper/
 
 # ── Yume: runtime logs ──
 logs/*.log
@@ -67,6 +68,7 @@ tools/deno
 tools/deno.exe
 tools/bgutil-ytdlp-pot-provider/
 tools/llama.cpp/
+tools/whisper.cpp/
 tools/llama.cpp.new/
 tools/llama.cpp.old/
 

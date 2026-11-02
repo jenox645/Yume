@@ -93,15 +93,44 @@ def _recommend(gpu, ram):
         return hw.recommend_whisper_model(gpu)
 
 
-@pytest.mark.parametrize(
-    ("ram", "model"), [(32.0, "small"), (15.8, "small"), (12.0, "base"), (7.7, "base"), (4.0, "tiny")]
-)  # a "16 GB" PC reports 15.8
-def test_amd_gets_the_cpu_recommendation_whatever_its_vram(ram, model):
-    amd = {**NONE, "has_amd": True, "vendor": "amd", "name": "Radeon RX 7900 XTX", "vram_mb": 24576}
-    rec, reason = _recommend(amd, ram)
+@pytest.mark.parametrize(("vram", "model"), [(24576, "large-v3-turbo"), (4095, "large-v3-turbo"), (2048, "base")])
+def test_amd_is_picked_by_what_vulkan_needs(vram, model):
+    # 4095: what Windows reports of any AMD card with 4 GB or more
+    amd = {**NONE, "has_amd": True, "vendor": "amd", "name": "Radeon RX 7900 XTX", "vram_mb": vram}
+    with patch("yume.whisper_cpp.server_path", return_value=Path("whisper-server")):
+        rec, reason = _recommend(amd, 8.0)
     assert rec == model
-    assert "CPU" in reason and "AMD" in reason
-    assert rec == _recommend(NONE, ram)[0]
+    assert "Vulkan" in reason
+
+
+@pytest.mark.parametrize(("ram", "model"), [(32.0, "small"), (12.0, "base"), (4.0, "tiny")])
+def test_amd_without_whisper_cpp_gets_the_cpu_recommendation(ram, model):
+    amd = {**NONE, "has_amd": True, "vendor": "amd", "name": "Radeon RX 7900 XTX", "vram_mb": 24576}
+    with patch("yume.whisper_cpp.server_path", return_value=None):
+        rec, reason = _recommend(amd, ram)
+    assert rec == model
+    assert "CPU" in reason
+
+
+def _card(drm, name, vendor, vram=None):
+    device = drm / name / "device"
+    device.mkdir(parents=True)
+    (device / "vendor").write_text(vendor + "\n")
+    if vram is not None:
+        (device / "mem_info_vram_total").write_text(f"{vram}\n")
+
+
+def test_linux_finds_an_amd_card_without_rocm_tools(tmp_path):
+    _card(tmp_path, "card0", "0x8086")
+    _card(tmp_path, "card1", "0x1002", 8 * 1024**3)
+    _card(tmp_path, "card1-DP-1", "0x1002", 1)  # a connector, not a card
+    gpu = hw._linux_amd(tmp_path)
+    assert (gpu["has_amd"], gpu["vram_mb"]) == (True, 8192)
+
+
+def test_linux_without_an_amd_card(tmp_path):
+    _card(tmp_path, "card0", "0x10de", 8 * 1024**3)
+    assert hw._linux_amd(tmp_path) is None
 
 
 def test_nvidia_is_still_picked_by_vram():

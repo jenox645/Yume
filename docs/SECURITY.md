@@ -12,6 +12,7 @@ tools and models you choose to install).
 - Host header validation blocks DNS rebinding attacks (rejects non-localhost requests); the server binds `127.0.0.1` only
 - All URLs validated before passing to subprocess (prevents argument injection); request bodies capped at 2 MB
 - The extension's background worker only forwards an allowlist of server paths
+- On AMD, whisper.cpp runs as a child process. Its server has no token and answers any origin, so it binds `127.0.0.1` on a free port under a random 32-byte path that changes on every start, and it dies with Yume. Its binary and models are checked against SHA-256 pins in `server/whisper_cpp.json`; the binary is built from one pinned upstream commit by `.github/workflows/whisper-vulkan.yml`
 - No shell invocation — all subprocess calls use explicit argv lists; no `shell=True`, no `os.system()`, no `curl | sh`
 - XSS prevention — popup `innerHTML` content is escaped with `_escapeHtml()` (quotes included); the subtitle overlay uses `textContent` inside a closed Shadow DOM
 - Python dependencies pinned to exact versions (`==`), except `yt-dlp` (must track YouTube) and `llama-cpp-python` (wheel availability)

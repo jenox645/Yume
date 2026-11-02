@@ -31,6 +31,7 @@ from yume.hardware import (
     detect_ram_gb,
     disk_free_gb,
     recommend_whisper_model,
+    vulkan_whisper_model,
     whisper_compute_type,
 )
 from yume.network import check_server
@@ -164,6 +165,7 @@ _MISSING_LABELS = {
     "ffmpeg": "FFmpeg",
     "python_deps": "faster-whisper",
     "llama_server": "translation engine (llama.cpp)",
+    "whisper_cpp": "whisper.cpp, for your AMD GPU",
     "gguf_model": "GGUF translation model",
 }
 
@@ -234,6 +236,9 @@ def _pick_whisper_device(cfg: dict, gpu: dict, rerun: bool = False) -> None:
     if gpu["has_nvidia"]:
         cfg["whisper_device"] = "cuda"
         cfg["whisper_compute_type"] = whisper_compute_type(gpu["vram_mb"])
+    elif gpu.get("has_amd"):  # whisper.cpp when it is installed, the CPU until then
+        cfg["whisper_device"] = "auto"
+        cfg["whisper_compute_type"] = "auto"
     else:
         cfg["whisper_device"] = "cpu"
         cfg["whisper_compute_type"] = "int8"
@@ -287,6 +292,7 @@ def _check_components(cfg: dict, gpu: dict) -> tuple[list[str], bool]:
     info(f"{C.DIM}Checking which tools and packages are already installed...{C.RESET}")
     print()
     missing = _missing_tools()
+    missing += _missing_for_amd(gpu)
     gf = find_gguf_models()
     if cfg.get("translation_backend", "llamacpp") != "llamacpp":
         # Ollama / LM Studio / custom manage their own models
@@ -301,6 +307,19 @@ def _check_components(cfg: dict, gpu: dict) -> tuple[list[str], bool]:
             detected = True
             success(f"Detected: {bi['name']} on port {bi['dp']}")
     return missing, detected or bool(gf)
+
+
+def _missing_for_amd(gpu: dict) -> list[str]:
+    """whisper.cpp is how an AMD card hears; without it Whisper stays on the CPU."""
+    from yume import whisper_cpp
+
+    if not gpu.get("has_amd") or not whisper_cpp.available():
+        return []
+    if whisper_cpp.server_path():
+        success("Whisper on the GPU: whisper.cpp (Vulkan)")
+        return []
+    warn("Whisper on the GPU: whisper.cpp missing, Whisper would run on the CPU")
+    return ["whisper_cpp"]
 
 
 def _missing_tools() -> list[str]:
@@ -384,9 +403,29 @@ def _choose_youtube_auth(cfg: dict) -> None:
             warn(f"Keeping {cfg.get('youtube_auth_method', 'cookies')} for YouTube: change it in Settings.")
 
 
-def _install_missing(missing: list[str], ask_each: bool) -> None:
+_CPU_MODELS = ("tiny", "base", "small")
+
+
+def _install_whisper_cpp(cfg: dict) -> bool:
+    """Saying yes to the GPU engine ends a saved CPU choice, which is what Setup wrote on AMD
+    before, and a model picked for the CPU: the card can carry the recommended one."""
+    from yume import whisper_cpp
+
+    model = cfg.get("whisper_model", "")
+    if whisper_cpp.model_path(model) and model in _CPU_MODELS:
+        model = vulkan_whisper_model(detect_gpu().get("vram_mb", 0))[0]
+    if not whisper_cpp.install(model):
+        return False
+    if whisper_cpp.model_path(model):
+        cfg["whisper_model"] = model
+    if cfg.get("whisper_device") == "cpu":
+        cfg["whisper_device"], cfg["whisper_compute_type"] = "auto", "auto"
+    return True
+
+
+def _install_missing(cfg: dict, missing: list[str], ask_each: bool) -> None:
     """Step 4: install the missing tools and packages (all, or one by one)."""
-    from yume import llama_server
+    from yume import llama_server, whisper_cpp
     from yume.installers import install_ffmpeg, install_python_deps, install_ytdlp
 
     # key → (question, label, installer, manual hint)
@@ -412,6 +451,12 @@ def _install_missing(missing: list[str], ask_each: bool) -> None:
             llama_server.install,
             f"Download it manually from {C.CYAN}https://github.com/ggml-org/llama.cpp/releases{C.RESET}"
             f" and unzip it into {llama_server.LLAMA_DIR}",
+        ),
+        "whisper_cpp": (
+            "Install whisper.cpp, so Whisper runs on your AMD GPU?",
+            "whisper.cpp",
+            lambda: _install_whisper_cpp(cfg),
+            f"Unzip the build from {C.CYAN}{whisper_cpp.RELEASE_PAGE}{C.RESET} into {whisper_cpp.WHISPER_DIR}",
         ),
     }
     _step(4, "Installing Components")
@@ -550,7 +595,7 @@ def setup_wizard(cfg: dict, rerun: bool = False) -> dict:
             _mark_complete(cfg)
             pause()
             return cfg
-        _install_missing(missing, ask_each=mode == 1)
+        _install_missing(cfg, missing, ask_each=mode == 1)
         _choose_translation_model(cfg, "gguf_model" in missing)
         save_config(cfg)
 

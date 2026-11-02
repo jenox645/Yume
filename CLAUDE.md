@@ -139,6 +139,7 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 | `yume/runtime_menu.py` | The menu while the servers run: status panel, stats, model, logs, stop |
 | `yume/llama_server.py` | Installs/locates llama.cpp's prebuilt `llama-server` (tools/llama.cpp/); `launch.llamacpp_command` prefers it over llama-cpp-python |
 | `yume/service.py` | Headless `serve` supervisor on `yume.servers`: `config/service.json` state (errors carry the crash diagnosis), idle auto-stop (`auto_stop_minutes`), detached spawn that survives the browser's job object |
+| `yume/whisper_cpp.py` | Installs whisper.cpp's Vulkan build (tools/whisper.cpp/) and its models (models/whisper/) for AMD cards |
 | `yume/vocals.py` | Vocal isolation from the CLI: status, install (PyTorch CUDA build matched to the driver + demucs), on/off |
 | `yume/native_host.py` | Native messaging host `com.pocketyume.yume` (status/start/stop) + registration; allowed extension ID must match the manifest `key` |
 | `yume/setup.py` | Setup wizard, extension guide, uninstall |
@@ -166,6 +167,7 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 | `server/_lines.py` | A region's raw lines cleaned, regions joined at a cut (shared by jobs and exports) |
 | `server/_export.py` | SRT/VTT export, also of cached videos without a job |
 | `server/_regions.py` | Quiet-point region planning |
+| `server/_whispercpp.py` | whisper.cpp on Vulkan as a child process, with the two methods of faster-whisper's model; `server/whisper_cpp.json` pins the build and models |
 | `server/_separate.py` | Optional vocal isolation (Demucs htdemucs, CUDA only); falls back to the mix |
 | `server/_translate.py` | LLM client with structured output |
 | `server/_store.py` | SQLite cache |
