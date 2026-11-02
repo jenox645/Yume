@@ -119,7 +119,7 @@ Each model keeps its own saved transcripts, so a video is heard again after a sw
 | Hy-MT2-1.8B Q4_K_M | 1.1 GB | Small cards, quieter fans | About as good as Qwen2.5-7B, 2.5× faster |
 | Qwen2.5-7B | About 4 GB | Custom prompts | The older default |
 
-On NVIDIA both models share the GPU's memory, so check that the pair fits. The comparisons are in [tests/gold/RESULTS.md](tests/gold/RESULTS.md). They rest partly on one person's blind reading, and French on only 4 clips.
+On a GPU both models share its memory, so check that the pair fits. The comparisons are in [tests/gold/RESULTS.md](tests/gold/RESULTS.md). They rest partly on one person's blind reading, and French on only 4 clips.
 
 ## What you need
 
@@ -130,7 +130,7 @@ On NVIDIA both models share the GPU's memory, so check that the pair fits. The c
 | **Disk** | 5 GB | 15 GB, plus 3.5 GB for vocal isolation |
 | **Python** | 3.10 | 3.11 or newer |
 
-NVIDIA is the best supported. On an AMD card, the translator uses the GPU through Vulkan on Windows and Linux, but Whisper runs on the CPU, so a smaller model such as `small` is the realistic choice there. Vocal isolation is NVIDIA only. Everything else runs on the CPU. We test on Windows; macOS and Linux get less testing.
+NVIDIA is the best supported. AMD cards run both Whisper and the translator on the GPU through Vulkan, on Windows and Linux: Setup installs what they need, including whisper.cpp for Whisper. On our RTX 3060 that engine heard as well and as fast as the NVIDIA one, using about 2 GB of memory, but it has not run on a real AMD card yet, so please tell us how it goes. If Vulkan can't start, Whisper falls back to the CPU and the popup says why. Vocal isolation is NVIDIA only for now, so on AMD songs are heard with their music. Everything else runs on the CPU. We test on Windows; macOS and Linux get less testing.
 
 ## What it can't do
 
@@ -159,6 +159,7 @@ python pocket_yume.py health
 | No translation | Check the translator with `python pocket_yume.py health` |
 | Port already in use | `python pocket_yume.py ports` |
 | Too slow | A smaller model helps: `python pocket_yume.py recommend` suggests one for your card |
+| Chrome lists "`background.scripts` requires manifest version of 2 or lower" | Harmless. Firefox needs that line and Chrome ignores it |
 | Chrome, Brave or Edge warns "'background.scripts' requires manifest version of 2 or lower" | Harmless, nothing to fix. Firefox needs that key and Chromium ignores it, so it stays on purpose (`test_single_cross_browser_manifest` in `tests/test_integration.py` keeps it) |
 
 ## How it works

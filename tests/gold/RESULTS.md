@@ -46,6 +46,32 @@ VRAM against 2.4 GB and a model swapped per job. Beside Hy-MT2-7B that leaves to
 Thin: KO is 3 talks and 2 songs, RU and AR are 2 songs each, and JA songs are mixed (one of the four got worse).
 Rerun with `python tests/gold/gold.py run base v3 ...` and `score`; data stays in `tests/gold/data/`.
 
+## whisper.cpp on Vulkan, for AMD
+
+CTranslate2 has no AMD backend. whisper.cpp v1.9.5 has a Vulkan one, and Vulkan also runs on the RTX 3060, so it could be
+measured here on the same clips. Same settings as the base (beam 5, no VAD, no previous text), through Yume's filters.
+No AMD card was involved: this says what the engine hears, not how an AMD driver behaves.
+
+| Against faster-whisper | Clips | Error, faster-whisper → whisper.cpp | Better / worse | Whisper time | Peak VRAM |
+|---|---|---|---|---|---|
+| Talks | 26 | 11.1 → 12.2 | 11 / 11 | -20% | 2.0 GB, was 3.4 |
+| Songs, from the voice on | 13 | 14.9 → 14.9 | 11 / 2 | -19% | 2.0 GB |
+
+By language, talks: JA 9.1 → 9.3, ZH 6.2 → 5.7, KO 11.3 → 19.8, RU 18.5 → 18.6, AR 17.4 → 18.0. Songs: JA 7.5 → 7.0,
+ZH 24.2 → 23.7, KO 6.1 → 8.3, RU 8.7 → 10.0, AR 50.5 → 51.7.
+
+Korean talks are 3 clips, and one moved: a talk that plays an English-narrated video (24.6% → 58.2%). Both engines invent
+Korean over the English. faster-whisper writes one looping line, which the filter hides; whisper.cpp cuts it into short
+lines that differ a little. `_without_drifting_loops` drops runs of 4 lines each at least 70% like the last: 24.7 → 19.8
+on Korean talks, and it dropped nothing from any song or any other language at 3, 4 or 5 lines.
+
+The quantised large-v3-turbo-q5_0 (547 MB) was no worse than the full model (1.5 GB): talks 12.8 against 13.1, songs 15.7
+against 15.5, 2.2 GB of VRAM against 3.1, before the two changes here. It is the one Yume installs. whisper.cpp's fallback
+when a pass looks stuck (`temperature_inc` 0.2) left talks as they were and took songs from 15.7 to 14.9 through one
+Chinese song. Adopted.
+
+The first region after a start takes 3 s instead of 1 s while Vulkan builds its shaders, so the server warms it up.
+
 ## Translators
 
 `tests/gold/mt.py`, on the lines a viewer gets from Whisper, against human subtitles: 12 talks into English,

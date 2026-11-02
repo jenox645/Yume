@@ -1,0 +1,91 @@
+name: whisper.cpp for AMD
+
+# faster-whisper has no AMD backend, so AMD cards hear through whisper.cpp on Vulkan.
+# Upstream publishes no Vulkan binaries: Yume builds its own from one pinned commit.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/whisper-vulkan.yml
+
+env:
+  WHISPER_TAG: v1.9.5
+  WHISPER_SHA: d2a764c648779feb36d44363f212a29b00aad1af
+  VULKAN_VERSION: 1.4.357.0
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: ggml-org/whisper.cpp
+          ref: ${{ env.WHISPER_SHA }}
+
+      - name: Install the Vulkan SDK
+        run: |
+          curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
+          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
+
+      - name: Build
+        run: |
+          cmake -S . -B build -DGGML_VULKAN=ON -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DWHISPER_BUILD_TESTS=OFF
+          cmake --build build --config Release --target whisper-server -j 4
+
+      - name: Pack
+        run: |
+          New-Item -ItemType Directory pack | Out-Null
+          Copy-Item build/bin/Release/whisper-server.exe, LICENSE pack/
+          & pack/whisper-server.exe --help | Select-Object -First 3
+          Compress-Archive pack/* "whisper-${env:WHISPER_TAG}-vulkan-windows-x64.zip"
+          (Get-FileHash "whisper-${env:WHISPER_TAG}-vulkan-windows-x64.zip" -Algorithm SHA256).Hash
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whisper-vulkan-windows-x64
+          path: whisper-*-vulkan-windows-x64.zip
+          if-no-files-found: error
+
+  linux:
+    # The oldest Ubuntu runner, so the binary starts on older systems too
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: ggml-org/whisper.cpp
+          ref: ${{ env.WHISPER_SHA }}
+
+      - name: Install the Vulkan SDK
+        run: |
+          wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential mesa-vulkan-drivers vulkan-sdk
+
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON -DGGML_NATIVE=OFF \
+            -DBUILD_SHARED_LIBS=OFF -DWHISPER_BUILD_TESTS=OFF
+          cmake --build build --target whisper-server -j "$(nproc)"
+
+      - name: Pack
+        run: |
+          mkdir pack
+          cp build/bin/whisper-server LICENSE pack/
+          ldd pack/whisper-server
+          pack/whisper-server --help | head -3
+          tar -czf "whisper-${WHISPER_TAG}-vulkan-linux-x64.tar.gz" -C pack .
+          sha256sum "whisper-${WHISPER_TAG}-vulkan-linux-x64.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whisper-vulkan-linux-x64
+          path: whisper-*-vulkan-linux-x64.tar.gz
+          if-no-files-found: error

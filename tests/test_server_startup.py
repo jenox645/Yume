@@ -387,14 +387,14 @@ class TestCpuFallback(unittest.TestCase):
 
     def test_the_fallback_reaches_health_with_what_to_do(self):
         self._load(self._cuda_fails(self.NO_DEVICE))
-        self.assertIn("update its driver", self._health()["notice"])
+        self.assertIn("Update the NVIDIA driver", self._health()["notice"])
         self.assertNotIn("slow on the CPU", self._health()["notice"])
 
     def test_a_big_model_on_the_cpu_gets_a_notice_also_after_a_fallback(self):
         _state.model_name = "large-v3-turbo"
         self._load(self._cuda_fails(self.NO_DEVICE))
         notice = self._health()["notice"]
-        self.assertIn("update its driver", notice)
+        self.assertIn("Update the NVIDIA driver", notice)
         self.assertIn("large-v3-turbo is slow on the CPU", notice)
 
     def test_no_notice_for_what_runs_as_it_should(self):

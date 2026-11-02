@@ -99,6 +99,7 @@ class Wizard:
             "_offer_one_click": self.finished,
             "_offer_vocal_isolation": MagicMock(),
             "_extension_guide": MagicMock(),
+            "_missing_for_amd": lambda gpu: [],  # tests/test_whispercpp.py covers the offer
         }
         installers = {
             "install_ytdlp": "yt-dlp",
@@ -148,18 +149,22 @@ def test_whisper_device_and_precision_follow_the_gpu(gpu, device, compute):
 
 
 @pytest.mark.parametrize("win", [True, False])
-def test_amd_runs_whisper_on_the_cpu_on_every_os(win):
-    with patch.object(setup, "IS_WIN", win), patch("yume.hardware.detect_ram_gb", return_value=32.0):
+def test_amd_leaves_the_device_to_what_is_installed_on_every_os(win):
+    with (
+        patch.object(setup, "IS_WIN", win),
+        patch("yume.hardware.detect_ram_gb", return_value=32.0),
+        patch("yume.whisper_cpp.server_path", return_value=None),
+    ):
         cfg = Wizard(AMD_8GB).run({})
-    assert (cfg["whisper_device"], cfg["whisper_compute_type"]) == ("cpu", "int8")
-    assert cfg["whisper_model"] == "small"  # the CPU's pick, not one for 8 GB of VRAM
+    assert (cfg["whisper_device"], cfg["whisper_compute_type"]) == ("auto", "auto")
+    assert cfg["whisper_model"] == "small"  # the CPU's pick until the engine is in
 
 
 @pytest.mark.parametrize("compute", ["float16", "int8_float16"])
 def test_running_setup_again_repairs_what_the_old_amd_setup_saved(compute):
     w = Wizard(AMD_8GB)
     cfg = w.run({"whisper_model": "large-v3-turbo", "whisper_device": "auto", "whisper_compute_type": compute}, True)
-    assert (cfg["whisper_device"], cfg["whisper_compute_type"]) == ("cpu", "int8")
+    assert (cfg["whisper_device"], cfg["whisper_compute_type"]) == ("auto", "auto")
     assert cfg["whisper_model"] == "large-v3-turbo"  # the model stays the user's choice
     assert w.saved
 

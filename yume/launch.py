@@ -148,6 +148,14 @@ def _start_translation(cfg: dict, procs: servers.Processes, env: dict) -> bool:
     return True
 
 
+def _hint_whisper_cpp(cfg: dict) -> None:
+    """An update does not install it: only Setup does."""
+    from yume import whisper_cpp
+
+    if detect_gpu().get("has_amd") and not whisper_cpp.server_path() and whisper_cpp.available():
+        info(f"Whisper will run on the CPU. {C.CYAN}python pocket_yume.py setup{C.RESET} puts it on your AMD GPU.")
+
+
 def _launch_inner(cfg: dict, procs: servers.Processes) -> None:
     """Actual server startup. Ctrl+C caught by launch_services()."""
     existing = discover_servers(cfg, BACKEND_INFO)
@@ -157,6 +165,7 @@ def _launch_inner(cfg: dict, procs: servers.Processes) -> None:
     if not check_resources(cfg):
         return
 
+    _hint_whisper_cpp(cfg)
     env = servers.build_server_env()
     if env.get("HSA_OVERRIDE_GFX_VERSION") and "HSA_OVERRIDE_GFX_VERSION" not in os.environ:
         warn("AMD RDNA1 GPU detected. Setting HSA_OVERRIDE_GFX_VERSION=10.3.0")

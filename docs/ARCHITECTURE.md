@@ -21,6 +21,7 @@ Three processes on the user's machine:
 │                                      │      │ _separate.py   vocal isolation (optional, CUDA)    │
 │                                      │      │ _regions.py    split audio at quiet points         │
 │ popup.js     settings, library, stats│      │ _transcribe.py Whisper (music-tuned params)         │
+│                                      │      │ _whispercpp.py whisper.cpp on Vulkan, for AMD       │
 └─────────────────────────────────────┘      │ _filter.py     hallucination filter + blacklist    │
                                              │ _translate.py  LLM client, structured output        │
                                              │ _romanize.py   cutlet / pypinyin / KO / RU         │
@@ -205,6 +206,13 @@ one place for prompts, caching, the blacklist and scheduling.
   exported. Cost: only sites yt-dlp/ffmpeg can fetch (no DRM).
 - **VAD off, no word timestamps** — Silero VAD drops singing; the
   word-timestamp decode path drops segments. Music is the main use case.
+- **Two Whisper engines** — CTranslate2 has no AMD backend, so `_model` gives
+  AMD cards `_whispercpp.WhisperCpp` (whisper.cpp on Vulkan, as a child process)
+  and everyone else faster-whisper. It has the same two methods, so nothing
+  above `_model` knows which one hears. Yume builds the binary itself, because
+  upstream publishes no Vulkan build. Differences that matter: whisper.cpp cuts
+  a stuck loop into short drifting lines, which `_without_drifting_loops` drops
+  before `_filter` sees them, and the cache key does not name the engine.
 - **No build step** for the extension — plain scripts, one cross-browser
   manifest (`service_worker` for Chromium, `scripts` for Firefox 121+).
 - **CLI package layout** — `pocket_yume.py` is the entry point; logic lives in

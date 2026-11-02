@@ -319,7 +319,7 @@ def benchmark_whisper(cfg: dict) -> None:
     if gpu["has_nvidia"]:
         info(f"GPU: {gpu['name']} ({gpu['vram_mb']} MB VRAM)")
     elif gpu.get("has_amd"):
-        info(f"GPU: {gpu['name']} — Whisper can't use AMD GPUs, benchmarking in CPU mode")
+        info(f"GPU: {gpu['name']} — this benchmark measures faster-whisper, so it runs in CPU mode")
     else:
         info("No GPU detected — benchmarking in CPU mode")
     rec, reason = recommend_whisper_model(gpu)

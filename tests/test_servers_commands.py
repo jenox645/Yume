@@ -93,12 +93,16 @@ class TestEnvironment:
 
 
 class TestWhisperCommand:
+    @pytest.fixture(autouse=True)
+    def no_whisper_cpp(self, monkeypatch):
+        monkeypatch.setattr("yume.whisper_cpp.server_path", lambda: None)
+
     @pytest.mark.parametrize(
         ("gpu", "win", "expected"),
         [
             (NVIDIA, True, ("cuda", "float16")),
             (SMALL_NVIDIA, True, ("cuda", "int8_float16")),
-            (AMD, False, ("cpu", "int8")),  # ctranslate2 has no AMD backend
+            (AMD, False, ("cpu", "int8")),  # whisper.cpp not installed: tests/test_whispercpp.py with it
             (AMD, True, ("cpu", "int8")),
             (CPU, False, ("cpu", "int8")),
         ],

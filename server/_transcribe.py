@@ -3,6 +3,7 @@
 import time
 
 import _state
+from _whispercpp import EngineLost
 
 SAMPLE_RATE = 16000
 BEAM_SIZE = 5  # 1 and 2 are faster but gave more repetition loops: tests/gold/RESULTS.md
@@ -25,8 +26,7 @@ def transcribe_audio(audio, language, offset=0.0, is_first_region=False, tempera
         tried and silently dropped the first verse. The hallucination filter and
         user blacklist are the quality gate for non-speech, not this threshold.
     """
-    model = _state.model
-    if model is None:
+    if _state.model is None:
         raise RuntimeError("Model is still loading — try again in a few seconds")
     if len(audio) < SAMPLE_RATE // 2:
         return []
@@ -46,7 +46,15 @@ def transcribe_audio(audio, language, offset=0.0, is_first_region=False, tempera
     t_start = time.time()
     # CRITICAL: Serialise model access. CTranslate2 is NOT thread-safe.
     with _state.transcribe_lock:
-        segments_iter, info = model.transcribe(audio, **params)
+        # Read under the lock: a hot swap closes the model it replaces
+        try:
+            segments_iter, info = _state.model.transcribe(audio, **params)
+        except EngineLost as e:
+            import _model
+
+            if not _model.cpu_after_losing_vulkan(e):
+                raise
+            segments_iter, info = _state.model.transcribe(audio, **params)
         raw = list(segments_iter)  # consume inside the lock
     elapsed = time.time() - t_start
 
@@ -79,12 +87,11 @@ def transcribe_audio(audio, language, offset=0.0, is_first_region=False, tempera
 
 def detect_language(audio):
     """(language, probability) Whisper hears in the audio; (None, 0.0) if it cannot tell."""
-    model = _state.model
-    if model is None or len(audio) < SAMPLE_RATE * 5:
+    if _state.model is None or len(audio) < SAMPLE_RATE * 5:
         return None, 0.0
     try:
         with _state.transcribe_lock:
-            language, prob, _all = model.detect_language(audio[: SAMPLE_RATE * 30])
+            language, prob, _all = _state.model.detect_language(audio[: SAMPLE_RATE * 30])
         return language, float(prob)
     except Exception as e:  # an older faster-whisper, or a model without the head
         print(f"[Yume] Language check skipped: {e}")

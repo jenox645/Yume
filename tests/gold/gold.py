@@ -82,6 +82,8 @@ VARIANTS = {  # model, beam, what a song's Whisper hears
     "mix": ("large-v3-turbo", 5, "mix"),
     "trim": ("large-v3-turbo", 5, "trim"),
     "v3mix": ("large-v3", 5, "mix"),
+    "vk": ("large-v3-turbo", 5, "vocals"),
+    "vktrim": ("large-v3-turbo", 5, "trim"),
 }
 
 
@@ -450,8 +452,14 @@ def run(names):
             todo = [c for c in todo if c["kind"] == "song"]
         if not todo:
             continue
-        _state.model_name, _state.device, _state.compute_type = model_name, "cuda", "float16"
-        _state.model = WhisperModel(model_name, device="cuda", compute_type="float16")
+        if name.startswith("vk"):  # whisper.cpp on Vulkan, the engine for AMD and Intel GPUs
+            from _whispercpp import WhisperCpp
+
+            _state.model_name, _state.device, _state.compute_type = model_name, "vulkan", "default"
+            _state.model = WhisperCpp(model_name)
+        else:
+            _state.model_name, _state.device, _state.compute_type = model_name, "cuda", "float16"
+            _state.model = WhisperModel(model_name, device="cuda", compute_type="float16")
         _transcribe.BEAM_SIZE = beam
         print(f"[gold] {name}: {len(todo)} clips")
         with _GpuLog() as gpu:
@@ -460,6 +468,8 @@ def run(names):
                 (out / f"{clip['id']}.json").write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
         (out / "_gpu.json").write_text(json.dumps(gpu.summary()), encoding="utf-8")
         print(f"[gold] {name}: {gpu.summary()}")
+        if hasattr(_state.model, "close"):
+            _state.model.close()
         del _state.model
         _state.model = None
 

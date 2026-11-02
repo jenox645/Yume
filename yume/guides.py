@@ -108,8 +108,7 @@ def _guide_models(cfg: dict) -> None:
     if gpu["has_nvidia"]:
         info(f"Your GPU: {C.GREEN}{gpu['name']}{C.RESET} ({gpu['vram_mb']} MB VRAM)")
     elif gpu.get("has_amd"):
-        info(f"Your GPU: {C.GREEN}{gpu['name']}{C.RESET} — it runs the translator.")
-        info(f"Whisper can't use AMD GPUs: {C.YELLOW}CPU mode{C.RESET} — prefer the smaller models below.")
+        info(f"Your GPU: {C.GREEN}{gpu['name']}{C.RESET} — Whisper and the translator run on it through Vulkan.")
     else:
         info(f"Your hardware: {C.YELLOW}CPU mode{C.RESET} — prefer the smaller models below.")
     info(f"Recommended Whisper model: {C.BOLD}{rec_model}{C.RESET}  {C.DIM}({rec_reason}){C.RESET}")

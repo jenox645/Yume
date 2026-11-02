@@ -64,7 +64,7 @@ def test_a_gpu_that_is_gone_does_not_stay_the_device():
 def test_a_precision_only_cuda_can_run_does_not_stay_without_nvidia(device, compute):
     cfg = {"whisper_device": device, "whisper_compute_type": compute}
     setup._pick_whisper_device(cfg, AMD, rerun=True)
-    assert cfg == {"whisper_device": "cpu", "whisper_compute_type": "int8"}
+    assert cfg == {"whisper_device": "auto", "whisper_compute_type": "auto"}
 
 
 @pytest.mark.parametrize(("device", "compute"), [("auto", "auto"), ("auto", "int8"), ("cpu", "float32")])
