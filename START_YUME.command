@@ -41,6 +41,28 @@ else
     exit 1
 fi
 
+# First run: Yume's packages go in a private environment, so they stay out of
+# the system Python. An activated environment, or Yume already installed in this
+# Python, stays as it is.
+case "$PY" in
+    */bin/python) ;;
+    *)
+        if [ -z "${VIRTUAL_ENV:-}" ] && ! "$PY" -c "import importlib.util,sys; sys.exit(importlib.util.find_spec('faster_whisper') is None)" 2>/dev/null; then
+            if [ ! -d yume-env ]; then
+                echo "Creating a private Python environment in yume-env..."
+                "$PY" -m venv yume-env >/dev/null 2>&1 || true
+            fi
+            if [ -x yume-env/bin/python ] && yume-env/bin/python -m pip --version >/dev/null 2>&1; then
+                PY=yume-env/bin/python
+            else
+                rm -rf yume-env # a failed venv leaves a folder without pip
+                echo "Could not create it (on Debian or Ubuntu: sudo apt install python3-venv)."
+                echo "Yume will install into your system Python."
+            fi
+        fi
+        ;;
+esac
+
 echo "Python: $("$PY" --version)"
 echo ""
 

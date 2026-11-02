@@ -267,6 +267,113 @@ def test_other_backends_need_no_engine_or_gguf():
     assert cfg["first_run_complete"] is True
 
 
+def _uninstall(tmp_path, monkeypatch, answer):
+    """A full uninstall with every folder in tmp_path; `answer` is every yes/no after the first."""
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hf"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setenv("DENO_DIR", str(tmp_path / "deno"))
+    monkeypatch.delenv("TORCH_HOME", raising=False)
+    yume_model = tmp_path / "hf" / "models--Systran--faster-whisper-small"
+    other_tool = tmp_path / "hf" / "models--someone--my-faster-whisper-finetune"
+    weights = tmp_path / "cache" / "torch" / "hub" / "checkpoints" / setup._HTDEMUCS_WEIGHTS
+    own = tmp_path / "tools"
+    for folder in (yume_model, other_tool, tmp_path / "deno", tmp_path / "cache" / "yt-dlp", own, weights.parent):
+        folder.mkdir(parents=True)
+    weights.write_bytes(b"x")
+    data = MagicMock()
+    with (
+        patch.object(setup, "ask_arrow", return_value=1),
+        patch.object(setup, "ask_yn", side_effect=lambda *a, **k: answer),
+        patch.object(setup, "_uninstall_targets", return_value=[("Tools", own)]),
+        patch.object(setup, "_remove_data", data),
+        patch.object(setup, "header"),
+        patch.object(setup, "pause"),
+    ):
+        setup.uninstall_yume()
+    return data.call_args.args[0], own, yume_model, other_tool, weights
+
+
+def test_shared_files_are_only_removed_when_asked_one_by_one(tmp_path, monkeypatch):
+    removed, own, yume_model, other_tool, weights = _uninstall(tmp_path, monkeypatch, True)
+    paths = [p for _label, p in removed]
+    assert own in paths and yume_model in paths and weights in paths
+    assert other_tool not in paths  # the name alone does not make it Yume's
+
+
+def test_a_model_of_another_tool_is_never_even_asked_about(tmp_path, monkeypatch):
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+    assert not [p for _label, p in setup._shared_targets() if "finetune" in p.name]
+
+
+@pytest.mark.parametrize("answers", [[False, False, False, False], [False, True, False, False]])
+def test_the_answer_decides_each_shared_item(tmp_path, answers):
+    a, b, c, d = (tmp_path / n for n in "abcd")
+    for p in (a, b, c, d):
+        p.mkdir()
+    targets = [("a", a), ("b", b), ("c", c), ("d", d), ("gone", tmp_path / "nope")]
+    with patch.object(setup, "ask_yn", side_effect=answers), patch.object(setup, "info"):
+        chosen = setup._ask_shared(targets)
+    assert [t[0] for t in chosen] == [t[0] for t, yes in zip(targets, answers, strict=False) if yes]
+
+
+def test_the_default_answer_keeps_shared_files(tmp_path):
+    (tmp_path / "a").mkdir()
+    with patch.object(setup, "ask_yn", return_value=False) as ask, patch.object(setup, "info"):
+        setup._ask_shared([("a", tmp_path / "a")])
+    assert ask.call_args.args[1] is False
+
+
+def test_the_whisper_models_listed_are_the_ones_faster_whisper_downloads():
+    utils = pytest.importorskip("faster_whisper.utils")
+    names = ("tiny", "base", "small", "medium", "large-v1", "large-v2", "large-v3", "large-v3-turbo")
+    expected = {"models--" + utils._MODELS[m].replace("/", "--") for m in names}
+    assert expected == set(setup._WHISPER_REPOS)
+
+
+def test_a_file_is_removed_as_a_file(tmp_path):
+    weights = tmp_path / "w.th"
+    weights.write_bytes(b"x")
+    with (
+        patch("yume.service.request_stop"),
+        patch("yume.native_host.unregister"),
+        patch.object(setup, "BASE_DIR", tmp_path),
+        patch.object(setup, "MODELS_DIR", tmp_path / "models"),
+        patch.object(setup, "success"),
+    ):
+        setup._remove_data([("Weights", weights)])
+    assert not weights.exists()
+
+
+@pytest.mark.parametrize(("own_venv", "installed", "yes", "expected"), [
+    (True, True, True, []),  # it goes with the folder
+    (False, False, True, []),
+    (False, True, False, []),
+    (False, True, True, ["torch", "torchaudio"]),
+])  # fmt: skip
+def test_pytorch_goes_only_when_asked(own_venv, installed, yes, expected):
+    with (
+        patch.object(setup, "_in_own_venv", return_value=own_venv),
+        patch.object(setup.importlib.util, "find_spec", return_value=object() if installed else None),
+        patch.object(setup, "ask_yn", return_value=yes),
+    ):
+        assert setup._ask_torch() == expected
+
+
+def test_a_venv_elsewhere_is_not_yumes(tmp_path):
+    with (
+        patch.object(setup.sys, "prefix", str(tmp_path / "other")),
+        patch.object(setup.sys, "base_prefix", "/usr"),
+        patch.object(setup, "BASE_DIR", tmp_path / "yume"),
+    ):
+        assert setup._in_own_venv() is False
+    with (
+        patch.object(setup.sys, "prefix", str(tmp_path / "yume" / "yume-env")),
+        patch.object(setup.sys, "base_prefix", "/usr"),
+        patch.object(setup, "BASE_DIR", tmp_path / "yume"),
+    ):
+        assert setup._in_own_venv() is True
+
+
 def test_uninstall_lists_every_package_yume_installs_and_not_shared_ones():
     pkgs = setup._yume_pip_packages()
     for name in ("faster-whisper", "fugashi", "unidic-lite", "pypinyin", "llama-cpp-python", "uvicorn",
@@ -284,6 +391,8 @@ def test_uninstall_choices(choice, data, pip):
         patch.object(setup, "ask_arrow", return_value=choice),
         patch.object(setup, "ask_yn", return_value=True),
         patch.object(setup, "_uninstall_targets", return_value=[]),
+        patch.object(setup, "_shared_targets", return_value=[]),
+        patch.object(setup, "_ask_torch", return_value=[]),
         patch.object(setup, "_remove_data") as remove_data,
         patch.object(setup, "_remove_packages") as remove_packages,
         patch.object(setup, "header"),
