@@ -44,7 +44,7 @@ You need Python 3.10 or newer. A graphics card helps a lot, but a CPU works.
 |---|---|---|
 | Double-click `START_YUME.bat` | `./START_YUME.sh` | Double-click `START_YUME.command` |
 
-When the wizard offers one-click start, say yes. You will not need the terminal again.
+When the wizard offers auto start, say yes. You will not need the terminal again.
 
 **2. Add the extension.** In Chrome, Brave or Edge:
 
@@ -56,9 +56,21 @@ In Firefox 121 or newer, open `about:debugging`, choose **This Firefox**, then *
 
 **3. Watch.** Open a video, click the Yume icon, pick the video's language, and press **Turn subtitles on** (or Alt+Y). The first start takes about 30 seconds while the models load.
 
+## Auto start
+
+With auto start on, pressing **Turn subtitles on** starts Yume in the background, with no window and no terminal. It stops by itself after 30 minutes without a video, and the popup has **Start Yume** and **Stop Yume** buttons.
+
+The first start takes about 30 seconds while the models load. Turn it on or off in the terminal menu, under **Auto start**, where you can also change the idle time or set it to never stop. From the command line:
+
+```bash
+python pocket_yume.py autostart on
+```
+
+Without it, start Yume yourself with `START_YUME` before you watch.
+
 ## How good is it?
 
-These numbers come from our own tests on an RTX 3060 with 12 GB. Your hardware and videos will differ.
+These numbers come from our own tests on an RTX 3060 with 12 GB, using Whisper `large-v3-turbo` and Hy-MT2-7B. They depend on those models: swap one and your results change, for better or worse. Your hardware and videos will differ too.
 
 **Accuracy.** We scored Yume against captions and lyrics written by people, on 26 talks and 13 songs. Lower is better.
 
@@ -81,9 +93,25 @@ Songs are hard, and Arabic songs are not reliable yet. Korean has only 3 talks a
 
 **Noise.** Yume keeps 40 to 80 seconds ready ahead of you and lets the GPU rest in between. While watching, it was busy 34 seconds out of 150, at about 49 W on average. When it rests, the window says how far it is ready, for example "Ready to 1:37".
 
-## Choosing a translator
+## Choosing your models
 
-Pick one in the terminal: **Settings**, then **Translation settings**. Any GGUF model works, and so do Ollama, LM Studio and other OpenAI-compatible servers.
+Yume is not tied to one model. Two do the work, and you can swap either one.
+
+**Whisper hears the audio.** Change it in the popup, under **Models**, or in the terminal. The switch happens while Yume runs:
+
+```bash
+python pocket_yume.py model list
+```
+
+| Model | Memory on the GPU | In our tests |
+|---|---|---|
+| **large-v3-turbo** | 2.4 GB | The default: the best balance on any GPU |
+| large-v3 | 4.4 GB | Slightly better on songs, about 2.5× slower. No gain on talks |
+| small, base, tiny | Less | For a CPU or a small card, less accurate |
+
+Each model keeps its own saved transcripts, so a video is heard again after a switch. If you are not sure, `python pocket_yume.py recommend` suggests one for your card.
+
+**The translator turns the lines into your language.** Pick one in the terminal: **Settings**, then **Translation settings**. Any GGUF model works, and so do Ollama, LM Studio and other OpenAI-compatible servers.
 
 | Model | Size | For | In our tests |
 |---|---|---|---|
@@ -91,7 +119,7 @@ Pick one in the terminal: **Settings**, then **Translation settings**. Any GGUF 
 | Hy-MT2-1.8B Q4_K_M | 1.1 GB | Small cards, quieter fans | About as good as Qwen2.5-7B, 2.5× faster |
 | Qwen2.5-7B | About 4 GB | Custom prompts | The older default |
 
-The comparison is in [tests/gold/RESULTS.md](tests/gold/RESULTS.md). It rests partly on one person's blind reading, and French on only 4 clips.
+Both models share your GPU's memory, so check that the pair fits. The comparisons are in [tests/gold/RESULTS.md](tests/gold/RESULTS.md). They rest partly on one person's blind reading, and French on only 4 clips.
 
 ## What you need
 
@@ -130,23 +158,34 @@ python pocket_yume.py health
 | YouTube asks you to sign in | In the terminal: **Settings**, then **YouTube Auth** |
 | No translation | Check the translator with `python pocket_yume.py health` |
 | Port already in use | `python pocket_yume.py ports` |
-| Too slow | `python pocket_yume.py recommend` suggests a model for your card |
+| Too slow | A smaller model helps: `python pocket_yume.py recommend` suggests one for your card |
 
 ## How it works
 
 ```mermaid
-graph LR
-    EXT["Browser extension"] -- "what is playing, and where" --> SRV
+graph TD
+    EXT["Browser extension"] -- "what is playing, and where" --> DL
     subgraph SRV ["Yume server, on your PC"]
-        DL["Download the audio"] --> SEP["Separate the voice, for songs"]
-        SEP --> WH["Whisper hears it,<br/>from where you are"]
-        WH --> FL["Remove invented lines"]
+        DL["Download the audio"] -- "for songs" --> SEP["Separate the voice"]
+        DL -- "while it downloads" --> PV["Quick preview of where you are"]
+        SEP --> VS["Find where the voice starts"]
+        DL --> VS
+        VS --> WH["Whisper hears it, from where you are"]
+        WH --> CHK{"Only invented lines?"}
+        CHK -- "yes" --> AGAIN["Second listen, a different way"]
+        CHK -- "no" --> FL["Hide invented lines and your blacklist"]
+        AGAIN --> FL
+        FL -. "you blacklist a whole section" .-> AGAIN
+        PV --> FL
         FL --> TR["Translate"]
         FL --> RO["Write the reading"]
         TR --> DB[("Saved for next time")]
+        RO --> DB
     end
-    SRV -- "lines for this moment" --> EXT
+    DB -- "lines for this moment" --> EXT
 ```
+
+Whisper only works ahead of where you are. When 80 seconds are ready it rests, and it starts again when 40 are left, so a video you leave costs no more GPU time.
 
 More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). All terminal commands are listed by `python pocket_yume.py help`.
 
