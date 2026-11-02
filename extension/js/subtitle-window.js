@@ -40,6 +40,16 @@ function windowStyle(s) {
 }
 
 // Opt-in: a less sure line (Whisper's avg_logprob) is shown fainter
+function clockTime(seconds) {
+  return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
+}
+
+// Vertical is a Japanese and Chinese form: other scripts keep the plain box
+function chosenLook(s) {
+  const look = s.subtitleStyle || 'plain';
+  return look === 'vertical' && !['ja', 'zh'].includes(s.sourceLanguage) ? 'plain' : look;
+}
+
 function confidenceOpacity(show, c) {
   if (!show || c == null || c >= 0) return 1.0;
   return c > -0.3 ? 1.0 : c > -0.7 ? 0.85 : 0.65;
@@ -217,7 +227,7 @@ class SubtitleWindow {
     // are read, so a custom title used to show only after the next change
     const titleEl = this.element.querySelector('.subtitle-title');
     if (titleEl) titleEl.textContent = s.windowTitle || 'Yume';
-    if (this.element.dataset) this.element.dataset.look = s.subtitleStyle || 'plain';
+    if (this.element.dataset) this.element.dataset.look = chosenLook(s);
     // Per line: size, colour and font from the settings named after it
     for (const [selector, name, size, color] of LINE_STYLES) {
       const el = this.element.querySelector(selector);
@@ -279,7 +289,7 @@ class SubtitleWindow {
     if (!badge) return;
     this._lastProgress = detail;
     if (this.settings.showChunkCounter === false) { badge.style.display = 'none'; return; }
-    const { done = 0, total = 0, complete, lines = 0, translated = 0, status } = detail;
+    const { done = 0, total = 0, complete, lines = 0, translated = 0, status, readyTo = 0 } = detail;
 
     if (complete) {
       if (badge.classList.contains('complete')) return;  // already shown/fading
@@ -303,6 +313,9 @@ class SubtitleWindow {
     if (phase || !total) {  // the stream preview's single region must not read "Listening 1/1" here
       badge.textContent = phase ? phase[0] : '\u2026';
       badge.title = phase ? phase[1] : 'Starting';
+    } else if (readyTo && status !== 'translating') {
+      badge.textContent = `Ready to ${clockTime(readyTo)}`;
+      badge.title = 'Enough is ready ahead of you, so the GPU rests. It carries on as the video plays.';
     } else if (status === 'translating') {
       badge.textContent = `Translating ${translated}/${lines}`;
       badge.title = 'Lines translated (the translator works through them in batches, lines near the playhead first)';
@@ -341,7 +354,7 @@ class SubtitleWindow {
   // CONTENT UPDATES
   // ========================================================================
 
-  updateSubtitle(original, english, romaji, confidence) {
+  updateSubtitle(original, english, romaji, confidence, timing) {
     if (!this.element) return;
     const s = this.settings;
     const q = (selector) => this.element.querySelector(selector);
@@ -360,7 +373,10 @@ class SubtitleWindow {
     }
 
     const newLine = (original || '') !== this.currentOriginal || (english || '') !== this.currentEnglish;
-    if (newLine) this._animateLine(q('.subtitle-content'));
+    if (newLine) {
+      this._animateLine(q('.subtitle-content'));
+      this._singLine(q('.subtitle-original'), timing);
+    }
     this.isPlaying = true;
     this.currentOriginal = original || '';
     this.currentEnglish  = english || '';
@@ -388,6 +404,22 @@ class SubtitleWindow {
     if (entrance === 'cut') return;
     void box.offsetWidth;
     box.classList.add('line-' + entrance);
+  }
+
+  // Karaoke: the colour sweeps the line over its own time on screen. Whisper's
+  // word timing drops segments, so this is the line's span, not each word's
+  _singLine(el, timing) {
+    if (!el?.classList?.add) return;
+    el.classList.remove('line-sing');
+    if (chosenLook(this.settings) !== 'karaoke' || !(timing?.duration > 0)) return;
+    void el.offsetWidth;
+    el.style.setProperty('--sing-s', `${timing.duration}s`);
+    el.style.setProperty('--sing-from', `${-timing.elapsed}s`);
+    el.classList.add('line-sing');
+  }
+
+  setPlaying(playing) {
+    if (this.element?.dataset) this.element.dataset.paused = String(!playing);
   }
 
   updateStatus(message, type = 'info') {

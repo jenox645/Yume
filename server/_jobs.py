@@ -385,6 +385,8 @@ class JobManager:
         if raw is None or not job.regions:
             return
         job.preview_segments = None
+        if job.isolate:  # heard from the mix: the vocals are transcribed instead
+            return
         first = job.regions[0]
         if first[0] != 0.0 or first[1] > _regions.FIRST_REGION_S:
             return
@@ -436,7 +438,10 @@ class JobManager:
                 if not path:
                     raise RuntimeError("stream segment download failed")
                 audio = _audio.load_audio(path)
-            raw = transcribe_audio(audio, job.language, start, is_first_region=(idx == 0))
+            # Whisper hears from the voice on, not from the silence before it
+            skip = _regions.voice_start(audio)
+            audio = audio[:0] if skip is None else audio[int(skip * SR) :]
+            raw = transcribe_audio(audio, job.language, start + (skip or 0.0), is_first_region=(idx == 0))
             if job.lang_checks < LANG_CHECKS:
                 heard, prob = detect_language(audio)
                 with job.lock:

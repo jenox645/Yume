@@ -74,6 +74,7 @@ class Job:
         self.preview_started = 0.0  # stream preview of region 0 in flight since
         self.preview_hearing = 0.0  # ...and in Whisper since
         self.preview_segments = None
+        self.preview_region = None  # shown before the plan existed
         self.category_wanted = False  # the site's category is on its way: see JobManager._isolate
         self.resting = False  # enough ahead of the playhead: see AHEAD_HIGH_S
 
@@ -252,6 +253,11 @@ class Job:
             end = region[1]
         return end - self.playhead
 
+    def _ready_to(self):
+        if not self.resting or not self.regions:
+            return 0
+        return round(self.playhead + self._ready_ahead(_regions.region_index_at(self.regions, self.playhead)))
+
     def next_region(self, now):
         """The region to transcribe next, marked running, or None. Forward from the
         playhead, as far as is needed soon: what the viewer never reaches, or
@@ -279,10 +285,13 @@ class Job:
         `cached` are loaded; segments from regions the plan no longer has are
         hidden so the client drops them."""
         done_before = {r for r, st in zip(self.regions, self.region_state) if st == "done"}
+        # A preview comes from the mix: a job on the vocals hears that region again
+        replaced = self.preview_region if self.isolate else None
+        done_before.discard(replaced)
         self.regions = [tuple(r) for r in regions]
         self.region_state = ["pending"] * len(self.regions)
         for seg in self.segments.values():
-            if seg["region"] not in self.regions and not seg["orphan"]:
+            if (seg["region"] not in self.regions or seg["region"] == replaced) and not seg["orphan"]:
                 seg["orphan"] = True
                 seg["hidden"] = True
                 self._touch(seg)
@@ -298,6 +307,7 @@ class Job:
         """Show the stream preview before the region plan exists: install a
         provisional single region so its lines are visible right away."""
         first = (start, start + _regions.FIRST_REGION_S)
+        self.preview_region = first
         self.regions = [first]
         self.region_state = ["pending"]
         self.add_region(0, raw)
@@ -335,6 +345,8 @@ class Job:
             "covered": [list(r) for r, e in zip(self.regions, ended) if e],
             "lines": len(visible),
             "translated": sum(s["translation"] is not None for s in visible) if self.target else len(visible),
+            # Enough is ready ahead of the viewer: Whisper rests, on purpose (see AHEAD_HIGH_S)
+            "ready_to": self._ready_to(),
         }
 
 

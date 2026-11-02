@@ -595,6 +595,50 @@ test('a new line restarts its entrance; "at once" has none', () => {
   assert.deepEqual([...box.classes], []);
 });
 
+test('karaoke sweeps a line over its own time on screen, from where it is now', () => {
+  const { ctx } = load('subtitle-window.js');
+  const props = {};
+  const classes = new Set();
+  const el = {
+    offsetWidth: 1,
+    style: { setProperty: (k, v) => { props[k] = v; } },
+    classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c) },
+  };
+  const win = Object.create(ctx.SubtitleWindow.prototype);
+  win.settings = { subtitleStyle: 'karaoke' };
+  win._singLine(el, { elapsed: 1.5, duration: 4 });
+  assert.deepEqual(props, { '--sing-s': '4s', '--sing-from': '-1.5s' });
+  assert.ok(classes.has('line-sing'));
+  win.settings = { subtitleStyle: 'plain' };
+  win._singLine(el, { elapsed: 0, duration: 4 });
+  assert.ok(!classes.has('line-sing'));
+});
+
+test('a resting job says how far is ready, not a count that looks frozen', () => {
+  const { ctx } = load('subtitle-window.js');
+  const badge = { style: {}, classList: { contains: () => false }, textContent: '', title: '', className: '' };
+  const win = Object.create(ctx.SubtitleWindow.prototype);
+  win.settings = {};
+  win.element = { querySelector: () => badge };
+  win.updateChunkProgress({ done: 4, total: 11, status: 'transcribing', readyTo: 97 });
+  assert.equal(badge.textContent, 'Ready to 1:37');
+  win.updateChunkProgress({ done: 4, total: 11, status: 'transcribing', readyTo: 0 });
+  assert.equal(badge.textContent, 'Listening 4/11');
+});
+
+test('vertical is for Japanese and Chinese: other scripts keep the plain box', () => {
+  const { ctx } = load('subtitle-window.js');
+  const look = (sourceLanguage) => {
+    const win = Object.create(ctx.SubtitleWindow.prototype);
+    const dataset = {};
+    win.settings = { subtitleStyle: 'vertical', sourceLanguage };
+    win.element = { dataset, style: {}, querySelector: () => null };
+    win.applyCustomStyles();
+    return dataset.look;
+  };
+  assert.deepEqual(['ja', 'zh', 'ko', 'ar', 'ru'].map(look), ['vertical', 'vertical', 'plain', 'plain', 'plain']);
+});
+
 test('popup: add-on store pages are not offered (no browser runs content scripts there)', () => {
   const { ctx } = loadPopup();
   for (const url of ['https://chromewebstore.google.com/detail/x', 'https://chrome.google.com/webstore/detail/x',

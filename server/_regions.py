@@ -30,6 +30,11 @@ HOP_S = 0.05  # energy resolution
 SMOOTH_S = 0.3  # energy smoothing window
 
 
+QUIET_FRAME_S = 0.1
+QUIET_RMS = 0.003  # a stem's silence reads 0.000, a sung line 0.1
+QUIET_PAD_S = 0.3  # kept before the voice: a soft first consonant
+
+
 def _energy(audio, sr):
     hop = max(1, int(sr * HOP_S))
     n = len(audio) // hop
@@ -39,6 +44,23 @@ def _energy(audio, sr):
     rms = np.sqrt(np.mean(frames * frames, axis=1))
     k = max(1, int(SMOOTH_S / HOP_S))
     return np.convolve(rms, np.ones(k, dtype=np.float32) / k, mode="same")
+
+
+def voice_start(audio, sr=SAMPLE_RATE):
+    """Seconds of silence to skip before Whisper hears a region, None if it is all silence.
+
+    A vocal stem is digital silence until the singer starts. Whisper given 18 s of
+    that wrote "thanks for watching" over its whole 30 s window, and the line sung
+    at 19 s was lost with it."""
+    n = int(sr * QUIET_FRAME_S)
+    frames = len(audio) // n
+    if not frames:
+        return 0.0
+    rms = np.sqrt(np.mean(audio[: frames * n].reshape(frames, n) ** 2, axis=1))
+    voiced = np.flatnonzero(rms >= QUIET_RMS)
+    if not len(voiced):
+        return None
+    return max(0.0, float(voiced[0]) * QUIET_FRAME_S - QUIET_PAD_S)
 
 
 def plan_regions(audio, sr=SAMPLE_RATE):

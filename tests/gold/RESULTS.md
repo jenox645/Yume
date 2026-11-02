@@ -27,6 +27,11 @@ Change against the base, per clip:
 | Mute quiet vocal spans (0.1 of the 95th percentile) | Songs | +4.2 | 4 / 8 | same | No: 56% more words lost |
 | Hide lines over compression ratio 2.4 | All | +1.9 speech, 0.0 songs | - | same | No: 34% more song words lost, repeated lyrics are real lines |
 
+Later, a user's song showed what the table missed: a vocal stem is digital silence until the singer starts, and Whisper
+turned 18 s of it into one invented line over its whole window, losing the line sung at 19 s. Skipping a region's leading
+silence (`_regions.voice_start`) took songs from 497 words lost to 311, mean error 5.9 points lower, 7 songs better and
+2 worse by under half a point. One Russian song went from 47.6% to 8.7%. Adopted.
+
 Filters: raw Whisper against shown lines improves most clips (one Korean talk 142% → 25%), and costs 0.7 and
 1.2 points on two Chinese talks. Nothing to win there.
 

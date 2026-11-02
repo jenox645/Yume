@@ -60,6 +60,60 @@
 .subtitle-window[data-look="night"] .subtitle-english { color: #F08F9B !important; }
 .subtitle-window[data-look="night"] .subtitle-romaji { color: #A7B0C0 !important; }
 
+/* Right edge, top down: for burned-in text at the bottom, as Japanese subtitling does.
+   Its place is fixed, so a window dragged elsewhere comes back on the next style */
+.subtitle-window[data-look="vertical"] {
+  left: auto !important;
+  right: 24px !important;
+  top: 72px !important;
+  bottom: auto !important;
+  width: auto !important;
+  min-width: 0;
+  height: auto !important;
+  max-height: calc(100vh - 144px);
+}
+
+.subtitle-window[data-look="vertical"] .subtitle-content {
+  writing-mode: vertical-rl;
+  padding: 14px 12px;
+  min-height: 0;
+  max-height: calc(100vh - 144px);
+}
+
+.subtitle-window[data-look="vertical"] .subtitle-original,
+.subtitle-window[data-look="vertical"] .subtitle-english,
+.subtitle-window[data-look="vertical"] .subtitle-romaji {
+  text-align: start !important;
+  margin: 0 0 0 8px;
+}
+
+.subtitle-window[data-look="vertical"] .subtitle-header,
+.subtitle-window[data-look="vertical"] .resize-handle {
+  display: none;
+}
+
+/* Only with motion allowed: without its sweep, transparent text would never show */
+@media (prefers-reduced-motion: no-preference) {
+  .subtitle-window[data-look="karaoke"] .subtitle-original.line-sing {
+    width: fit-content;
+    margin-inline: auto;
+    color: transparent !important;
+    text-shadow: none;
+    background-image: linear-gradient(to right, #FFD25A 50%, #FFFFFF 50%);
+    background-size: 200% 100%;
+    background-position: 100% 0;
+    -webkit-background-clip: text;
+    background-clip: text;
+    animation: line-sing var(--sing-s) linear var(--sing-from) both;
+  }
+
+  .subtitle-window[data-look="karaoke"][data-paused="true"] .subtitle-original.line-sing {
+    animation-play-state: paused;
+  }
+}
+
+@keyframes line-sing { from { background-position: 100% 0; } to { background-position: 0 0; } }
+
 .subtitle-content.line-fade { animation: line-fade 0.16s ease-out; }
 .subtitle-content.line-ink { animation: line-ink 0.34s ease-out; }
 

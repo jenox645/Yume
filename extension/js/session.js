@@ -6,11 +6,12 @@
 // Whisper, translation, romanization, caching); this file only renders.
 //
 // Events dispatched on window (consumed by content.js → SubtitleWindow):
-//   display-subtitle {original, english, romaji, confidence}
+//   display-subtitle {original, english, romaji, confidence, timing}
+//   video-playing    {playing}
 //   display-status   {message, type}
 //   display-notice   {message}  — '' clears it
 //   display-error    {message}
-//   chunk-progress   {done, total, complete, lines, translated, status}
+//   chunk-progress   {done, total, complete, lines, translated, status, readyTo}
 //   prefetch-ready   — first visible line available
 //   pipeline-reset   — a new run started
 // ============================================================================
@@ -47,6 +48,8 @@ class SubtitleSession {
     this._unreachable = 0;  // consecutive polls that got no answer
 
     this._onTime = () => this._render();
+    this._onPlayState = () => window.dispatchEvent(
+      new CustomEvent('video-playing', { detail: { playing: !this.video?.paused } }));
     this._onStorage = (changes) => {
       if (changes.settings) {
         const s = changes.settings.newValue || {};
@@ -86,6 +89,8 @@ class SubtitleSession {
 
     video.addEventListener('timeupdate', this._onTime);
     video.addEventListener('seeked', this._onTime);
+    video.addEventListener('play', this._onPlayState);
+    video.addEventListener('pause', this._onPlayState);
     this._schedulePoll(0, gen);
     return true;
   }
@@ -111,6 +116,8 @@ class SubtitleSession {
     if (this.video) {
       this.video.removeEventListener('timeupdate', this._onTime);
       this.video.removeEventListener('seeked', this._onTime);
+      this.video.removeEventListener('play', this._onPlayState);
+      this.video.removeEventListener('pause', this._onPlayState);
     }
     chrome.storage.onChanged.removeListener(this._onStorage);
     // Not awaited: the server stops working on it, the page does not wait for that
@@ -310,7 +317,7 @@ class SubtitleSession {
     window.dispatchEvent(new CustomEvent('chunk-progress', {
       detail: {
         done: p.regions_done || 0, total: p.regions_total || 0, complete: status === 'done',
-        lines: p.lines || 0, translated: p.translated || 0, status,
+        lines: p.lines || 0, translated: p.translated || 0, status, readyTo: p.ready_to || 0,
       },
     }));
   }
@@ -361,12 +368,16 @@ class SubtitleSession {
     if (!this.video || !this.active) return;
     // + = later: a +1 s offset shows each line 1 s after Whisper's timestamp,
     // so the lookup happens 1 s back in the track
-    const show = this._cueToShow(this.video.currentTime - this.timingOffset);
+    const t = this.video.currentTime - this.timingOffset;
+    const show = this._cueToShow(t);
     if (!force && show === this.current) return;
     this.current = show;
     window.dispatchEvent(new CustomEvent('display-subtitle', {
       detail: show
-        ? { original: show.text, english: show.translation, romaji: show.romaji, confidence: show.confidence }
+        ? {
+          original: show.text, english: show.translation, romaji: show.romaji, confidence: show.confidence,
+          timing: { elapsed: Math.max(0, t - show.start), duration: show.end - show.start },
+        }
         : { original: '', english: '', romaji: '' },
     }));
   }

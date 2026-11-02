@@ -41,6 +41,21 @@ def test_tiny_tail_merged():
     assert regions[-1][1] - regions[-1][0] >= _regions.MIN_TAIL_S
 
 
+def test_whisper_starts_where_the_voice_does():
+    audio = np.zeros(SR * 20, dtype=np.float32)
+    audio[SR * 18 :] = 0.1
+    assert _regions.voice_start(audio) == pytest.approx(17.7)
+
+
+def test_a_silent_region_is_not_heard_at_all():
+    assert _regions.voice_start(np.zeros(SR * 20, dtype=np.float32)) is None
+
+
+def test_a_region_starting_with_a_voice_is_heard_whole():
+    assert _regions.voice_start(np.full(SR * 5, 0.1, dtype=np.float32)) == 0.0
+    assert _regions.voice_start(np.zeros(10, dtype=np.float32)) == 0.0  # too short to judge
+
+
 def test_region_index_at():
     regions = [(0.0, 30.0), (30.0, 55.0), (55.0, 80.0)]
     assert _regions.region_index_at(regions, 0) == 0

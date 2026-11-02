@@ -80,6 +80,7 @@ VARIANTS = {  # model, beam, what a song's Whisper hears
     "v3": ("large-v3", 5, "vocals"),
     "v3beam1": ("large-v3", 1, "vocals"),
     "mix": ("large-v3-turbo", 5, "mix"),
+    "trim": ("large-v3-turbo", 5, "trim"),
     "v3mix": ("large-v3", 5, "mix"),
 }
 
@@ -425,7 +426,11 @@ def _transcribe_clip(clip, what):
     t0 = time.time()
     for i, (start, end) in enumerate(regions):
         piece = audio[int(start * SR) : int(end * SR)]
-        raws.append(transcribe_audio(piece, clip["lang"], start, is_first_region=i == 0))
+        skip = _regions.voice_start(piece) if what == "trim" else 0.0
+        if skip is None:
+            raws.append([])
+            continue
+        raws.append(transcribe_audio(piece[int(skip * SR) :], clip["lang"], start + skip, is_first_region=i == 0))
     return {"regions": regions, "raw": raws, "seconds": round(time.time() - t0, 1), "audio_s": len(audio) / SR}
 
 

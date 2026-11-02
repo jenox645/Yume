@@ -42,6 +42,33 @@ def test_a_long_video_with_a_short_length_from_the_page_is_not_separated(pipelin
     assert job.model == _state.model_name and not job.isolate
 
 
+def test_a_mix_preview_does_not_stand_in_for_a_song_vocals(monkeypatch):
+    job = _job.Job(("v", "ja", "", "m"), {"language": "ja"})
+    job.isolate = True
+    job.show_preview([{"start": 1.0, "end": 2.0, "text": "from the mix", "confidence": -0.2}])
+    assert job.region_state == ["done"]
+    job.set_regions([(0.0, 30.0), (30.0, 60.0)], {})
+    assert job.region_state == ["pending", "pending"]
+    assert all(s["hidden"] for s in job.segments.values())  # dropped, not doubled by the vocals
+
+
+def test_a_talk_keeps_its_preview():
+    job = _job.Job(("v", "ja", "", "m"), {"language": "ja"})
+    job.show_preview([{"start": 1.0, "end": 2.0, "text": "a line", "confidence": -0.2}])
+    job.set_regions([(0.0, 30.0), (30.0, 60.0)], {})
+    assert job.region_state[0] == "done" and not all(s["hidden"] for s in job.segments.values())
+
+
+def test_the_progress_says_when_whisper_rests_and_how_far_is_ready():
+    job = _job.Job(("v", "ja", "", "m"), {"language": "ja"})
+    job.regions = [(0.0, 50.0), (50.0, 100.0), (100.0, 150.0)]
+    job.region_state = ["done", "done", "pending"]
+    assert job._progress()["ready_to"] == 0
+    job.resting = True
+    job.playhead = 23.0
+    assert job._progress()["ready_to"] == 100
+
+
 def test_songs_are_transcribed_from_the_separated_vocals(pipeline, monkeypatch):
     vocals = _tone_with_gaps(95) * 0.5  # recognisably not the mix
     heard = []
