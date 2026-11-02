@@ -462,7 +462,7 @@ def test_vocals_are_separated_after_the_preview_not_during_it(pipeline):
     threading.Timer(0.3, lambda: setattr(job, "preview_started", 0.0)).start()
     seen = []
     with patch.object(_separate, "read_stereo", side_effect=lambda _p: seen.append(job.preview_started)):
-        assert pipeline.jobs._isolate(job, "a.wav") is None
+        assert pipeline.jobs._isolate(job, "a.wav", 60) is None
     assert seen == [0.0]
 
 
@@ -476,7 +476,7 @@ def test_videos_filed_as_talk_are_not_separated(pipeline, category, separated):
         patch.object(_stream, "stream_category", return_value=category),
         patch.object(_separate, "read_stereo", return_value=None) as read,
     ):
-        assert pipeline.jobs._isolate(job, "a.wav") is None
+        assert pipeline.jobs._isolate(job, "a.wav", 60) is None
     assert read.called is separated
 
 

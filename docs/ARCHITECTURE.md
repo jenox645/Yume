@@ -107,6 +107,9 @@ session recreate its job, which reloads whatever is cached.
 ## Translation
 
 `_translate.Translator` calls `/v1/chat/completions` on the configured backend.
+Dedicated translation models (Hy-MT2, by model name) get one request per line, their
+own template and sampling, with the neighbouring lines as background. Everything below
+is the route for general models, and for any model with a custom prompt.
 Batches request **structured output**: `response_format` with a JSON schema of
 exactly N strings (llama.cpp, Ollama ≥ 0.5, LM Studio), which makes dropped or
 merged lines impossible. If the backend rejects `json_schema` it tries

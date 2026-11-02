@@ -55,6 +55,11 @@ _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 _QUOTES = (('"', '"'), ("“", "”"), ("「", "」"), ("『", "』"), ("'", "'"))
 
 BATCH_SIZE = 10
+# Translation models with prompts of their own: one user message, no system prompt. Line by
+# line, the neighbours as background: sent ten at a time they moved text between lines, and a
+# subtitle then says what the next one should (measured: tests/gold/RESULTS.md).
+_DEDICATED_RE = re.compile(r"hy-?mt", re.IGNORECASE)
+_DEDICATED_SAMPLING = {"temperature": 0.7, "top_p": 0.6, "top_k": 20, "repeat_penalty": 1.05}
 TIMEOUT_S = 120  # consumer GPUs can take >60 s before the first token of a batch
 
 
@@ -277,6 +282,17 @@ def _response_format(mode, key, n):
     return {"type": "json_object", "schema": schema}
 
 
+def _line_prompt(text, tgt, title, nearby):
+    """Hy-MT2's template for background information, its neighbours as background."""
+    title = re.sub(r"\s+", " ", title or "").strip()[:120]
+    background = "\n".join([f"Video title: {title}"] * bool(title) + nearby)
+    prompt = (
+        f"Please translate the following text into {tgt}, taking the provided background information "
+        f"into consideration. Translate only this text:\n\n[Source Text]\n{text}"
+    )
+    return f"[Background Information]\n{background}\n\n{prompt}" if background else prompt
+
+
 def _batch_message(texts, readings, context):
     """What changes per batch (see _translate_lines): the numbered lines and the context before them."""
     lines = "\n".join(
@@ -320,9 +336,12 @@ class Translator:
         s = self._settings()
         return s, f"http://{s['host']}:{s['port']}"  # noqa: S5332 — local LLM backend
 
-    def _chat(self, messages, max_tokens, response_format=None, temperature=0.1):
+    def _chat(self, messages, max_tokens, response_format=None, temperature=0.1, sampling=None):
         s, base = self._cfg()
         body = {"messages": messages, "max_tokens": max_tokens, "temperature": temperature, "stream": False}
+        body.update(sampling or {})
+        if s.get("backend") == "llamacpp":  # a thinking model spent every token before it answered: ""
+            body["chat_template_kwargs"] = {"enable_thinking": False}
         # llama-cpp-python serves exactly one model; every other backend REQUIRES
         # the model name (Ollama rejects requests without it).
         if s.get("backend") != "llamacpp" and s.get("model"):
@@ -479,7 +498,25 @@ class Translator:
                 result[i] = tr
         return result
 
+    def _dedicated(self):
+        s = self._settings()
+        return bool(_DEDICATED_RE.search(s.get("model") or "")) and not (s.get("prompt") or "").strip()
+
+    def _line_by_line(self, texts, src_lang, tgt, title, context):
+        """Each line alone: a line cannot slide into its neighbour's slot."""
+        lines = [a for a, _ in (context or [])[-2:]] + texts
+        first = len(lines) - len(texts)
+        out = []
+        for i, text in enumerate(texts, first):
+            nearby = lines[max(0, i - 2) : i] + lines[i + 1 : i + 3]
+            message = [{"role": "user", "content": _line_prompt(text, tgt, title, nearby)}]
+            reply = self._chat(message, 40 + len(text) * 3, sampling=_DEDICATED_SAMPLING)
+            out.append(self._checked(text, clean_translation(reply), "", src_lang, tgt))
+        return out
+
     def _translate_lines(self, texts, readings, src_lang, tgt, title, context):
+        if self._dedicated():
+            return self._line_by_line(texts, src_lang, tgt, title, context)
         n = len(texts)
         # The system prompt stays identical for a whole video, so llama.cpp reuses
         # its cached prefix (an uncached prompt costs ~9 s on a CPU-only build);

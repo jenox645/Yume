@@ -277,7 +277,7 @@ class JobManager:
         try:
             audio = _audio.load_audio(path)
             if job.isolate:
-                vocals = self._isolate(job, path)
+                vocals = self._isolate(job, path, len(audio) / SR)
                 if vocals is not None:
                     audio = vocals
                 else:  # transcripts of the mix are cached as the mix's
@@ -302,10 +302,12 @@ class JobManager:
             job.set_regions(regions, cached)
             self._adopt_preview(job)
 
-    def _isolate(self, job, path):
+    def _isolate(self, job, path, seconds):
         """The song's vocals (16 kHz mono), or None to transcribe the mix."""
         self._wait_for_preview(job)
-        if _stream.stream_category(job.url) in _separate.SPOKEN_CATEGORIES:
+        # The length the page gave can be the last video's: mid-change, a 14-minute talk
+        # was separated for 43 s because the page still said 4 minutes
+        if seconds > _separate.MAX_S or _stream.stream_category(job.url) in _separate.SPOKEN_CATEGORIES:
             with job.lock:
                 job.isolate = False
             return None

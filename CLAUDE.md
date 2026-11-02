@@ -49,6 +49,8 @@ npm run e2e                    # the real extension in a browser against the rea
 
 `node tests/e2e/stress.mjs <out-dir> <lang> <ids...>` is the stress test with everything real (GPU, YouTube audio, LLM): changing videos, skipping, changing languages and models mid-play, blacklist, restarts. It checks that no line or translation bleeds between videos or languages. Back up `config/` first: it edits the config and clears the blacklist.
 
+`python tests/gold/gold.py find|fetch|run <variants>|score` scores Whisper settings against captions and lyrics written by people (GPU, data outside git in `tests/gold/data/`). Anything that changes subtitle text is decided here first; `tests/gold/RESULTS.md` holds what was measured. `tests/gold/mt.py` does the same for translators.
+
 `npm run e2e` uses Edge on Windows (Playwright's Chromium may fail there with "side-by-side configuration is incorrect"), Chromium elsewhere; `BROWSER=chromium|msedge|chrome` picks one, `HEADED=1` shows it. It needs Python with the server's packages (faster-whisper not required).
 
 ### Running
@@ -78,7 +80,7 @@ See `docs/ARCHITECTURE.md`. In short:
 3. `_jobs.JobManager`: cache check (cached lines show at once) → full download (+ a preview of the 30 s at the playhead, read from a second ordinary download through a pipe: `yt-dlp -o - | ffmpeg`; never byte ranges or seeks in the stream URL) → optional vocal isolation (`_separate`, Demucs on CUDA, songs ≤ 10 min) → `_regions.plan_regions` (exclusive ~25 s regions cut at quiet points; no overlap) → one transcription worker (forward from the playhead, resting at 80 s ready until 40 s are left; a job the viewer left gets none) → hallucination filter/blacklist (`hidden` flag; raw text kept) → deterministic romanization → one LLM worker (batches of ≤10 lines).
 4. Every segment change bumps the job `rev`; polls return only changed segments. 404 on poll → the session recreates its job (reloads from cache).
 
-**Translation:** `_translate.Translator` uses structured output (JSON schema with exactly N strings), falling back to `json_object`, then numbered lines; the working mode is remembered per endpoint. The model name is sent for every backend except llama.cpp. One single-line retry for missing lines / CJK leaks.
+**Translation:** `_translate.Translator` uses structured output (JSON schema with exactly N strings), falling back to `json_object`, then numbered lines; the working mode is remembered per endpoint. The model name is sent for every backend except llama.cpp. One single-line retry for missing lines / CJK leaks. Dedicated translation models (Hy-MT2, recognised by the configured model name) go line by line with their own template and sampling, neighbours as background; a custom prompt keeps the JSON route.
 
 **Cache:** `config/yume_cache.db` (SQLite, `_store.py`): videos + region plans, raw transcripts per (video, language, Whisper model — `+htdemucs` when separated, region), translations per (source, target, LLM model, text), LLM romanizations.
 

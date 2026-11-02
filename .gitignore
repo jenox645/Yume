@@ -94,3 +94,6 @@ Yume Showcase.mp4
 dev/
 # ── Yume: yt-dlp self-update timestamp ──
 tools/.yt-dlp-update-check
+
+# ── Gold set: fetched audio and other people's text ──
+tests/gold/data/

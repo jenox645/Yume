@@ -26,6 +26,22 @@ import _translate  # noqa: E402
 from pipeline_fakes import PARAMS, _raw, _run, _tone_with_gaps  # noqa: E402
 
 
+def test_a_long_video_with_a_short_length_from_the_page_is_not_separated(pipeline, monkeypatch):
+    separated = []  # noted, not raised: a failed separation falls back to the mix without a word
+    separate = lambda stereo: separated.append(stereo) or np.zeros(16000, np.float32)  # noqa: E731
+
+    monkeypatch.setattr(_separate, "wanted", lambda duration: True)  # the page said it is short
+    monkeypatch.setattr(_separate, "read_stereo", lambda path: np.zeros((2, 10), np.float32))
+    monkeypatch.setattr(_separate, "isolate", separate)
+    monkeypatch.setattr(_separate, "MAX_S", 1)  # the download is longer
+    with patch.object(_stream, "stream_category", return_value="Music"):
+        job = pipeline.jobs.create({**PARAMS, "video_id": "stale-length", "duration": 30})
+        assert job.isolate
+        snap = _run(pipeline.jobs, job)
+    assert snap["status"] == "done" and not separated
+    assert job.model == _state.model_name and not job.isolate
+
+
 def test_songs_are_transcribed_from_the_separated_vocals(pipeline, monkeypatch):
     vocals = _tone_with_gaps(95) * 0.5  # recognisably not the mix
     heard = []
