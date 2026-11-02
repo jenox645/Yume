@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from yume.constants import BASE_DIR, IS_WIN, backend_info
-from yume.hardware import detect_gpu, recommend_whisper_model
+from yume.constants import BASE_DIR, backend_info
+from yume.hardware import CUDA_ONLY_COMPUTE, detect_gpu, recommend_whisper_model
 from yume.ui import (
     C,
     ask_arrow,
@@ -40,18 +40,15 @@ def _device_labels(cfg: dict) -> tuple[str, str]:
     gpu = detect_gpu()
     device = cfg["whisper_device"]
     if device == "auto":
-        if gpu["has_nvidia"]:
-            device = f"{C.GREEN}cuda{C.RESET} (auto)"
-        elif gpu.get("has_amd") and not IS_WIN:
-            device = f"{C.RED}cuda{C.RESET} (auto, ROCm)"
-        else:
-            device = "cpu (auto)"
+        device = f"{C.GREEN}cuda{C.RESET} (auto)" if gpu["has_nvidia"] else "cpu (auto)"
     compute = cfg["whisper_compute_type"]
     if compute == "auto":
         if "cuda" not in device:
             compute = "int8 (auto)"
         else:
             compute = f"{'float16' if gpu.get('vram_mb', 0) >= 8000 else 'int8_float16'} (auto)"
+    elif device.startswith("cpu") and compute in CUDA_ONLY_COMPUTE:
+        compute = f"int8 ({compute} needs CUDA)"
     return device, compute
 
 
@@ -189,7 +186,7 @@ def _set_whisper(cfg: dict) -> None:
             "whisper_device",
             "Where should Whisper run?",
             [
-                ("auto", "Auto-detect", "Uses GPU if available, falls back to CPU"),
+                ("auto", "Auto-detect", "Uses an NVIDIA GPU if there is one, otherwise the CPU"),
                 ("cuda", "GPU (NVIDIA CUDA)", "Fastest — requires an NVIDIA graphics card"),
                 ("cpu", "CPU", "Works on any computer, but slower"),
             ],

@@ -103,7 +103,7 @@ def _make_test_audio(path: Path) -> bool:
 
 def _fits(gpu: dict, req_mb: int) -> bool:
     """Whether a model needing `req_mb` should run here (GPU memory, or ≤ 5 GB on CPU)."""
-    if gpu.get("has_nvidia") or gpu.get("has_amd"):
+    if gpu.get("has_nvidia"):
         vram = gpu.get("vram_mb", 0)
         return not (vram > 0 and req_mb > vram)
     return req_mb <= 5120
@@ -129,7 +129,10 @@ def _choose_models(cfg: dict, gpu: dict, rec: str) -> list[str]:
     info("Select models to benchmark:")
     info("  'distil' models are distilled on English only — they cannot transcribe JA/ZH/KO/RU/AR")
     info("  'turbo' = optimized large-v3 (near-full accuracy at much higher speed)")
-    info("  VRAM = your GPU's video memory — models marked [fits] will work on your hardware")
+    if gpu.get("has_nvidia"):
+        info("  VRAM = your GPU's video memory — models marked [fits] will work on your hardware")
+    else:
+        info("  Whisper runs on the CPU here — models marked [fits] are small enough for it")
     print()
     for i, ((name, _params, vr, desc), (_n, fits)) in enumerate(zip(WHISPER_MODELS_INFO, models)):
         tag = f"{C.GREEN}fits{C.RESET}" if fits else f"{C.RED}may OOM{C.RESET}"
@@ -147,13 +150,8 @@ def _choose_models(cfg: dict, gpu: dict, rec: str) -> list[str]:
 
 def _device_and_precision(gpu: dict) -> tuple[str, str]:
     if gpu.get("has_nvidia"):
-        device = "cuda"
-    elif gpu.get("has_amd") and not IS_WIN:
-        device = "auto"
-        info("AMD GPU detected — benchmarking via ROCm/auto")
-    else:
-        return "cpu", "int8"
-    return device, whisper_compute_type(gpu.get("vram_mb", 0))
+        return "cuda", whisper_compute_type(gpu.get("vram_mb", 0))
+    return "cpu", "int8"
 
 
 def _time_model(model_name: str, device: str, compute: str, test_wav: Path, where: str = "") -> dict:
@@ -321,7 +319,7 @@ def benchmark_whisper(cfg: dict) -> None:
     if gpu["has_nvidia"]:
         info(f"GPU: {gpu['name']} ({gpu['vram_mb']} MB VRAM)")
     elif gpu.get("has_amd"):
-        info(f"GPU: {gpu['name']} ({gpu.get('vram_mb', '?')} MB VRAM, ROCm)")
+        info(f"GPU: {gpu['name']} — Whisper can't use AMD GPUs, benchmarking in CPU mode")
     else:
         info("No GPU detected — benchmarking in CPU mode")
     rec, reason = recommend_whisper_model(gpu)

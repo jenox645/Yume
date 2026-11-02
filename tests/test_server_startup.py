@@ -362,6 +362,76 @@ class TestWriteTokenFile(unittest.TestCase):
                 _state.TOKEN_FILE = orig_token_file
 
 
+class TestCpuFallback(unittest.TestCase):
+    """CUDA that cannot run must not stop Whisper: the CPU takes over."""
+
+    NO_DEVICE = "CUDA failed with error no CUDA-capable device is detected"
+
+    def setUp(self):
+        self._orig = (_state.model, _state.load_error, _state.device, _state.compute_type)
+        _state.model, _state.load_error = None, ""
+        _state.device, _state.compute_type = "cuda", "float16"
+
+    def tearDown(self):
+        _state.model, _state.load_error, _state.device, _state.compute_type = self._orig
+
+    def _load(self, whisper):
+        with (
+            patch.object(_model, "WhisperModel", side_effect=whisper),
+            patch.object(_model, "set_low_priority"),
+            patch("builtins.print"),
+        ):
+            _model.load_model(MagicMock(prewarm=False, port=5001))
+
+    @staticmethod
+    def _cuda_fails(message):
+        def whisper(name, device, compute_type):
+            if device == "cuda":
+                raise RuntimeError(message)
+            return MagicMock(device=device, compute_type=compute_type)
+
+        return whisper
+
+    def test_cuda_that_cannot_run_falls_back_to_the_cpu(self):
+        for raw in (
+            self.NO_DEVICE,
+            "CUDA failed with error CUDA driver version is insufficient for CUDA runtime version",
+            "This CTranslate2 package was not compiled with CUDA support",
+        ):
+            _state.model, _state.device, _state.compute_type = None, "cuda", "float16"
+            self._load(self._cuda_fails(raw))
+            self.assertEqual((_state.device, _state.compute_type, _state.load_error), ("cpu", "int8", ""), raw)
+            self.assertEqual((_state.model.device, _state.model.compute_type), ("cpu", "int8"), raw)
+
+    def test_out_of_memory_is_no_reason_to_leave_the_gpu(self):
+        for raw in ("CUDA failed with error out of memory", "CUDA out of memory"):
+            _state.load_error = ""
+            self._load(self._cuda_fails(raw))
+            self.assertEqual(_state.device, "cuda")
+            self.assertIn("smaller model", _state.load_error)
+
+    def test_a_cpu_that_fails_too_publishes_both_reasons(self):
+        def whisper(name, device, compute_type):
+            raise RuntimeError(self.NO_DEVICE if device == "cuda" else "No module named 'ctranslate2'")
+
+        self._load(whisper)
+        self.assertIsNone(_state.model)
+        self.assertIn(self.NO_DEVICE, _state.load_error)
+        self.assertIn("No module named", _state.load_error)
+        self.assertIn("pocket_yume.py setup", _state.load_error)
+
+    def test_a_warm_up_without_cublas_falls_back_to_the_cpu(self):
+        def whisper(name, device, compute_type):
+            model = MagicMock(device=device)
+            if device == "cuda":
+                model.transcribe.side_effect = RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+            return model
+
+        self._load(whisper)
+        self.assertEqual((_state.device, _state.compute_type, _state.load_error), ("cpu", "int8", ""))
+        self.assertEqual(_state.model.device, "cpu")
+
+
 class TestModelLoadFailure(unittest.TestCase):
     """A failed model load must be visible, not an endless 'loading'."""
 

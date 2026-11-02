@@ -152,12 +152,15 @@ SUBMENUS = ["_set_whisper", "_menu_backend", "_set_addrs", "_menu_translation_pr
 BACK = 10
 
 
+SETTINGS_CFG = {
+    "whisper_model": "small", "whisper_device": "auto", "whisper_compute_type": "auto",
+    "whisper_host": "127.0.0.1", "whisper_port": 5001, "translation_host": "127.0.0.1",
+    "translation_port": 5000, "youtube_auth_method": "cookies", "translation_backend": "ollama",
+}  # fmt: skip
+
+
 def settings(choices, cfg=None, *, inputs=(), yns=(), backups=(), gpu=None, imported=None):
-    cfg = cfg or {
-        "whisper_model": "small", "whisper_device": "auto", "whisper_compute_type": "auto",
-        "whisper_host": "127.0.0.1", "whisper_port": 5001, "translation_host": "127.0.0.1",
-        "translation_port": 5000, "youtube_auth_method": "cookies", "translation_backend": "ollama",
-    }  # fmt: skip
+    cfg = cfg or dict(SETTINGS_CFG)
     rows: list = []
     calls = {name: MagicMock() for name in SUBMENUS}
     fakes = {
@@ -203,6 +206,13 @@ def test_auto_device_and_precision_are_resolved_for_display():
     rows = settings([BACK], gpu={"has_nvidia": False}).rows[0]
     assert rows[1][1] == "cpu (auto) / int8 (auto)"
     assert rows[8][1] == "cookies (chrome)"
+
+
+def test_amd_shows_the_cpu_and_the_precision_that_really_runs():
+    amd = {"has_nvidia": False, "has_amd": True, "vram_mb": 8192}
+    assert settings([BACK], gpu=amd).rows[0][1][1] == "cpu (auto) / int8 (auto)"
+    cfg = {**SETTINGS_CFG, "whisper_compute_type": "float16"}
+    assert settings([BACK], cfg, gpu=amd).rows[0][1][1] == "cpu (auto) / int8 (float16 needs CUDA)"
 
 
 def test_export_and_import_from_a_listed_backup():

@@ -1,6 +1,7 @@
 """The Whisper model: loading at startup (in a background thread, with a CUDA
-warm-up that falls back to the CPU when cuBLAS/cuDNN are missing), loading
-another one for a hot swap, and advice when loading fails.
+warm-up, falling back to the CPU when CUDA cannot run: no device, a broken
+driver, cuBLAS/cuDNN missing), loading another one for a hot swap, and advice
+when loading fails.
 """
 
 import os
@@ -32,51 +33,87 @@ def set_low_priority():
         pass
 
 
+def _silence():
+    import numpy as np
+
+    return np.zeros(16000, dtype=np.float32)
+
+
+def _fall_back_to_cpu(reason, fix):
+    """Load the model on the CPU after CUDA failed. False (load_error set) when that fails too."""
+    print("")
+    print(f"  WARNING: {reason}.")
+    print("  Falling back to CPU mode automatically.")
+    print(f"  {fix}")
+    print(f"  The CPU is slower: a smaller model such as 'small' keeps up better ({_WHISPER_SETTINGS}).")
+    print("")
+    try:
+        # Assign, never `del`: other threads read _state.model concurrently
+        _state.model = None
+        _state.device = "cpu"
+        _state.compute_type = "int8"
+        _state.model = WhisperModel(_state.model_name, device="cpu", compute_type="int8")
+        list(_state.model.transcribe(_silence(), language="en"))
+        print("  CPU fallback:     done")
+        return True
+    except Exception as cpu_err:
+        print(f"  CPU fallback:     failed too: {cpu_err}")
+        _state.model = None
+        _state.load_error = with_advice(f"{reason} and CPU fallback failed: {cpu_err}")
+        return False
+
+
+def _cuda_unusable(message):
+    """CUDA itself cannot run (no device, a broken driver), so the CPU can take over.
+    Out of memory is about this model and keeps its own advice."""
+    low = message.lower()
+    return "out of memory" not in low and any(words in low for words in _NO_CUDA)
+
+
+def _open_model():
+    """Load the model on the configured device, or on the CPU when CUDA cannot run.
+    False (load_error set) when nothing loaded."""
+    try:
+        _state.model = WhisperModel(_state.model_name, device=_state.device, compute_type=_state.compute_type)
+        return True
+    except Exception as e:
+        if _state.device != "cuda" or not _cuda_unusable(str(e)):
+            raise
+        return _fall_back_to_cpu(
+            f"CUDA cannot run ({e})", "With an NVIDIA GPU, update its driver. AMD GPUs can't run Whisper."
+        )
+
+
+def _prewarm(args):
+    """False (load_error set) when a warm-up found CUDA broken and the CPU failed too."""
+    # On CUDA a 1 s warm-up is cheap and is the only way to find out NOW that
+    # cuBLAS/cuDNN are missing (the model itself loads fine without them).
+    if not (args.prewarm or _state.device == "cuda"):
+        print("  Prewarm:          skipped (use --prewarm to enable)")
+        return True
+    try:
+        list(_state.model.transcribe(_silence(), language="en"))
+        print("  Prewarm:          done (CUDA kernels compiled)")
+        return True
+    except Exception as pw_err:
+        pw_msg = str(pw_err)
+        cuda_lib_missing = any(
+            lib in pw_msg.lower()
+            for lib in ["cublas", "cudnn", "cudart", "cufft", "cusolver", "is not found or cannot be loaded"]
+        )
+        if not (cuda_lib_missing and _state.device == "cuda"):
+            print(f"  Prewarm:          skipped ({pw_err})")
+            return True
+        print(f"  Prewarm:          CUDA library missing: {pw_msg[:80]}")
+        return _fall_back_to_cpu("CUDA libraries missing", "Inference needs cuBLAS/cuDNN: install the CUDA Toolkit.")
+
+
 def load_model(args):
     """Load the Whisper model; handle errors with actionable messages."""
     set_low_priority()
     try:
-        _state.model = WhisperModel(_state.model_name, device=_state.device, compute_type=_state.compute_type)
-
-        # On CUDA a 1 s warm-up is cheap and is the only way to find out NOW that
-        # cuBLAS/cuDNN are missing (the model itself loads fine without them).
-        if not (args.prewarm or _state.device == "cuda"):
-            print("  Prewarm:          skipped (use --prewarm to enable)")
-        else:
-            import numpy as np
-
-            _dummy = np.zeros(16000, dtype=np.float32)
-            try:
-                list(_state.model.transcribe(_dummy, language="en"))
-                print("  Prewarm:          done (CUDA kernels compiled)")
-            except Exception as pw_err:
-                pw_msg = str(pw_err)
-                cuda_lib_missing = any(
-                    lib in pw_msg.lower()
-                    for lib in ["cublas", "cudnn", "cudart", "cufft", "cusolver", "is not found or cannot be loaded"]
-                )
-                if cuda_lib_missing and _state.device == "cuda":
-                    print(f"  Prewarm:          CUDA library missing: {pw_msg[:80]}")
-                    print("")
-                    print("  WARNING: CUDA libraries are incomplete.")
-                    print("  The model loaded but inference requires cuBLAS/cuDNN.")
-                    print("  Falling back to CPU mode automatically.")
-                    print("")
-                    try:
-                        # Assign, never `del`: other threads read _state.model concurrently
-                        _state.model = None
-                        _state.device = "cpu"
-                        _state.compute_type = "int8"
-                        _state.model = WhisperModel(_state.model_name, device="cpu", compute_type="int8")
-                        list(_state.model.transcribe(_dummy, language="en"))
-                        print("  Prewarm:          done (CPU fallback)")
-                    except Exception as cpu_err:
-                        print(f"  Prewarm:          CPU fallback also failed: {cpu_err}")
-                        _state.model = None
-                        _state.load_error = f"CUDA libraries missing and CPU fallback failed: {cpu_err}"
-                        return
-                else:
-                    print(f"  Prewarm:          skipped ({pw_err})")
+        if not (_open_model() and _prewarm(args)):
+            return
 
         print("=" * 70)
         print("  MODEL LOADED -- Server ready")
@@ -93,10 +130,15 @@ def load_model(args):
         _state.load_error = with_advice(str(e) or type(e).__name__)
 
 
+# What CTranslate2 says when CUDA cannot run at all
+_NO_CUDA = ("cuda failed with error", "not compiled with cuda support")
 _WHISPER_SETTINGS = "python pocket_yume.py settings → Whisper settings"
 # (any of these in the error, what to do): one line, shown in the overlay and the launcher
 _ADVICE = [
-    (("out of memory", "oom"), f"Not enough GPU memory: pick a smaller model or the CPU ({_WHISPER_SETTINGS})."),
+    (
+        ("out of memory", "oom"),
+        f"Not enough memory: pick a smaller model, or the CPU if the GPU ran out ({_WHISPER_SETTINGS}).",
+    ),
     (
         ("cublas", "cudnn", "cudart"),
         f"CUDA libraries are missing: install the CUDA Toolkit, or pick the CPU ({_WHISPER_SETTINGS}).",

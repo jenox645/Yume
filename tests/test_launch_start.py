@@ -269,7 +269,7 @@ def test_describe_engine_on_a_machine_without_llama_cpp(said, monkeypatch):
     assert has(said, "CPU-only build")
 
 
-def test_amd_on_windows_runs_on_the_cpu(said, monkeypatch):
+def test_amd_on_windows_translates_on_the_cpu_without_llama_server(said, monkeypatch):
     monkeypatch.setattr(launch, "detect_gpu", lambda: AMD)
     monkeypatch.setattr(launch, "IS_WIN", True)
     launch._describe_engine(native=False)

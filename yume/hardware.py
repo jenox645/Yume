@@ -219,6 +219,11 @@ def disk_free_gb(p=None) -> float:
         return 0.0
 
 
+# Whisper runs on CUDA or the CPU: ctranslate2 has no AMD backend. On the CPU
+# these two precisions raise ValueError instead of loading.
+CUDA_ONLY_COMPUTE = ("float16", "int8_float16")
+
+
 def whisper_compute_type(vram_mb: int) -> str:
     """Whisper precision that fits in the GPU's memory."""
     if vram_mb >= 8000:
@@ -231,16 +236,16 @@ def recommend_whisper_model(gpu_info: dict | None = None) -> tuple[str, str]:
     if gpu_info is None:
         gpu_info = detect_gpu()
     vram = gpu_info.get("vram_mb", 0)
-    has_gpu = gpu_info.get("has_nvidia") or gpu_info.get("has_amd")
     ram = detect_ram_gb()
 
-    if not has_gpu:
+    if not gpu_info.get("has_nvidia"):
+        cpu = "CPU (Whisper can't use AMD GPUs)" if gpu_info.get("has_amd") else "CPU"
         if ram >= 16:
-            return "small", "CPU with 16+ GB RAM → small model (best CPU balance)"
+            return "small", f"{cpu} with 16+ GB RAM → small model (best CPU balance)"
         elif ram >= 8:
-            return "base", "CPU with 8-16 GB RAM → base model"
+            return "base", f"{cpu} with 8-16 GB RAM → base model"
         else:
-            return "tiny", "CPU with <8 GB RAM → tiny model (fastest)"
+            return "tiny", f"{cpu} with <8 GB RAM → tiny model (fastest)"
     else:
         if vram >= 5000:
             # Even with VRAM for large-v3: on two Japanese songs measured against

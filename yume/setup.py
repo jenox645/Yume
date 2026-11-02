@@ -25,7 +25,14 @@ from yume.constants import (
     DEFAULT_OLLAMA_MODEL,
     use_backend,
 )
-from yume.hardware import detect_gpu, detect_ram_gb, disk_free_gb, recommend_whisper_model, whisper_compute_type
+from yume.hardware import (
+    CUDA_ONLY_COMPUTE,
+    detect_gpu,
+    detect_ram_gb,
+    disk_free_gb,
+    recommend_whisper_model,
+    whisper_compute_type,
+)
 from yume.network import check_server
 from yume.ui import C, ask_arrow, ask_yn, center, error, header, info, pause, section, success, warn
 from yume.utils import _run, _try_import, find_gguf_models, find_tool
@@ -183,11 +190,14 @@ def _warn_new_python() -> None:
         print()
 
 
-def _show_hardware(gpu: dict, rocm: bool, ram: float, disk: float) -> None:
+def _show_hardware(gpu: dict, ram: float, disk: float) -> None:
     if gpu["has_nvidia"]:
         success(f"GPU:  {gpu['name']} ({gpu['vram_mb']} MB)")
-    elif rocm:
-        success(f"GPU:  {gpu['name']} ({gpu.get('vram_mb', '?')} MB, ROCm)")
+    elif gpu.get("has_amd"):
+        vram = f" ({gpu['vram_mb']} MB)" if gpu.get("vram_mb") else ""
+        success(f"GPU:  {gpu['name']}{vram} -- for the translator")
+        info(f"{C.DIM}Whisper can't use AMD GPUs, so it runs on the CPU. A smaller model such as small{C.RESET}")
+        info(f"{C.DIM}is the realistic choice. Vocal isolation needs an NVIDIA GPU.{C.RESET}")
     else:
         warn(f"GPU:  {gpu['name'] or 'None'} -- CPU mode")
         info(f"{C.DIM}No compatible GPU found. Yume will use your CPU for transcription.{C.RESET}")
@@ -211,17 +221,15 @@ def _pick_whisper_model(cfg: dict, gpu: dict, rerun: bool = False) -> None:
         cfg["whisper_model"] = rec_model
 
 
-def _pick_whisper_device(cfg: dict, gpu: dict, rocm: bool, rerun: bool = False) -> None:
-    # A saved GPU device stays only while that GPU is still there
-    if rerun and (cfg.get("whisper_device") != "cuda" or gpu["has_nvidia"]):
+def _pick_whisper_device(cfg: dict, gpu: dict, rerun: bool = False) -> None:
+    # A saved choice stays while it can run: without NVIDIA that rules out the
+    # GPU device and the GPU precisions, which is what older setups saved on AMD
+    cuda_only = cfg.get("whisper_device") == "cuda" or cfg.get("whisper_compute_type") in CUDA_ONLY_COMPUTE
+    if rerun and (gpu["has_nvidia"] or not cuda_only):
         return
     if gpu["has_nvidia"]:
         cfg["whisper_device"] = "cuda"
         cfg["whisper_compute_type"] = whisper_compute_type(gpu["vram_mb"])
-    elif rocm:
-        cfg["whisper_device"] = "auto"
-        cfg["whisper_compute_type"] = whisper_compute_type(gpu.get("vram_mb", 0))
-        info(f"AMD GPU detected — ROCm (Linux), compute: {cfg['whisper_compute_type']}")
     else:
         cfg["whisper_device"] = "cpu"
         cfg["whisper_compute_type"] = "int8"
@@ -237,10 +245,9 @@ def _scan_hardware(cfg: dict, rerun: bool = False) -> dict:
     ram = detect_ram_gb()
     disk = disk_free_gb()
     _warn_new_python()
-    rocm = bool(gpu.get("has_amd")) and not IS_WIN
-    _show_hardware(gpu, rocm, ram, disk)
+    _show_hardware(gpu, ram, disk)
     _pick_whisper_model(cfg, gpu, rerun)
-    _pick_whisper_device(cfg, gpu, rocm, rerun)
+    _pick_whisper_device(cfg, gpu, rerun)
     return gpu
 
 

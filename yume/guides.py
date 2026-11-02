@@ -107,6 +107,9 @@ def _guide_models(cfg: dict) -> None:
     rec_model, rec_reason = recommend_whisper_model(gpu)
     if gpu["has_nvidia"]:
         info(f"Your GPU: {C.GREEN}{gpu['name']}{C.RESET} ({gpu['vram_mb']} MB VRAM)")
+    elif gpu.get("has_amd"):
+        info(f"Your GPU: {C.GREEN}{gpu['name']}{C.RESET} — it runs the translator.")
+        info(f"Whisper can't use AMD GPUs: {C.YELLOW}CPU mode{C.RESET} — prefer the smaller models below.")
     else:
         info(f"Your hardware: {C.YELLOW}CPU mode{C.RESET} — prefer the smaller models below.")
     info(f"Recommended Whisper model: {C.BOLD}{rec_model}{C.RESET}  {C.DIM}({rec_reason}){C.RESET}")
@@ -114,7 +117,9 @@ def _guide_models(cfg: dict) -> None:
     section("Whisper (speech → text) — accuracy vs. VRAM")
     bullet(f"tiny / base      ~1 GB   {C.DIM}fastest, weakest — okay for clear speech{C.RESET}")
     bullet(f"small            ~1.5 GB {C.DIM}decent for podcasts and vlogs{C.RESET}")
-    bullet(f"large-v3-turbo   ~3 GB   {C.DIM}best on any GPU: as accurate as large-v3 on songs, 2x faster{C.RESET}")
+    bullet(
+        f"large-v3-turbo   ~3 GB   {C.DIM}best on any NVIDIA GPU: as accurate as large-v3 on songs, 2x faster{C.RESET}"
+    )
     bullet(f"large-v3         ~4.5 GB {C.DIM}slower, and no more accurate in Yume's tests{C.RESET}")
     info(f"{C.DIM}Avoid distil-* models: they are English-only and can't transcribe JA/ZH/KO/RU/AR.{C.RESET}")
     info(f"{C.DIM}Switch any time: Settings → Whisper settings, or live from the runtime menu.{C.RESET}")
@@ -130,7 +135,7 @@ def _guide_models(cfg: dict) -> None:
     info(f"{C.DIM}Rule of thumb: pick the biggest model that fits your VRAM with ~1 GB spare,{C.RESET}")
     info(f"{C.DIM}and prefer Q4_K_M quantization. Download: Tools & Fonts → Download Translation Model.{C.RESET}")
     print()
-    info(f"{C.DIM}Note: Whisper and the translation model share the GPU — their VRAM adds up.{C.RESET}")
+    info(f"{C.DIM}Note: on NVIDIA, Whisper and the translation model share the GPU — their VRAM adds up.{C.RESET}")
     pause()
 
 

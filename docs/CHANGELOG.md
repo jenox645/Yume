@@ -1,5 +1,10 @@
 # Changelog
 
+### Unreleased
+
+- **Whisper on AMD:** CTranslate2 has no AMD backend, yet Yume sent AMD cards on Linux to CUDA and saved a GPU precision that the CPU refuses too, so Whisper did not start. Whisper now runs on the CPU with `int8` on every OS, the recommended model follows the CPU, a saved GPU precision is ignored and running setup again repairs it. The translator still uses the AMD GPU.
+- **CUDA that cannot run no longer stops Whisper:** with no device or a broken driver the server falls back to the CPU and says why. The settings menu shows the precision that really runs, and picking the CPU with a GPU precision saved no longer stops Whisper either.
+
 ### v0.2.0
 
 - **New look:** the popup is one window with tabs (Watch, Look, Models, More) that never scrolls past the browser's limit, in a light and a dark theme, with a brushed 夢 that draws itself while Yume wakes up. Six subtitle styles and three ways for a line to appear. The terminal is plain aligned rows, with Auto start in its main menu and progress bars while Yume starts.

@@ -98,8 +98,8 @@ class TestWhisperCommand:
         [
             (NVIDIA, True, ("cuda", "float16")),
             (SMALL_NVIDIA, True, ("cuda", "int8_float16")),
-            (AMD, False, ("cuda", "float16")),
-            (AMD, True, ("cpu", "int8")),  # ROCm is Linux only
+            (AMD, False, ("cpu", "int8")),  # ctranslate2 has no AMD backend
+            (AMD, True, ("cpu", "int8")),
             (CPU, False, ("cpu", "int8")),
         ],
     )
@@ -108,10 +108,30 @@ class TestWhisperCommand:
         monkeypatch.setattr(servers, "IS_WIN", win)
         assert servers.resolve_whisper_device(CFG) == expected
 
+    @pytest.mark.parametrize("win", [True, False])
+    @pytest.mark.parametrize("compute", ["float16", "int8_float16"])
+    def test_what_the_old_amd_setup_saved_starts_on_the_cpu(self, monkeypatch, tmp_path, compute, win):
+        # Device "auto" with a GPU precision: cuda found no device, and the CPU
+        # refuses both precisions with a ValueError
+        monkeypatch.setattr(servers, "detect_gpu", lambda: AMD)
+        monkeypatch.setattr(servers, "IS_WIN", win)
+        (tmp_path / "faster_whisper_server.py").write_text("")
+        monkeypatch.setattr(servers, "SERVER_DIR", tmp_path)
+        cmd = servers.whisper_command({**CFG, "whisper_compute_type": compute})
+        assert cmd[cmd.index("--device") + 1] == "cpu" and cmd[cmd.index("--compute-type") + 1] == "int8"
+
+    @pytest.mark.parametrize("compute", ["float16", "int8_float16"])
+    def test_choosing_the_cpu_drops_a_precision_it_cannot_run(self, monkeypatch, compute):
+        monkeypatch.setattr(servers, "detect_gpu", lambda: NVIDIA)
+        cfg = {**CFG, "whisper_device": "cpu", "whisper_compute_type": compute}
+        assert servers.resolve_whisper_device(cfg) == ("cpu", "int8")
+
     def test_an_explicit_choice_is_kept(self, monkeypatch):
         monkeypatch.setattr(servers, "detect_gpu", lambda: NVIDIA)
         cfg = {**CFG, "whisper_device": "cpu", "whisper_compute_type": "float32"}
         assert servers.resolve_whisper_device(cfg) == ("cpu", "float32")
+        cfg = {**CFG, "whisper_compute_type": "int8_float16"}
+        assert servers.resolve_whisper_device(cfg) == ("cuda", "int8_float16")
 
     def test_command_passes_the_config_only_when_it_exists(self, tmp_path, monkeypatch):
         import config

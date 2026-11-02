@@ -14,6 +14,7 @@ import yume.benchmark as bench  # noqa: E402
 
 NVIDIA_12GB = {"has_nvidia": True, "has_amd": False, "vram_mb": 12288, "name": "RTX 3060", "vendor": "nvidia"}
 NVIDIA_6GB = {**NVIDIA_12GB, "vram_mb": 6144}
+AMD_16GB = {"has_nvidia": False, "has_amd": True, "vram_mb": 16368, "name": "RX 6800", "vendor": "amd"}
 NO_GPU = {"has_nvidia": False, "has_amd": False, "vram_mb": 0, "name": None, "vendor": "none"}
 
 
@@ -70,6 +71,11 @@ class Run:
             stack.enter_context(patch("config.save_config", self.saved))
             bench.benchmark_whisper(cfg)
         return self
+
+
+def test_amd_is_benchmarked_on_the_cpu():
+    assert bench._device_and_precision(AMD_16GB) == ("cpu", "int8")
+    assert bench._fits(AMD_16GB, 6144) == bench._fits(NO_GPU, 6144) is False  # AMD VRAM does not count
 
 
 def test_recommended_model_runs_on_cuda_and_can_be_adopted(tmp_path):

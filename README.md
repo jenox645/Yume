@@ -119,7 +119,7 @@ Each model keeps its own saved transcripts, so a video is heard again after a sw
 | Hy-MT2-1.8B Q4_K_M | 1.1 GB | Small cards, quieter fans | About as good as Qwen2.5-7B, 2.5× faster |
 | Qwen2.5-7B | About 4 GB | Custom prompts | The older default |
 
-Both models share your GPU's memory, so check that the pair fits. The comparisons are in [tests/gold/RESULTS.md](tests/gold/RESULTS.md). They rest partly on one person's blind reading, and French on only 4 clips.
+On NVIDIA both models share the GPU's memory, so check that the pair fits. The comparisons are in [tests/gold/RESULTS.md](tests/gold/RESULTS.md). They rest partly on one person's blind reading, and French on only 4 clips.
 
 ## What you need
 
@@ -130,7 +130,7 @@ Both models share your GPU's memory, so check that the pair fits. The comparison
 | **Disk** | 5 GB | 15 GB, plus 3.5 GB for vocal isolation |
 | **Python** | 3.10 | 3.11 or newer |
 
-NVIDIA is the best supported. AMD works on Linux, and everything else runs on the CPU. We test on Windows; macOS and Linux get less testing.
+NVIDIA is the best supported. On an AMD card, the translator uses the GPU through Vulkan on Windows and Linux, but Whisper runs on the CPU, so a smaller model such as `small` is the realistic choice there. Vocal isolation is NVIDIA only. Everything else runs on the CPU. We test on Windows; macOS and Linux get less testing.
 
 ## What it can't do
 
@@ -159,6 +159,7 @@ python pocket_yume.py health
 | No translation | Check the translator with `python pocket_yume.py health` |
 | Port already in use | `python pocket_yume.py ports` |
 | Too slow | A smaller model helps: `python pocket_yume.py recommend` suggests one for your card |
+| Chrome, Brave or Edge warns "'background.scripts' requires manifest version of 2 or lower" | Harmless, nothing to fix. Firefox needs that key and Chromium ignores it, so it stays on purpose (`test_single_cross_browser_manifest` in `tests/test_integration.py` keeps it) |
 
 ## How it works
 
