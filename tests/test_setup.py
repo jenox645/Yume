@@ -99,6 +99,7 @@ class Wizard:
             "_offer_one_click": self.finished,
             "_offer_vocal_isolation": MagicMock(),
             "_extension_guide": MagicMock(),
+            "_missing_for_amd": lambda gpu: [],  # tests/test_whispercpp.py covers the offer
         }
         installers = {
             "install_ytdlp": "yt-dlp",
@@ -153,7 +154,6 @@ def test_amd_leaves_the_device_to_what_is_installed_on_every_os(win):
         patch.object(setup, "IS_WIN", win),
         patch("yume.hardware.detect_ram_gb", return_value=32.0),
         patch("yume.whisper_cpp.server_path", return_value=None),
-        patch("yume.whisper_cpp.available", return_value=False),
     ):
         cfg = Wizard(AMD_8GB).run({})
     assert (cfg["whisper_device"], cfg["whisper_compute_type"]) == ("auto", "auto")
