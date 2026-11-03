@@ -6,9 +6,10 @@ it leaves behind and the installers it ran — no network, GPU or real tools.
 
 from __future__ import annotations
 
+import io
 import sys
 from pathlib import Path
-from contextlib import ExitStack
+from contextlib import ExitStack, redirect_stdout
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -264,13 +265,10 @@ def test_pulling_an_ollama_model_starts_ollama_when_it_is_down():
 
 def _present(gpu, arrows, model="small"):
     cfg = {"whisper_model": model}
-    with (
-        patch.object(setup, "ask_arrow", side_effect=arrows),
-        patch.object(setup, "info") as said,
-        patch.object(setup, "section"),
-    ):
+    out = io.StringIO()
+    with patch.object(setup, "ask_arrow", side_effect=arrows), redirect_stdout(out):
         taken = setup._present_models(cfg, gpu)
-    return taken, cfg, " ".join(str(c.args[0]) for c in said.call_args_list)
+    return taken, cfg, out.getvalue()
 
 
 @pytest.mark.parametrize(
@@ -300,6 +298,11 @@ def test_choosing_myself_lists_every_whisper_model_with_the_recommended_one_mark
     assert taken is False and cfg["whisper_model"] == "base"
     labels = [o[0] for o in asked[1]]
     assert len(labels) == len(setup.WHISPER_MODELS) and "small  ★ recommended" in labels
+
+
+def test_choosing_myself_with_a_custom_whisper_model_still_offers_the_list():
+    taken, cfg, _said = _present(NVIDIA_6GB, [1, 0], model="D:/models/mine")
+    assert taken is False and cfg["whisper_model"] == "tiny"
 
 
 def test_the_recommended_translator_is_downloaded_with_its_pin(tmp_path):
@@ -354,6 +357,26 @@ def test_every_recommended_translator_is_one_the_browser_lists():
     from yume.menus.hf_browser import _HF_RECOMMENDED_REPOS
 
     assert {t["repo"] for t in setup.TRANSLATORS.values()} <= {r for r, _d in _HF_RECOMMENDED_REPOS}
+
+
+def test_a_coloured_cell_keeps_the_columns(capsys):
+    setup._row("Whisper", "[1msmall[0m", "ready")
+    setup._row("Translation model", "plain", "ready")
+    lines = [ln.replace("[1m", "").replace("[0m", "") for ln in capsys.readouterr().out.splitlines()]
+    assert lines[0].index("ready") == lines[1].index("ready")
+
+
+@pytest.mark.parametrize(("complete", "ending"), [(True, "Ready."), (False, "Almost ready.")])
+def test_setup_says_ready_only_when_nothing_is_missing(capsys, complete, ending):
+    with (
+        patch.object(setup, "_offer_one_click"),
+        patch.object(setup, "_offer_vocal_isolation"),
+        patch.object(setup, "_extension_guide"),
+        patch.object(setup, "pause"),
+    ):
+        setup._closing_offers(complete)
+    out = capsys.readouterr().out
+    assert ending in out and ("Ready." in out) is complete
 
 
 def test_other_backends_need_no_engine_or_gguf():

@@ -41,7 +41,7 @@ from yume.hardware import (
     whisper_compute_type,
 )
 from yume.network import check_server
-from yume.ui import C, ask_arrow, ask_yn, center, error, header, info, pause, section, success, warn
+from yume.ui import C, _width, ask_arrow, ask_yn, error, header, info, pause, section, success, warn
 from yume.utils import _run, _try_import, find_gguf_models, find_tool
 
 _log = logging.getLogger("pocket_yume")
@@ -54,9 +54,19 @@ _TOTAL_STEPS = 5
 
 
 def _step(n: int, name: str) -> None:
-    """Print a step indicator: Step N/5: Name."""
-    info(f"\n{C.GOLD}Step {n}/{_TOTAL_STEPS}: {C.BOLD}{name}{C.RESET}")
-    print()
+    """A step's title, numbered like the menus: 2/5  What's missing."""
+    print(f"\n  {C.GOLD}{n}/{_TOTAL_STEPS}{C.RESET}  {C.BOLD}{name}{C.RESET}\n")
+
+
+def _row(name: str, what: str = "", state: str = "", tone: str = "") -> None:
+    """One aligned line, as in the status screen: what it is, what it is for, its state.
+    Padded by what shows on screen, so a coloured cell keeps the columns."""
+    gap = " " * max(1, 36 - _width(what))
+    print(f"  {name:<19}{what}{gap}{tone}{state}{C.RESET}".rstrip())
+
+
+def _ready(name: str, what: str, ok: bool, missing: str = "missing") -> None:
+    _row(name, what, "ready" if ok else missing, C.GREEN if ok else C.YELLOW)
 
 
 def _install_with_retry(label: str, install_fn, manual_hint: str = "") -> bool:
@@ -110,46 +120,51 @@ def _extension_guide() -> None:
     models, but subtitles only appear once the extension is loaded in the
     browser — and nothing else in the first-run path explains how.
     """
-
+    section("The browser extension")
+    info(f"{C.DIM}This is where the subtitles appear. One minute in your browser:{C.RESET}")
     print()
-    section("Browser Extension  (required — this is where subtitles appear)")
-    info("One minute in your browser and you're done:")
-    print()
-    print(f"    1. Open {C.CYAN}chrome://extensions{C.RESET} in Chrome, Edge or Brave")
-    print(f"       {C.DIM}(type it into the address bar and press Enter){C.RESET}")
-    print(f"    2. Turn ON {C.BOLD}Developer mode{C.RESET}  {C.DIM}(toggle in the top-right corner){C.RESET}")
-    print(f"    3. Click {C.BOLD}Load unpacked{C.RESET} and select this folder:")
-    print(f"       {C.BOLD}{EXT_DIR}{C.RESET}")
-    print(f"    4. Open any video, click the Yume icon in the toolbar, press {C.BOLD}Enable{C.RESET}")
-    print(f"       {C.DIM}(with one-click start on, Yume starts by itself — otherwise launch it here first){C.RESET}")
+    steps = (
+        f"Open {C.CYAN}chrome://extensions{C.RESET} in Chrome, Edge or Brave",
+        f"Turn on {C.BOLD}Developer mode{C.RESET}, top right",
+        f"Click {C.BOLD}Load unpacked{C.RESET} and pick this folder:",
+        "Pin the Yume icon",
+    )
+    for n, step in enumerate(steps, 1):
+        info(f"{C.GOLD}{n}{C.RESET}  {step}")
+        if n == 3:
+            info(f"   {C.BOLD}{EXT_DIR}{C.RESET}")
     print()
     info(
-        f"{C.DIM}Firefox (121+): about:debugging -> This Firefox -> Load Temporary Add-on"
-        f" -> select extension/manifest.json (the same manifest works in both browsers){C.RESET}"
+        f"{C.DIM}Firefox: about:debugging, This Firefox, Load Temporary Add-on, then extension/manifest.json.{C.RESET}"
     )
     print()
-    if ask_yn("Open the extension folder now (so it's ready to select in step 3)?", True):
+    if ask_yn("Open the extension folder now, ready for step 3?", True):
         if not _open_folder(EXT_DIR):
-            info(f"Could not open it automatically — the folder is: {EXT_DIR}")
+            info(f"Could not open it: the folder is {EXT_DIR}")
 
 
 def _offer_one_click() -> None:
     """Offer to let the extension start Yume by itself (native messaging)."""
     from yume import native_host
 
+    section("Auto start")
+    info(f"{C.DIM}Pressing Turn subtitles on in the browser starts Yume by itself, with no terminal,{C.RESET}")
+    info(f"{C.DIM}and it stops after 30 minutes without a video.{C.RESET}")
     print()
-    section("One-click start")
-    info("Yume can start by itself when you press Enable in the extension —")
-    info("no need to open this launcher first. It stops on its own when you stop watching.")
     if native_host.registered_browsers():
-        success("Already on.")
+        _ready("Auto start", "", True)
         return
-    if ask_yn("Turn on one-click start?", True):
+    if ask_yn("Turn on auto start?", True):
         try:
             done = native_host.register()
-            success(f"On for: {', '.join(done) or 'no browser found'}")
+            _row(
+                "Auto start",
+                ", ".join(done) or "no browser found",
+                "on" if done else "off",
+                C.GREEN if done else C.YELLOW,
+            )
         except Exception as e:
-            warn(f"Could not turn it on ({e}) — try again later in Settings → One-click start.")
+            warn(f"Could not turn it on ({e}). Try again from Auto start in the main menu.")
 
 
 def _offer_vocal_isolation() -> None:
@@ -158,10 +173,10 @@ def _offer_vocal_isolation() -> None:
 
     if not detect_gpu().get("has_nvidia") or vocals.status()[0]:
         return
+    section("Vocal isolation, optional")
+    info(f"{C.DIM}Separates the singer from the music before Whisper listens: fewer mistakes on songs.{C.RESET}")
+    info(f"{C.DIM}About {vocals.DOWNLOAD_GB:.0f} GB to download (PyTorch).{C.RESET}")
     print()
-    section("Vocal isolation (optional)")
-    info("Separates the singer from the music before Whisper listens: fewer")
-    info(f"transcription errors on songs. ~{vocals.DOWNLOAD_GB:.0f} GB download (PyTorch with CUDA).")
     if ask_yn("Install vocal isolation?", True):
         vocals.install()
 
@@ -169,63 +184,60 @@ def _offer_vocal_isolation() -> None:
 _MISSING_LABELS = {
     "yt-dlp": "yt-dlp",
     "ffmpeg": "FFmpeg",
-    "python_deps": "faster-whisper",
-    "llama_server": "translation engine (llama.cpp)",
-    "whisper_cpp": "whisper.cpp, for your AMD GPU",
-    "gguf_model": "GGUF translation model",
+    "python_deps": "Whisper",
+    "llama_server": "the translator",
+    "whisper_cpp": "whisper.cpp",
+    "gguf_model": "a translation model",
 }
 
 
 def _welcome() -> None:
+    # Also reached via "Re-run Setup", so not "First-Time"
+    header("Setup")
+    info("Yume needs a few tools and two AI models. Setup looks at this PC, installs")
+    info("what is missing and picks the models. Most of the time goes to downloads.")
+    info(f"{C.DIM}Running it again later only adds what is missing.{C.RESET}")
+
+
+def _python_row() -> None:
     import platform
 
-    # Also reached via "Re-run Setup", so not "First-Time"
-    header("Setup Wizard")
-    print(center(f"{C.BOLD}Welcome to Pocket Yume!{C.RESET}"))
-    print(center(f"{C.DIM}Let's get Yume AI subtitles ready on your machine.{C.RESET}"))
-    print(center(f"{C.DIM}Platform: {platform.system()} ({platform.machine().lower()}){C.RESET}"))
-    print()
-    info(f"{C.DIM}Note: First startup downloads the Whisper model (~1-3 GB) — subsequent launches are fast.{C.RESET}")
-    print()
-
-
-def _warn_new_python() -> None:
+    version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    where = f"{version} on {platform.system()}"
     if sys.version_info >= (3, 13):
-        warn(
-            f"Python {sys.version_info.major}.{sys.version_info.minor} detected — some packages may need to build from source."
-        )
-        info("This requires C++ build tools. If installs fail, use Python 3.11 or 3.12.")
-        print()
+        _row("Python", where, "new: if an install fails, use 3.12", C.YELLOW)
+    else:
+        _row("Python", where)
 
 
 def _show_hardware(gpu: dict, ram: float, disk: float) -> None:
+    name = (gpu.get("name") or "").replace("NVIDIA GeForce ", "")
+    card = f"{name}, {gpu['vram_mb'] / 1024:.0f} GB" if gpu.get("vram_mb") else name
     if gpu["has_nvidia"]:
-        success(f"GPU:  {gpu['name']} ({gpu['vram_mb']} MB)")
+        _row("Graphics", card, "Whisper and the translator run on it", C.GREEN)
     elif gpu.get("has_amd"):
-        vram = f" ({gpu['vram_mb']} MB)" if gpu.get("vram_mb") else ""
-        success(f"GPU:  {gpu['name']}{vram} -- for the translator")
-        info(f"{C.DIM}Whisper can't use AMD GPUs, so it runs on the CPU. A smaller model such as small{C.RESET}")
-        info(f"{C.DIM}is the realistic choice. Vocal isolation needs an NVIDIA GPU.{C.RESET}")
+        _row("Graphics", card, "both models run on it, through Vulkan", C.GREEN)
     else:
-        warn(f"GPU:  {gpu['name'] or 'None'} -- CPU mode")
-        info(f"{C.DIM}No compatible GPU found. Yume will use your CPU for transcription.{C.RESET}")
-        info(f"{C.DIM}This works fine but is slower. NVIDIA GPUs with 4+ GB VRAM give best performance.{C.RESET}")
-    success(f"RAM:  {ram:.1f} GB")
-    (success if disk >= 10 else warn)(f"Disk: {disk:.1f} GB free" + ("" if disk >= 10 else " -- need ~8 GB"))
+        _row("Graphics", "no supported card", "the processor does the work, more slowly", C.YELLOW)
+    _row("Memory", f"{ram:.0f} GB")
+    if disk >= 10:
+        _row("Disk", f"{disk:.0f} GB free", "enough", C.GREEN)
+    else:
+        _row("Disk", f"{disk:.0f} GB free", "Yume needs about 8 GB", C.YELLOW)
+    _python_row()
 
 
 def _pick_whisper_model(cfg: dict, gpu: dict, rerun: bool = False) -> None:
     existing_model = cfg.get("whisper_model", "")
-    rec_model, rec_reason = recommend_whisper_model(gpu)
+    rec_model, _reason = recommend_whisper_model(gpu)
     if existing_model and (os.path.sep in existing_model or "/" in existing_model):
         info(f"Custom Whisper model preserved: {C.BOLD}{Path(existing_model).name}{C.RESET}")
         info(f"{C.DIM}{existing_model}{C.RESET}")
     elif rerun and existing_model:
-        info(f"Whisper model kept: {C.BOLD}{existing_model}{C.RESET}")
+        _row("Whisper model", existing_model, "kept", C.DIM)
         if existing_model != rec_model:
-            info(f"{C.DIM}Recommended here: {rec_reason} Change it in Settings.{C.RESET}")
-    else:
-        info(f"Recommendation: {rec_reason}")
+            info(f"{C.DIM}Recommended here: {rec_model}. Change it in Settings.{C.RESET}")
+    else:  # a first setup: the models screen shows it
         cfg["whisper_model"] = rec_model
 
 
@@ -253,13 +265,10 @@ def _pick_whisper_device(cfg: dict, gpu: dict, rerun: bool = False) -> None:
 def _scan_hardware(cfg: dict, rerun: bool = False) -> dict:
     """Step 1: show GPU, RAM and disk; pick the Whisper model, device and precision,
     or keep the ones chosen before when Setup runs again."""
-    _step(1, "Detecting Hardware")
-    info(f"{C.DIM}Scanning GPU, RAM, and disk to recommend the best settings...{C.RESET}")
-    print()
+    _step(1, "This PC")
     gpu = detect_gpu()
     ram = detect_ram_gb()
     disk = disk_free_gb()
-    _warn_new_python()
     _show_hardware(gpu, ram, disk)
     _pick_whisper_model(cfg, gpu, rerun)
     _pick_whisper_device(cfg, gpu, rerun)
@@ -271,7 +280,7 @@ def _translation_engine_ok(gpu: dict) -> bool:
     from yume import llama_server
 
     if llama_server.server_path():
-        success(f"Translation engine: {llama_server.build_label()}")
+        _ready("Translator", "runs the translation model", True)
         return True
     # llama.cpp's prebuilt server is the engine Yume installs. An existing
     # llama-cpp-python is kept only when it already runs on the GPU (or
@@ -279,12 +288,12 @@ def _translation_engine_ok(gpu: dict) -> bool:
     # source build needs the CUDA Toolkit and a C++ compiler.
     on_gpu = llama_server.python_engine_on_gpu()
     if on_gpu is None or not _try_import("uvicorn") or not _try_import("fastapi"):
-        warn("Translation engine: missing")
+        _ready("Translator", "runs the translation model", False)
         return False
     if on_gpu or not (gpu.get("has_nvidia") or gpu.get("has_amd")):
-        success("Translation engine: llama-cpp-python")
+        _ready("Translator", "llama-cpp-python", True)
         return True
-    warn("Translation engine: llama-cpp-python runs on the CPU only — slow")
+    _row("Translator", "llama-cpp-python", "on the processor only: slow", C.YELLOW)
     return False
 
 
@@ -294,24 +303,24 @@ def _check_components(cfg: dict, gpu: dict) -> tuple[list[str], bool]:
     Returns the missing components (keys of _MISSING_LABELS) and whether a
     translation model or a running backend is already there.
     """
-    _step(2, "Component Check")
-    info(f"{C.DIM}Checking which tools and packages are already installed...{C.RESET}")
-    print()
+    _step(2, "What's missing")
     missing = _missing_tools()
     missing += _missing_for_amd(gpu)
     gf = find_gguf_models()
-    if cfg.get("translation_backend", "llamacpp") != "llamacpp":
+    bk = cfg.get("translation_backend", "llamacpp")
+    if bk != "llamacpp":
         # Ollama / LM Studio / custom manage their own models
-        info(f"Translation engine: not needed ({cfg.get('translation_backend')} backend)")
+        address = f"{cfg.get('translation_host', '127.0.0.1')}:{cfg.get('translation_port', '')}"
+        where = f"{BACKEND_INFO.get(bk, {}).get('name', bk)} at {address}"
+        _row("Translator", where, "yours to run", C.DIM)
     else:
         missing += _missing_for_llamacpp(cfg, gpu, gf)
 
-    print()
     detected = False
     for k, bi in BACKEND_INFO.items():
         if k != "custom" and check_server(bi["dh"], bi["dp"], bi["hp"])["up"]:
             detected = True
-            success(f"Detected: {bi['name']} on port {bi['dp']}")
+            _row(bi["name"], f"running on port {bi['dp']}", "found", C.GREEN)
     return missing, detected or bool(gf)
 
 
@@ -321,41 +330,29 @@ def _missing_for_amd(gpu: dict) -> list[str]:
 
     if not gpu.get("has_amd") or not whisper_cpp.available():
         return []
-    if whisper_cpp.server_path():
-        success("Whisper on the GPU: whisper.cpp (Vulkan)")
-        return []
-    warn("Whisper on the GPU: whisper.cpp missing, Whisper would run on the CPU")
-    return ["whisper_cpp"]
+    ready = whisper_cpp.server_path() is not None
+    _ready("whisper.cpp", "Whisper on your AMD card", ready, "missing: Whisper would use the CPU")
+    return [] if ready else ["whisper_cpp"]
 
 
 def _missing_tools() -> list[str]:
     """Report yt-dlp, FFmpeg, Deno and faster-whisper; return what is missing."""
-    missing = []
-    yt = find_tool("yt-dlp")
-    ff = find_tool("ffmpeg")
-    dn = find_tool("deno")
-    (success if yt else warn)(f"yt-dlp: {'installed — ' + yt if yt else 'missing'}")
-    (success if ff else warn)(f"FFmpeg: {'installed — ' + ff if ff else 'missing'}")
-    info(f"Deno:   {'installed — ' + dn if dn else 'not installed (optional)'}")
-    missing += [] if yt else ["yt-dlp"]
-    missing += [] if ff else ["ffmpeg"]
-    try:
-        import faster_whisper  # noqa: F401
-
-        success("faster-whisper: installed")
-    except ImportError:
-        warn("faster-whisper: missing")
-        missing.append("python_deps")
-    return missing
+    yt, ff, dn = find_tool("yt-dlp"), find_tool("ffmpeg"), find_tool("deno")
+    _ready("yt-dlp", "downloads the audio", bool(yt))
+    _ready("FFmpeg", "reads the audio", bool(ff))
+    _row("Deno", "optional, for YouTube", "ready" if dn else "not installed", C.GREEN if dn else C.DIM)
+    whisper = _try_import("faster_whisper")
+    _ready("Whisper", "hears the video", whisper)
+    return [k for k, ok in (("yt-dlp", yt), ("ffmpeg", ff), ("python_deps", whisper)) if not ok]
 
 
 def _missing_for_llamacpp(cfg: dict, gpu: dict, gf: list) -> list[str]:
     """Report llama.cpp and the GGUF models; pick a model if none is set."""
     missing = [] if _translation_engine_ok(gpu) else ["llama_server"]
     if not gf:
-        warn("No GGUF translation model found")
+        _ready("Translation model", "", False)
         return [*missing, "gguf_model"]
-    success(f"GGUF models: {len(gf)} found")
+    _row("Translation model", f"{len(gf)} in models/translation", "ready", C.GREEN)
     # Keep the user's choice on a re-run; only fill in a missing/stale path
     if not cfg.get("gguf_model_path") or not Path(cfg["gguf_model_path"]).exists():
         cfg["gguf_model_path"] = str(gf[0])
@@ -367,23 +364,15 @@ def _choose_youtube_auth(cfg: dict) -> None:
     """Step 3: browser cookies or Deno, so YouTube lets yt-dlp download."""
     from yume.installers import install_deno
 
-    _step(3, "YouTube Authentication")
-    info("YouTube blocks automated downloads to prevent bots.")
-    info("Yume needs a way to prove you're a real person.")
-    info(f"\n{C.DIM}Browser Cookies is the easiest — just be logged into YouTube in your browser.{C.RESET}")
-    print()
+    _step(3, "YouTube")
+    info("YouTube refuses downloads that look like a robot's. Yume can show it is you")
+    info("with your browser's YouTube login, or run a small helper instead.")
     ch = ask_arrow(
-        "How do you want to authenticate with YouTube?",
+        "How should Yume download from YouTube?",
         [
-            (
-                "Browser Cookies (recommended)",
-                "Uses your browser's YouTube login. Be logged into YouTube in your browser.",
-            ),
-            (
-                "Deno (no account needed)",
-                "Downloads Deno (~35 MB) + sets up a local server that solves YouTube's bot challenge.",
-            ),
-            ("Skip for now", "You can set this up later in Settings."),
+            ("Use my browser's login (recommended)", "Stay logged into YouTube in that browser"),
+            ("Use the Deno helper", "No account needed, about 35 MB"),
+            ("Not now", "Set it up later in Settings"),
         ],
         default=0,
         allow_back=False,
@@ -391,8 +380,7 @@ def _choose_youtube_auth(cfg: dict) -> None:
     if ch == 0:
         cfg["youtube_auth_method"] = "cookies"
         browsers = ["chrome", "firefox", "edge", "brave", "safari"]
-        print()
-        info("This only affects audio downloading — the extension itself works in any browser.")
+        info(f"{C.DIM}Only for downloading: the extension works in any browser.{C.RESET}")
         bc = ask_arrow(
             "Which browser are you logged into YouTube with?",
             [(b.capitalize(), None) for b in browsers],
@@ -400,7 +388,7 @@ def _choose_youtube_auth(cfg: dict) -> None:
             allow_back=False,
         )
         cfg["cookies_browser"] = browsers[bc]
-        success(f"Using cookies from: {browsers[bc]}")
+        _row("YouTube", f"your {browsers[bc].capitalize()} login", "ready", C.GREEN)
     elif ch == 1:
         hint = f"Download Deno manually: {C.CYAN}https://deno.land{C.RESET}"
         if _install_with_retry("Deno", install_deno, hint):
@@ -465,7 +453,7 @@ def _install_missing(cfg: dict, missing: list[str], ask_each: bool) -> None:
             f"Unzip the build from {C.CYAN}{whisper_cpp.RELEASE_PAGE}{C.RESET} into {whisper_cpp.WHISPER_DIR}",
         ),
     }
-    _step(4, "Installing Components")
+    _step(4, "Installing")
     for key, (question, label, install_fn, hint) in installs.items():
         if key in missing and (not ask_each or ask_yn(question)):
             _install_with_retry(label, install_fn, hint)
@@ -494,11 +482,11 @@ def _present_models(cfg: dict, gpu: dict) -> bool:
     pick = TRANSLATORS[translator]
     whisper_mb = WHISPER_DOWNLOAD_MB.get(whisper, 0)
     section("Your models")
-    info("Yume uses two AI models: one hears the video, one translates what it hears.")
+    info(f"{C.DIM}Two AI models do the work: one hears the video, one translates what it hears.{C.RESET}")
     print()
     hears = next((desc for name, _p, _v, desc, _mb in WHISPER_MODELS if name == whisper), "")
-    info(f"  Hears        {C.BOLD}{whisper:16}{C.RESET} {C.DIM}{hears}{C.RESET}")
-    info(f"  Translates   {C.BOLD}{translator:16}{C.RESET} {C.DIM}{why}{C.RESET}")
+    _row("Hears", f"{C.BOLD}{whisper:<20}{C.RESET}", hears, C.DIM)
+    _row("Translates", f"{C.BOLD}{translator:<20}{C.RESET}", why, C.DIM)
     print()
     info(f"About {(whisper_mb + pick['mb']) / 1024:.1f} GB to download. You can change either later, in Settings.")
     ch = ask_arrow(
@@ -517,7 +505,12 @@ def _present_models(cfg: dict, gpu: dict) -> bool:
         for name, _p, _v, desc, mb in WHISPER_MODELS
     ]
     names = [m[0] for m in WHISPER_MODELS]
-    chosen = ask_arrow("Which model should hear the video?", options, default=names.index(whisper), allow_back=False)
+    chosen = ask_arrow(
+        "Which model should hear the video?",
+        options,
+        default=names.index(whisper) if whisper in names else 0,
+        allow_back=False,
+    )
     if 0 <= chosen < len(names):
         cfg["whisper_model"] = names[chosen]
     return False
@@ -531,7 +524,7 @@ def _download_translator(cfg: dict, key: str) -> bool:
         return False
     cfg["gguf_model_path"] = str(GGUF_DIR / pick["file"])
     cfg["translation_model"] = pick["file"]
-    success(f"Translator ready: {key}")
+    _row("Translation model", key, "ready", C.GREEN)
     return True
 
 
@@ -550,7 +543,7 @@ def _fetch_whisper(cfg: dict) -> None:
     info(f"Downloading the Whisper model {name} (about {WHISPER_DOWNLOAD_MB[name]} MB)...")
     try:
         download_model(name)
-        success(f"Whisper model ready: {name}")
+        _row("Whisper model", name, "ready", C.GREEN)
     except Exception as e:
         warn(f"The Whisper model will download when Yume first starts instead ({e}).")
 
@@ -565,21 +558,19 @@ def _choose_translation_model(cfg: dict, needs_model: bool, recommended: bool = 
     if not needs_model:
         gf = find_gguf_models()
         gf_name = gf[0].name if gf else cfg.get("translation_model", "configured")
-        success(f"Translation model already configured: {C.BOLD}{gf_name}{C.RESET}")
+        _row("Translation model", Path(cfg.get("gguf_model_path") or gf_name).name, "ready", C.GREEN)
         return
     if recommended and cfg.get("translation_backend", "llamacpp") == "llamacpp":
         if _download_translator(cfg, recommend_translator(detect_gpu())[0]):
             return
         warn("The download did not finish. Pick a translator below, or try again later from Settings.")
-    info("Yume needs a GGUF model file to translate subtitles into English.")
-    info(f"{C.DIM}llama.cpp loads it directly — no external servers required.{C.RESET}")
-    print()
+    info("Pick the model that translates the subtitles. It runs on this PC.")
     ch = ask_arrow(
         "How to get a model?",
         [
-            ("Download from HuggingFace", "Browse model repos and pick a quantization"),
-            ("Use Ollama instead", "One-click install with built-in model management"),
-            ("Skip", "I'll add a .gguf file to models/translation/ later"),
+            ("Pick from a list", "Models chosen for Yume, with their sizes"),
+            ("Use Ollama instead", "If Ollama already runs here"),
+            ("Not now", "Add a .gguf file to models/translation/ later"),
         ],
         default=0,
         allow_back=False,
@@ -590,38 +581,36 @@ def _choose_translation_model(cfg: dict, needs_model: bool, recommended: bool = 
         _use_ollama(cfg)
 
 
-def _print_summary(cfg: dict) -> None:
-    """What is installed now, per component the chosen backend needs."""
+def _print_summary(cfg: dict) -> bool:
+    """What is installed now, per component the chosen backend needs. True when nothing is missing."""
     from yume import llama_server
 
-    print()
-    section("Installation Summary")
+    section("Installed")
     bk = cfg.get("translation_backend", "llamacpp")
     checks = [
-        ("yt-dlp", find_tool("yt-dlp") is not None),
-        ("ffmpeg", find_tool("ffmpeg") is not None),
-        ("faster-whisper", _try_import("faster_whisper")),
+        ("yt-dlp", "downloads the audio", find_tool("yt-dlp") is not None),
+        ("FFmpeg", "reads the audio", find_tool("ffmpeg") is not None),
+        ("Whisper", cfg.get("whisper_model", ""), _try_import("faster_whisper")),
     ]
     if bk == "llamacpp":
-        checks.append(("Translation engine", llama_server.server_path() is not None or _try_import("llama_cpp")))
-        checks.append(("GGUF model", len(find_gguf_models()) > 0))
+        engine = llama_server.server_path() is not None or _try_import("llama_cpp")
+        checks.append(("Translator", "runs the translation model", engine))
+        model = Path(cfg.get("gguf_model_path") or "").name
+        checks.append(("Translation model", model, len(find_gguf_models()) > 0))
     elif bk == "ollama":
-        checks.append(
-            ("Ollama", check_server("127.0.0.1", cfg.get("translation_port", 11434), HEALTH_PATH_OLLAMA)["up"])
-        )
-    for name, ok in checks:
-        if ok:
-            success(f"{name}")
-        else:
-            error(f"{name} — not installed")
-
+        up = check_server("127.0.0.1", cfg.get("translation_port", 11434), HEALTH_PATH_OLLAMA)["up"]
+        checks.append(("Ollama", cfg.get("translation_model", ""), up))
     print()
-    if all(ok for _, ok in checks):
-        success(f"{C.BOLD}Setup complete! All components installed.{C.RESET}")
+    for name, what, ok in checks:
+        _ready(name, what, ok)
+    missing = [name for name, _what, ok in checks if not ok]
+    print()
+    if not missing:
+        info(f"{C.BOLD}Everything is installed.{C.RESET}")
     else:
-        warn("Setup finished with missing components.")
-        info("Run 'python pocket_yume.py health' to see details.")
-        info("Missing components can be installed from the Tools menu.")
+        warn(f"Still missing: {', '.join(missing)}.")
+        info(f"{C.DIM}python pocket_yume.py health shows why; Tools in the main menu installs them.{C.RESET}")
+    return not missing
 
 
 def _mark_complete(cfg: dict) -> None:
@@ -631,11 +620,16 @@ def _mark_complete(cfg: dict) -> None:
     save_config(cfg)
 
 
-def _closing_offers() -> None:
-    """One-click start, vocal isolation and the extension guide, then wait."""
+def _closing_offers(complete: bool = True) -> None:
+    """Auto start, vocal isolation and the extension guide, then what to do next."""
     _offer_one_click()
     _offer_vocal_isolation()
     _extension_guide()
+    if complete:
+        print(f"\n  {C.BOLD}Ready.{C.RESET} Open a video, click the Yume icon and press Turn subtitles on.")
+        info(f"{C.DIM}The first start takes about 30 seconds while the models load.{C.RESET}")
+    else:
+        print(f"\n  {C.BOLD}Almost ready.{C.RESET} Install what is missing first: Tools, in the main menu.")
     pause()
 
 
@@ -650,25 +644,23 @@ def setup_wizard(cfg: dict, rerun: bool = False) -> dict:
     missing, ready = _check_components(cfg, gpu)
 
     if not missing and ready:
-        success(f"\n  {C.BOLD}Everything ready!{C.RESET}")
+        print(f"\n  {C.BOLD}Nothing to install.{C.RESET}")
         _mark_complete(cfg)
         _closing_offers()
         return cfg
 
     if missing:
         labels = ", ".join(_MISSING_LABELS.get(m, m) for m in missing)
-        print(f"\n  Needs installation: {C.BOLD}{labels}{C.RESET}")
-        pause()
         _choose_youtube_auth(cfg)
         save_config(cfg)
 
-        print(f"\n  Ready to install: {C.BOLD}{labels}{C.RESET}\n")
+        print(f"\n  To install: {C.BOLD}{labels}{C.RESET}")
         mode = ask_arrow(
-            "How to proceed?",
+            "",
             [
-                ("Install all", "Download everything needed automatically"),
-                ("Choose each", "Ask before installing each component"),
-                ("Skip", "Set up later from the Tools menu"),
+                ("Install all (recommended)", "Everything listed as missing"),
+                ("Ask about each one", "A yes or no for every item"),
+                ("Not now", "Install later from Tools in the main menu"),
             ],
             default=0,
             allow_back=False,
@@ -686,8 +678,7 @@ def setup_wizard(cfg: dict, rerun: bool = False) -> dict:
         config_export(cfg, BASE_DIR / "yume_config_post_setup.json")
     except Exception as e:
         _log.debug("[setup_wizard] config-backup failed: %s", e)
-    _print_summary(cfg)
-    _closing_offers()
+    _closing_offers(_print_summary(cfg))
     return cfg
 
 
