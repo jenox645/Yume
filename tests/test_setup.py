@@ -284,7 +284,7 @@ def test_a_first_setup_names_both_models_for_this_pc(gpu, translator):
     taken, _cfg, said = _present(gpu, [0])
     assert taken is True
     assert "Hears" in said and "Translates" in said and translator in said
-    assert "GB to download" in said
+    assert "GB from Hugging Face" in said and "GGUF" in said and "faster-whisper" in said
 
 
 def test_choosing_myself_lists_every_whisper_model_with_the_recommended_one_marked():

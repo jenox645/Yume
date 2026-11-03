@@ -149,7 +149,7 @@ def _offer_one_click() -> None:
 
     section("Auto start")
     info(f"{C.DIM}Pressing Turn subtitles on in the browser starts Yume by itself, with no terminal,{C.RESET}")
-    info(f"{C.DIM}and it stops after 30 minutes without a video.{C.RESET}")
+    info(f"{C.DIM}and it stops after 30 minutes without a video. It uses the browser's native messaging.{C.RESET}")
     print()
     if native_host.registered_browsers():
         _ready("Auto start", "", True)
@@ -175,7 +175,7 @@ def _offer_vocal_isolation() -> None:
         return
     section("Vocal isolation, optional")
     info(f"{C.DIM}Separates the singer from the music before Whisper listens: fewer mistakes on songs.{C.RESET}")
-    info(f"{C.DIM}About {vocals.DOWNLOAD_GB:.0f} GB to download (PyTorch).{C.RESET}")
+    info(f"{C.DIM}Demucs htdemucs on PyTorch with CUDA, about {vocals.DOWNLOAD_GB:.0f} GB to download.{C.RESET}")
     print()
     if ask_yn("Install vocal isolation?", True):
         vocals.install()
@@ -184,10 +184,10 @@ def _offer_vocal_isolation() -> None:
 _MISSING_LABELS = {
     "yt-dlp": "yt-dlp",
     "ffmpeg": "FFmpeg",
-    "python_deps": "Whisper",
-    "llama_server": "the translator",
+    "python_deps": "Whisper (faster-whisper)",
+    "llama_server": "the translator (llama.cpp)",
     "whisper_cpp": "whisper.cpp",
-    "gguf_model": "a translation model",
+    "gguf_model": "a translation model (GGUF)",
 }
 
 
@@ -214,7 +214,7 @@ def _show_hardware(gpu: dict, ram: float, disk: float) -> None:
     name = (gpu.get("name") or "").replace("NVIDIA GeForce ", "")
     card = f"{name}, {gpu['vram_mb'] / 1024:.0f} GB" if gpu.get("vram_mb") else name
     if gpu["has_nvidia"]:
-        _row("Graphics", card, "Whisper and the translator run on it", C.GREEN)
+        _row("Graphics", card, "Whisper and the translator run on it (CUDA)", C.GREEN)
     elif gpu.get("has_amd"):
         _row("Graphics", card, "both models run on it, through Vulkan", C.GREEN)
     else:
@@ -280,7 +280,7 @@ def _translation_engine_ok(gpu: dict) -> bool:
     from yume import llama_server
 
     if llama_server.server_path():
-        _ready("Translator", "runs the translation model", True)
+        _ready("Translator", "llama.cpp server, runs the model", True)
         return True
     # llama.cpp's prebuilt server is the engine Yume installs. An existing
     # llama-cpp-python is kept only when it already runs on the GPU (or
@@ -288,7 +288,7 @@ def _translation_engine_ok(gpu: dict) -> bool:
     # source build needs the CUDA Toolkit and a C++ compiler.
     on_gpu = llama_server.python_engine_on_gpu()
     if on_gpu is None or not _try_import("uvicorn") or not _try_import("fastapi"):
-        _ready("Translator", "runs the translation model", False)
+        _ready("Translator", "llama.cpp server, runs the model", False)
         return False
     if on_gpu or not (gpu.get("has_nvidia") or gpu.get("has_amd")):
         _ready("Translator", "llama-cpp-python", True)
@@ -331,7 +331,7 @@ def _missing_for_amd(gpu: dict) -> list[str]:
     if not gpu.get("has_amd") or not whisper_cpp.available():
         return []
     ready = whisper_cpp.server_path() is not None
-    _ready("whisper.cpp", "Whisper on your AMD card", ready, "missing: Whisper would use the CPU")
+    _ready("whisper.cpp", "Whisper on your AMD card (Vulkan)", ready, "missing: Whisper would use the CPU")
     return [] if ready else ["whisper_cpp"]
 
 
@@ -340,9 +340,9 @@ def _missing_tools() -> list[str]:
     yt, ff, dn = find_tool("yt-dlp"), find_tool("ffmpeg"), find_tool("deno")
     _ready("yt-dlp", "downloads the audio", bool(yt))
     _ready("FFmpeg", "reads the audio", bool(ff))
-    _row("Deno", "optional, for YouTube", "ready" if dn else "not installed", C.GREEN if dn else C.DIM)
+    _row("Deno", "optional, a YouTube helper", "ready" if dn else "not installed", C.GREEN if dn else C.DIM)
     whisper = _try_import("faster_whisper")
-    _ready("Whisper", "hears the video", whisper)
+    _ready("Whisper", "faster-whisper, hears the video", whisper)
     return [k for k, ok in (("yt-dlp", yt), ("ffmpeg", ff), ("python_deps", whisper)) if not ok]
 
 
@@ -350,9 +350,9 @@ def _missing_for_llamacpp(cfg: dict, gpu: dict, gf: list) -> list[str]:
     """Report llama.cpp and the GGUF models; pick a model if none is set."""
     missing = [] if _translation_engine_ok(gpu) else ["llama_server"]
     if not gf:
-        _ready("Translation model", "", False)
+        _ready("Translation model", "a GGUF file in models/translation", False)
         return [*missing, "gguf_model"]
-    _row("Translation model", f"{len(gf)} in models/translation", "ready", C.GREEN)
+    _row("Translation model", f"{len(gf)} GGUF in models/translation", "ready", C.GREEN)
     # Keep the user's choice on a re-run; only fill in a missing/stale path
     if not cfg.get("gguf_model_path") or not Path(cfg["gguf_model_path"]).exists():
         cfg["gguf_model_path"] = str(gf[0])
@@ -370,8 +370,8 @@ def _choose_youtube_auth(cfg: dict) -> None:
     ch = ask_arrow(
         "How should Yume download from YouTube?",
         [
-            ("Use my browser's login (recommended)", "Stay logged into YouTube in that browser"),
-            ("Use the Deno helper", "No account needed, about 35 MB"),
+            ("Use my browser's login (recommended)", "yt-dlp reads its YouTube cookies: stay logged in there"),
+            ("Use the Deno helper", "Solves YouTube's PO-token challenge, no account, about 35 MB"),
             ("Not now", "Set it up later in Settings"),
         ],
         default=0,
@@ -388,7 +388,7 @@ def _choose_youtube_auth(cfg: dict) -> None:
             allow_back=False,
         )
         cfg["cookies_browser"] = browsers[bc]
-        _row("YouTube", f"your {browsers[bc].capitalize()} login", "ready", C.GREEN)
+        _row("YouTube", f"cookies from {browsers[bc].capitalize()}", "ready", C.GREEN)
     elif ch == 1:
         hint = f"Download Deno manually: {C.CYAN}https://deno.land{C.RESET}"
         if _install_with_retry("Deno", install_deno, hint):
@@ -485,10 +485,12 @@ def _present_models(cfg: dict, gpu: dict) -> bool:
     info(f"{C.DIM}Two AI models do the work: one hears the video, one translates what it hears.{C.RESET}")
     print()
     hears = next((desc for name, _p, _v, desc, _mb in WHISPER_MODELS if name == whisper), "")
-    _row("Hears", f"{C.BOLD}{whisper:<20}{C.RESET}", hears, C.DIM)
+    quant = pick["file"].rsplit("-", 1)[-1].removesuffix(".gguf")
+    _row("Hears", f"{C.BOLD}{whisper:<20}{C.RESET}", f"{hears} (faster-whisper)", C.DIM)
     _row("Translates", f"{C.BOLD}{translator:<20}{C.RESET}", why, C.DIM)
     print()
-    info(f"About {(whisper_mb + pick['mb']) / 1024:.1f} GB to download. You can change either later, in Settings.")
+    info(f"About {(whisper_mb + pick['mb']) / 1024:.1f} GB from Hugging Face: the Whisper model, and {pick['file']}")
+    info(f"({quant}, a GGUF file that llama.cpp runs). You can change either later, in Settings.")
     ch = ask_arrow(
         "Use these models?",
         [
@@ -564,11 +566,11 @@ def _choose_translation_model(cfg: dict, needs_model: bool, recommended: bool = 
         if _download_translator(cfg, recommend_translator(detect_gpu())[0]):
             return
         warn("The download did not finish. Pick a translator below, or try again later from Settings.")
-    info("Pick the model that translates the subtitles. It runs on this PC.")
+    info("Pick the model that translates the subtitles: a GGUF file that llama.cpp runs on this PC.")
     ch = ask_arrow(
         "How to get a model?",
         [
-            ("Pick from a list", "Models chosen for Yume, with their sizes"),
+            ("Pick from a list", "GGUF models chosen for Yume, from Hugging Face, by size and quantization"),
             ("Use Ollama instead", "If Ollama already runs here"),
             ("Not now", "Add a .gguf file to models/translation/ later"),
         ],
@@ -590,11 +592,11 @@ def _print_summary(cfg: dict) -> bool:
     checks = [
         ("yt-dlp", "downloads the audio", find_tool("yt-dlp") is not None),
         ("FFmpeg", "reads the audio", find_tool("ffmpeg") is not None),
-        ("Whisper", cfg.get("whisper_model", ""), _try_import("faster_whisper")),
+        ("Whisper", f"faster-whisper, {cfg.get('whisper_model', '')}", _try_import("faster_whisper")),
     ]
     if bk == "llamacpp":
         engine = llama_server.server_path() is not None or _try_import("llama_cpp")
-        checks.append(("Translator", "runs the translation model", engine))
+        checks.append(("Translator", "llama.cpp server, runs the model", engine))
         model = Path(cfg.get("gguf_model_path") or "").name
         checks.append(("Translation model", model, len(find_gguf_models()) > 0))
     elif bk == "ollama":
