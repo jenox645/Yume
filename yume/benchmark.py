@@ -23,7 +23,7 @@ TEST_SECONDS = 30
 _ACCURACY_RANK = ["large-v3", "large-v2", "large-v3-turbo", "medium", "small", "base", "tiny"]
 
 # (name, params, vram label, description) — derived from the shared table
-WHISPER_MODELS_INFO = [(n, f"{p} params", f"~{v / 1000:g} GB", d) for n, p, v, d in WHISPER_MODELS]
+WHISPER_MODELS_INFO = [(n, f"{p} params", f"~{v / 1000:g} GB", d) for n, p, v, d, _mb in WHISPER_MODELS]
 
 
 def _is_whisper_model_cached(model_name: str) -> bool:
@@ -125,7 +125,7 @@ def _parse_selection(selection: str, models: list[tuple[str, bool]], rec: str) -
 
 def _choose_models(cfg: dict, gpu: dict, rec: str) -> list[str]:
     """List the models with fit/download status and ask which to benchmark."""
-    models = [(name, _fits(gpu, req_mb)) for name, _p, req_mb, _d in WHISPER_MODELS]
+    models = [(name, _fits(gpu, req_mb)) for name, _p, req_mb, _d, _mb in WHISPER_MODELS]
     info("Select models to benchmark:")
     info("  'distil' models are distilled on English only — they cannot transcribe JA/ZH/KO/RU/AR")
     info("  'turbo' = optimized large-v3 (near-full accuracy at much higher speed)")

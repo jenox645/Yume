@@ -100,6 +100,8 @@ class Wizard:
             "_offer_vocal_isolation": MagicMock(),
             "_extension_guide": MagicMock(),
             "_missing_for_amd": lambda gpu: [],  # tests/test_whispercpp.py covers the offer
+            "_present_models": MagicMock(return_value=False),  # its own tests below
+            "_fetch_whisper": MagicMock(),  # never a real download
         }
         installers = {
             "install_ytdlp": "yt-dlp",
@@ -258,6 +260,100 @@ def test_pulling_an_ollama_model_starts_ollama_when_it_is_down():
             assert inst.pull_ollama_model("qwen2.5:7b")
         assert popen.called is not up  # `ollama serve` only when nothing answered
     assert ran == [["ollama", "pull", "qwen2.5:7b"]] * 2
+
+
+def _present(gpu, arrows, model="small"):
+    cfg = {"whisper_model": model}
+    with (
+        patch.object(setup, "ask_arrow", side_effect=arrows),
+        patch.object(setup, "info") as said,
+        patch.object(setup, "section"),
+    ):
+        taken = setup._present_models(cfg, gpu)
+    return taken, cfg, " ".join(str(c.args[0]) for c in said.call_args_list)
+
+
+@pytest.mark.parametrize(
+    ("gpu", "translator"),
+    [
+        ({**NVIDIA_12GB}, "Hy-MT2-7B"),
+        ({**NVIDIA_6GB, "vram_mb": 8192}, "Hy-MT2-7B"),
+        ({**NVIDIA_6GB, "vram_mb": 4096}, "Hy-MT2-1.8B"),  # a 4 GB laptop
+        (NO_GPU, "Hy-MT2-1.8B"),
+    ],
+)
+def test_a_first_setup_names_both_models_for_this_pc(gpu, translator):
+    taken, _cfg, said = _present(gpu, [0])
+    assert taken is True
+    assert "Hears" in said and "Translates" in said and translator in said
+    assert "GB to download" in said
+
+
+def test_choosing_myself_lists_every_whisper_model_with_the_recommended_one_marked():
+    asked = []
+
+    def arrows(prompt, options, **k):
+        asked.append(options)
+        return 1 if len(asked) == 1 else [o[0] for o in options].index("base")
+
+    taken, cfg, _said = _present(NVIDIA_6GB, arrows)
+    assert taken is False and cfg["whisper_model"] == "base"
+    labels = [o[0] for o in asked[1]]
+    assert len(labels) == len(setup.WHISPER_MODELS) and "small  ★ recommended" in labels
+
+
+def test_the_recommended_translator_is_downloaded_with_its_pin(tmp_path):
+    cfg = {"translation_backend": "llamacpp"}
+    with (
+        patch("yume.network.hf_download", return_value=True) as download,
+        patch.object(setup, "GGUF_DIR", tmp_path),
+        patch.object(setup, "detect_gpu", return_value=NO_GPU),
+        patch.object(setup, "_fetch_whisper"),
+        patch.object(setup, "success"),
+    ):
+        setup._choose_translation_model(cfg, True, recommended=True)
+    pick = setup.TRANSLATORS["Hy-MT2-1.8B"]
+    download.assert_called_once_with(pick["repo"], pick["file"], pick["sha256"])
+    assert cfg["gguf_model_path"] == str(tmp_path / pick["file"])
+
+
+def test_a_failed_download_falls_back_to_the_choice():
+    cfg = {"translation_backend": "llamacpp"}
+    with (
+        patch("yume.network.hf_download", return_value=False),
+        patch.object(setup, "detect_gpu", return_value=NO_GPU),
+        patch.object(setup, "_fetch_whisper"),
+        patch.object(setup, "warn"),
+        patch.object(setup, "ask_arrow", return_value=2) as asked,
+    ):
+        setup._choose_translation_model(cfg, True, recommended=True)
+    assert asked.call_args.args[0] == "How to get a model?" and "gguf_model_path" not in cfg
+
+
+@pytest.mark.parametrize(
+    ("cfg", "device", "fetched"),
+    [
+        ({"whisper_model": "small"}, "cuda", True),
+        ({"whisper_model": "small"}, "vulkan", False),  # whisper.cpp has its own files
+        ({"whisper_model": "D:/models/mine"}, "cuda", False),
+    ],
+)
+def test_the_whisper_model_downloads_during_setup(cfg, device, fetched):
+    download = MagicMock()
+    with (
+        patch("yume.servers.resolve_whisper_device", return_value=(device, "int8")),
+        patch.dict(sys.modules, {"faster_whisper": MagicMock(download_model=download)}),
+        patch.object(setup, "info"),
+        patch.object(setup, "success"),
+    ):
+        setup._fetch_whisper(cfg)
+    assert download.called is fetched
+
+
+def test_every_recommended_translator_is_one_the_browser_lists():
+    from yume.menus.hf_browser import _HF_RECOMMENDED_REPOS
+
+    assert {t["repo"] for t in setup.TRANSLATORS.values()} <= {r for r, _d in _HF_RECOMMENDED_REPOS}
 
 
 def test_other_backends_need_no_engine_or_gguf():

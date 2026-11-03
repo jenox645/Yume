@@ -114,11 +114,13 @@ def _ports(cfg, args):
 
 
 def _recommend(cfg, args):
-    from yume.hardware import recommend_whisper_model
+    from yume.hardware import detect_gpu, recommend_translator, recommend_whisper_model
 
-    model, reason = recommend_whisper_model()
-    info(f"Recommended: {model}")
-    info(f"Reason: {reason}")
+    gpu = detect_gpu()
+    model, reason = recommend_whisper_model(gpu)
+    translator, why = recommend_translator(gpu)
+    info(f"Hears (Whisper):  {model}  — {reason}")
+    info(f"Translates:       {translator}  — {why}")
 
 
 def _fonts(cfg, args):
@@ -178,7 +180,9 @@ COMMANDS: dict[str, Command] = {
     "health": Command(_health_command, "Inspect", (("health", "Run full health check"),)),
     "stats": Command(_stats, "Inspect", (("stats", "Live server statistics (GPU, session)"),)),
     "ports": Command(_ports, "Inspect", (("ports", "Show port availability"),)),
-    "recommend": Command(_recommend, "Inspect", (("recommend", "Suggest best Whisper model for your hardware"),)),
+    "recommend": Command(
+        _recommend, "Inspect", (("recommend", "Suggest the Whisper and translation models for your hardware"),)
+    ),
     "fonts": Command(_fonts, "Inspect", (("fonts", "Detect installed CJK and system fonts"),)),
     "benchmark": Command(_benchmark, "Inspect", (("benchmark", "Test Whisper model speeds on your hardware"),)),
     "model": Command(

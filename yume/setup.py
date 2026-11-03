@@ -32,6 +32,10 @@ from yume.hardware import (
     detect_gpu,
     detect_ram_gb,
     disk_free_gb,
+    TRANSLATORS,
+    WHISPER_DOWNLOAD_MB,
+    WHISPER_MODELS,
+    recommend_translator,
     recommend_whisper_model,
     vulkan_whisper_model,
     whisper_compute_type,
@@ -482,16 +486,91 @@ def _use_ollama(cfg: dict) -> None:
         pull_ollama_model(cfg["translation_model"])  # starts Ollama if needed
 
 
-def _choose_translation_model(cfg: dict, needs_model: bool) -> None:
-    """Step 5: get a GGUF model from HuggingFace, or switch to Ollama."""
+def _present_models(cfg: dict, gpu: dict) -> bool:
+    """A first setup: the two models for this PC, in plain words. True when the user takes
+    them; otherwise they pick Whisper here and the translator in step 5."""
+    whisper = cfg["whisper_model"]
+    translator, why = recommend_translator(gpu)
+    pick = TRANSLATORS[translator]
+    whisper_mb = WHISPER_DOWNLOAD_MB.get(whisper, 0)
+    section("Your models")
+    info("Yume uses two AI models: one hears the video, one translates what it hears.")
+    print()
+    hears = next((desc for name, _p, _v, desc, _mb in WHISPER_MODELS if name == whisper), "")
+    info(f"  Hears        {C.BOLD}{whisper:16}{C.RESET} {C.DIM}{hears}{C.RESET}")
+    info(f"  Translates   {C.BOLD}{translator:16}{C.RESET} {C.DIM}{why}{C.RESET}")
+    print()
+    info(f"About {(whisper_mb + pick['mb']) / 1024:.1f} GB to download. You can change either later, in Settings.")
+    ch = ask_arrow(
+        "Use these models?",
+        [
+            ("Use these (recommended)", "Picked for this PC"),
+            ("Choose myself", "See every model and what it needs"),
+        ],
+        default=0,
+        allow_back=False,
+    )
+    if ch == 0:
+        return True
+    options = [
+        (name + ("  ★ recommended" if name == whisper else ""), f"{desc} — about {mb} MB")
+        for name, _p, _v, desc, mb in WHISPER_MODELS
+    ]
+    names = [m[0] for m in WHISPER_MODELS]
+    chosen = ask_arrow("Which model should hear the video?", options, default=names.index(whisper), allow_back=False)
+    if 0 <= chosen < len(names):
+        cfg["whisper_model"] = names[chosen]
+    return False
+
+
+def _download_translator(cfg: dict, key: str) -> bool:
+    from yume.network import hf_download
+
+    pick = TRANSLATORS[key]
+    if not hf_download(pick["repo"], pick["file"], pick["sha256"]):
+        return False
+    cfg["gguf_model_path"] = str(GGUF_DIR / pick["file"])
+    cfg["translation_model"] = pick["file"]
+    success(f"Translator ready: {key}")
+    return True
+
+
+def _fetch_whisper(cfg: dict) -> None:
+    """Download the Whisper model now, with a progress bar: otherwise the first start
+    downloads it silently and looks stuck for minutes."""
+    from yume.servers import resolve_whisper_device
+
+    name = cfg.get("whisper_model", "")
+    if name not in WHISPER_DOWNLOAD_MB or resolve_whisper_device(cfg)[0] == "vulkan":
+        return  # a custom model is on disk already; whisper.cpp got its own model at install
+    try:
+        from faster_whisper import download_model
+    except ImportError:
+        return
+    info(f"Downloading the Whisper model {name} (about {WHISPER_DOWNLOAD_MB[name]} MB)...")
+    try:
+        download_model(name)
+        success(f"Whisper model ready: {name}")
+    except Exception as e:
+        warn(f"The Whisper model will download when Yume first starts instead ({e}).")
+
+
+def _choose_translation_model(cfg: dict, needs_model: bool, recommended: bool = False) -> None:
+    """Step 5: the Whisper model, then a GGUF translator: the recommended one, from
+    HuggingFace, or Ollama instead."""
     from yume.menus import browse_hf
 
-    _step(5, "Translation Model")
+    _step(5, "Models")
+    _fetch_whisper(cfg)
     if not needs_model:
         gf = find_gguf_models()
         gf_name = gf[0].name if gf else cfg.get("translation_model", "configured")
         success(f"Translation model already configured: {C.BOLD}{gf_name}{C.RESET}")
         return
+    if recommended and cfg.get("translation_backend", "llamacpp") == "llamacpp":
+        if _download_translator(cfg, recommend_translator(detect_gpu())[0]):
+            return
+        warn("The download did not finish. Pick a translator below, or try again later from Settings.")
     info("Yume needs a GGUF model file to translate subtitles into English.")
     info(f"{C.DIM}llama.cpp loads it directly — no external servers required.{C.RESET}")
     print()
@@ -566,6 +645,7 @@ def setup_wizard(cfg: dict, rerun: bool = False) -> dict:
 
     _welcome()
     gpu = _scan_hardware(cfg, rerun)
+    recommended = not rerun and _present_models(cfg, gpu)
     pause()
     missing, ready = _check_components(cfg, gpu)
 
@@ -598,7 +678,7 @@ def setup_wizard(cfg: dict, rerun: bool = False) -> dict:
             pause()
             return cfg
         _install_missing(cfg, missing, ask_each=mode == 1)
-        _choose_translation_model(cfg, "gguf_model" in missing)
+        _choose_translation_model(cfg, "gguf_model" in missing, recommended)
         save_config(cfg)
 
     _mark_complete(cfg)
