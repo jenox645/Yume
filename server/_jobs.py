@@ -19,6 +19,7 @@ A job's own state lives in _job.py, its lines in _lines.py, exports in _export.p
 import threading
 import time
 
+import _align
 import _audio
 import _download
 import _regions
@@ -477,6 +478,32 @@ class JobManager:
             raw = transcribe_audio(heard, job.language, at, is_first_region=first, temperature=0.4)
         return raw if any(not is_unwanted(s["text"]) for s in raw) else None
 
+    @staticmethod
+    def _time_words(job, idx, heard, at):
+        """Karaoke timing of the region's shown lines (_align.py). After add_region, so it
+        times the lines as they were cleaned and cut. A failure only costs the karaoke."""
+        if not job.language:
+            return
+        with job.lock:
+            region = job.regions[idx]
+            lines = [dict(s) for s in job.segments.values() if s["region"] == region and not s["hidden"]]
+        try:
+            times = _align.word_times(heard, at, lines, job.language)
+        except Exception as e:
+            print(f"[Yume] Word timing skipped: {e}")
+            return
+        if not times:
+            return
+        with job.lock:
+            for i, words in times.items():
+                seg = job.segments.get(lines[i]["id"])
+                if seg is not None and seg["text"] == lines[i]["text"]:
+                    seg["words"] = words
+                    job._touch(seg)
+        _state.store.put_word_times(
+            job.video_key, job.lang_key, job.model, [(lines[i]["start"], lines[i]["text"], w) for i, w in times.items()]
+        )
+
     def _transcribe_region(self, job, idx):
         start, end = job.regions[idx]
         path = None
@@ -488,6 +515,7 @@ class JobManager:
                 if not path:
                     raise RuntimeError("stream segment download failed")
                 audio = _audio.load_audio(path)
+            region_audio = audio
             raw, audio = self._hear(job, idx, audio)
             if job.lang_checks < LANG_CHECKS:
                 heard, prob = detect_language(audio)
@@ -497,6 +525,7 @@ class JobManager:
             with job.lock:
                 job.event(f"Region {idx + 1}/{len(job.regions)} [{start:.0f}-{end:.0f}s]: {len(raw)} lines")
                 job.add_region(idx, raw)  # may log "Finished" — keep it after the region line
+            self._time_words(job, idx, audio, start + (len(region_audio) - len(audio)) / SR)
         except Exception as e:
             with _state.stats_lock:
                 _state.server_stats["errors"] += 1

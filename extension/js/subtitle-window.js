@@ -44,6 +44,9 @@ function clockTime(seconds) {
   return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 }
 
+// Karaoke re-times its line when the video is this far from where its sweep is (a seek)
+const SING_DRIFT_S = 0.5;
+
 // Vertical is a Japanese and Chinese form: other scripts keep the plain box
 function chosenLook(s) {
   const look = s.subtitleStyle || 'plain';
@@ -374,10 +377,8 @@ class SubtitleWindow {
     }
 
     const newLine = (original || '') !== this.currentOriginal || (english || '') !== this.currentEnglish;
-    if (newLine) {
-      this._animateLine(q('.subtitle-content'));
-      this._singLine(q('.subtitle-original'), timing);
-    }
+    const sing = newLine || this._singDrifted(timing);
+    if (newLine) this._animateLine(q('.subtitle-content'));
     this.isPlaying = true;
     this.currentOriginal = original || '';
     this.currentEnglish  = english || '';
@@ -390,11 +391,13 @@ class SubtitleWindow {
       if (!el) continue;
       if (rtl !== null) el.style.direction = rtl ? 'rtl' : 'ltr';
       el.style.textAlign = srcRTL ? 'right' : 'center';  // every line aligned like the original
-      el.textContent = text || '';
+      // Only a changed line is rewritten: that would drop the karaoke's word spans
+      if (el.textContent !== (text || '')) el.textContent = text || '';
       el.style.display = text && shown ? 'block' : 'none';
     }
     const englishEl = lines[1][0];
     if (englishEl) englishEl.style.opacity = confidenceOpacity(s.showConfidence, confidence);
+    if (sing) this._singLine(lines[0][0], timing);
   }
 
   // Restarts the entrance on each new line; 'cut' shows it at once
@@ -407,16 +410,54 @@ class SubtitleWindow {
     box.classList.add('line-' + entrance);
   }
 
-  // Karaoke: the colour sweeps the line over its own time on screen. Whisper's
-  // word timing drops segments, so this is the line's span, not each word's
+  // Karaoke: each word lights up while it is sung, at the times the server
+  // aligned (server/_align.py). A line without them (whisper.cpp, an older
+  // cache) sweeps over its own time on screen instead.
   _singLine(el, timing) {
     if (!el?.classList?.add) return;
-    el.classList.remove('line-sing');
+    el.classList.remove('line-sing', 'line-words', 'sing-rtl');
+    this._sung = null;
     if (chosenLook(this.settings) !== 'karaoke' || !(timing?.duration > 0)) return;
+    if (el.style?.direction === 'rtl') el.classList.add('sing-rtl');  // Arabic lights up from the right
+    this._sung = { elapsed: timing.elapsed, at: Date.now() };
+    if (this._singWords(el, timing)) return;
     void el.offsetWidth;
     el.style.setProperty('--sing-s', `${timing.duration}s`);
     el.style.setProperty('--sing-from', `${-timing.elapsed}s`);
     el.classList.add('line-sing');
+  }
+
+  // The line's words as spans, each with its own sweep: it starts when the word
+  // is sung and lasts as long. False when the times do not fit the text.
+  _singWords(el, timing) {
+    const words = timing.words;
+    const text = el.textContent || '';
+    const doc = el.ownerDocument;
+    if (!Array.isArray(words) || !words.length || !doc) return false;
+    const parts = [];
+    let pos = 0;
+    for (const [start, end, from, to] of words) {
+      if (!(from >= pos && to > from && to <= text.length)) return false;
+      if (from > pos) parts.push(doc.createTextNode(text.slice(pos, from)));
+      const span = doc.createElement('span');
+      span.className = 'sing-word';
+      span.textContent = text.slice(from, to);
+      span.style.setProperty('--sing-s', `${Math.max(0.05, end - start)}s`);
+      span.style.setProperty('--sing-from', `${start - timing.elapsed}s`);
+      parts.push(span);
+      pos = to;
+    }
+    if (pos < text.length) parts.push(doc.createTextNode(text.slice(pos)));
+    el.replaceChildren(...parts);
+    el.classList.add('line-words');
+    return true;
+  }
+
+  // A seek inside the line: the sweep starts again from where the video is
+  _singDrifted(timing) {
+    if (!this._sung || !(timing?.duration > 0)) return false;
+    const expected = this._sung.elapsed + (Date.now() - this._sung.at) / 1000;
+    return Math.abs(expected - timing.elapsed) > SING_DRIFT_S;
   }
 
   setPlaying(playing) {
