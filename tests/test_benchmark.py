@@ -99,7 +99,7 @@ def test_numbers_pick_models_and_bad_entries_are_ignored(tmp_path):
 
 def test_all_runs_only_models_that_fit(tmp_path):
     r = Run(tmp_path, NVIDIA_6GB, "all", yns=[True, False]).go({})
-    fitting = [n for n, _p, mb, _d in bench.WHISPER_MODELS if mb <= 6144]
+    fitting = [n for n, _p, mb, _d, _dl in bench.WHISPER_MODELS if mb <= 6144]
     assert [load[0] for load in r.loads] == fitting
 
 

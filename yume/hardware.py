@@ -14,21 +14,40 @@ _log = logging.getLogger("pocket_yume")
 
 # Whisper models offered by Yume — the single list every menu, the benchmark,
 # the launcher's resource check and the recommendation use.
-# (name, parameters, approx. VRAM in MB with float16 on GPU, description)
+# (name, parameters, approx. VRAM in MB with float16 on GPU, description, download in MB)
 # VRAM figures are faster-whisper's (CTranslate2), roughly half of OpenAI's
 # reference implementation; int8_float16 needs ~35% less. The translation LLM
 # needs its own VRAM on top when both run on the same GPU.
 # Only multilingual models: *.en and distil-* are English-only.
 WHISPER_MODELS = [
-    ("tiny", "39M", 1000, "Fastest, low accuracy"),
-    ("base", "74M", 1000, "Fast, decent accuracy"),
-    ("small", "244M", 1500, "Good balance of speed and accuracy"),
-    ("medium", "769M", 3000, "High accuracy, slower"),
-    ("large-v2", "1550M", 4500, "Very high accuracy"),
-    ("large-v3", "1550M", 4500, "Slower than turbo, no more accurate on songs"),
-    ("large-v3-turbo", "809M", 3000, "Best for any GPU: large-v3 accuracy at ~2x speed"),
+    ("tiny", "39M", 1000, "Fastest, low accuracy", 75),
+    ("base", "74M", 1000, "Fast, decent accuracy", 145),
+    ("small", "244M", 1500, "Good balance of speed and accuracy", 485),
+    ("medium", "769M", 3000, "High accuracy, slower", 1530),
+    ("large-v2", "1550M", 4500, "Very high accuracy", 3090),
+    ("large-v3", "1550M", 4500, "Slower than turbo, no more accurate on songs", 3090),
+    ("large-v3-turbo", "809M", 3000, "Best for any GPU: large-v3 accuracy at ~2x speed", 1620),
 ]
-WHISPER_MODEL_VRAM_MB = {name: vram for name, _p, vram, _d in WHISPER_MODELS}
+WHISPER_MODEL_VRAM_MB = {name: vram for name, _p, vram, _d, _mb in WHISPER_MODELS}
+WHISPER_DOWNLOAD_MB = {name: mb for name, _p, _v, _d, mb in WHISPER_MODELS}
+
+# The translators Setup recommends, from tests/gold/RESULTS.md, pinned by SHA-256
+TRANSLATORS = {
+    "Hy-MT2-7B": {
+        "repo": "tencent/Hy-MT2-7B-GGUF",
+        "file": "Hy-MT2-7B-Q4_K_M.gguf",
+        "sha256": "9f96256500f3fc1ab4d64336b58f52a949a95ad7516b0c229476eef782f9f77b",
+        "mb": 4410,
+    },
+    "Hy-MT2-1.8B": {
+        "repo": "tencent/Hy-MT2-1.8B-GGUF",
+        "file": "Hy-MT2-1.8B-Q4_K_M.gguf",
+        "sha256": "dc5f44fcf1fa496ee7ad725982c0c8c553a4de00259b53af84c4b89fb0c06699",
+        "mb": 1090,
+    },
+}
+# The 7B beside Whisper: about 7 GB, which leaves an 8 GB card room for the screen
+_BIG_TRANSLATOR_VRAM_MB = 7500
 
 
 # detect_gpu() shells out to nvidia-smi / rocm-smi / wmic — up to several seconds
@@ -250,6 +269,16 @@ def vulkan_whisper_model(vram: int) -> tuple[str, str]:
     if vram >= 3000:
         return "large-v3-turbo", f"GPU with {vram} MB VRAM on Vulkan → turbo (about 2.2 GB)"
     return "base", f"GPU with {vram} MB VRAM on Vulkan → base"
+
+
+def recommend_translator(gpu_info: dict) -> tuple[str, str]:
+    """(key of TRANSLATORS, reason) for the given hardware."""
+    vram = gpu_info.get("vram_mb", 0)
+    if not (gpu_info.get("has_nvidia") or gpu_info.get("has_amd")):
+        return "Hy-MT2-1.8B", "small enough to run on the CPU"
+    if vram >= _BIG_TRANSLATOR_VRAM_MB:
+        return "Hy-MT2-7B", f"the best translations in our tests, and it fits next to Whisper in {vram // 1024} GB"
+    return "Hy-MT2-1.8B", f"close to the 7B in our tests, and it fits next to Whisper in {max(vram, 1024) // 1024} GB"
 
 
 def recommend_whisper_model(gpu_info: dict | None = None) -> tuple[str, str]:
