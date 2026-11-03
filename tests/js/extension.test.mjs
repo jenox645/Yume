@@ -354,6 +354,95 @@ test('Enable pressed twice while the video loads runs ONE session; Disable durin
   assert.equal(sessions.length, before);  // the cancelled start never created a session
 });
 
+test('a new video that waits for play after a navigation is followed, not called missing', async () => {
+  const sessions = [];
+  const statuses = [];
+  const errors = [];
+  const onMessage = [];
+  const listeners = {};
+  const timers = [];
+  const video = { readyState: 4, getBoundingClientRect: () => ({ width: 640, height: 360 }) };
+  let videos = [video];
+  const ctx = vm.createContext({
+    console: { log: noop, warn: noop, error: noop },
+    chrome: {
+      runtime: { id: 'self', onMessage: { addListener: (f) => onMessage.push(f) } },
+      storage: { onChanged: listener },
+    },
+    setTimeout: (fn) => { timers.push(fn); return timers.length; },
+    setInterval: noop, clearTimeout: noop, URL, URLSearchParams,
+    SubtitleWindow: class {
+      resetProgress() {} updateSubtitle() {} close() {}
+      updateStatus(m) { statuses.push(m); }
+      showError(m) { errors.push(m); }
+    },
+    SubtitleSession: class {
+      constructor() { this.stopped = false; sessions.push(this); }
+      start() { return new Promise(noop); }
+      stop() { this.stopped = true; }
+    },
+    document: { title: 'a', querySelectorAll: () => videos, contains: (v) => videos.includes(v), addEventListener: noop },
+  });
+  ctx.window = ctx;
+  ctx.window.location = { href: 'https://www.youtube.com/watch?v=a', hostname: 'www.youtube.com', pathname: '/watch', search: '?v=a' };
+  ctx.window.addEventListener = (name, fn) => { (listeners[name] ||= []).push(fn); };
+  vm.runInContext(readFileSync(new URL('content.js', ROOT), 'utf8'), ctx);
+  const send = (action) => new Promise((resolve) => { onMessage[0]({ action }, {}, resolve); });
+  const runTimers = async (rounds) => {
+    for (let i = 0; i < rounds; i++) { timers.splice(0).forEach((f) => f()); await new Promise((r) => setImmediate(r)); }
+  };
+
+  await send('TOGGLE_SUBTITLES');
+  // The next video in a playlist: the browser would not autoplay it, so it loads nothing
+  const next = { readyState: 0, getBoundingClientRect: () => ({ width: 640, height: 360 }) };
+  videos = [next];
+  ctx.window.location = { href: 'https://www.youtube.com/watch?v=b', hostname: 'www.youtube.com', pathname: '/watch', search: '?v=b' };
+  listeners['yt-navigate-finish'].forEach((fn) => fn());
+  ctx.document.title = 'b';  // YouTube changes the title after the URL
+  await runTimers(60);  // 30 s of the video sitting at 0:00
+  assert.deepEqual(errors, []);
+  assert.ok(statuses.includes('Waiting for the video: press play if it is paused'));
+  assert.equal(sessions.filter((s) => !s.stopped).length, 0);
+
+  next.readyState = 4;  // play pressed
+  await runTimers(3);
+  assert.equal(sessions.filter((s) => !s.stopped).length, 1);
+  assert.deepEqual(errors, []);
+});
+
+test('after a navigation to a page without a video, Yume still says so', async () => {
+  const errors = [];
+  const onMessage = [];
+  const listeners = {};
+  const timers = [];
+  const video = { readyState: 4, getBoundingClientRect: () => ({ width: 640, height: 360 }) };
+  let videos = [video];
+  const ctx = vm.createContext({
+    console: { log: noop, warn: noop, error: noop },
+    chrome: {
+      runtime: { id: 'self', onMessage: { addListener: (f) => onMessage.push(f) } },
+      storage: { onChanged: listener },
+    },
+    setTimeout: (fn) => { timers.push(fn); return timers.length; },
+    setInterval: noop, clearTimeout: noop, URL, URLSearchParams,
+    SubtitleWindow: class { resetProgress() {} updateSubtitle() {} updateStatus() {} close() {} showError(m) { errors.push(m); } },
+    SubtitleSession: class { start() { return new Promise(noop); } stop() {} },
+    document: { title: 'a', querySelectorAll: () => videos, contains: (v) => videos.includes(v), addEventListener: noop },
+  });
+  ctx.window = ctx;
+  ctx.window.location = { href: 'https://www.youtube.com/watch?v=a', hostname: 'www.youtube.com', pathname: '/watch', search: '?v=a' };
+  ctx.window.addEventListener = (name, fn) => { (listeners[name] ||= []).push(fn); };
+  vm.runInContext(readFileSync(new URL('content.js', ROOT), 'utf8'), ctx);
+  await new Promise((resolve) => { onMessage[0]({ action: 'TOGGLE_SUBTITLES' }, {}, resolve); });
+  videos = [{ readyState: 0, getBoundingClientRect: () => ({ width: 320, height: 180 }) }];  // a preview
+  ctx.window.location = { href: 'https://www.youtube.com/', hostname: 'www.youtube.com', pathname: '/', search: '' };
+  listeners['yt-navigate-finish'].forEach((fn) => fn());
+  ctx.document.title = 'YouTube';
+  for (let i = 0; i < 30; i++) { timers.splice(0).forEach((f) => f()); await new Promise((r) => setImmediate(r)); }
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /No video found/);
+});
+
 // ── popup.js ───────────────────────────────────────────────────────────────
 
 // The popup's settings form against fake controls (ids, min/max as in popup.html)
