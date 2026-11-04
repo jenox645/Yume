@@ -624,6 +624,61 @@ test('karaoke sweeps a line over its own time on screen, from where it is now', 
   assert.ok(!classes.has('line-sing'));
 });
 
+// A line element that builds real children, enough for the karaoke spans
+function karaokeLine(text) {
+  const classes = new Set();
+  const doc = {
+    createTextNode: (t) => ({ text: t }),
+    createElement: () => {
+      const props = {};
+      return { props, textContent: '', className: '', style: { setProperty: (k, v) => { props[k] = v; } } };
+    },
+  };
+  const el = {
+    textContent: text, offsetWidth: 1, ownerDocument: doc, children: [], props: {},
+    style: { setProperty(k, v) { el.props[k] = v; } },
+    classList: { add: (c) => classes.add(c), remove: (...cs) => cs.forEach((c) => classes.delete(c)) },
+    replaceChildren(...parts) { el.children = parts; },
+  };
+  return { el, classes };
+}
+
+test('karaoke lights each word at its own time, from where the video is', () => {
+  const { ctx } = load('subtitle-window.js');
+  const win = Object.create(ctx.SubtitleWindow.prototype);
+  win.settings = { subtitleStyle: 'karaoke' };
+  const { el, classes } = karaokeLine('Hello big world');
+  // 1 s into the line: "Hello" is half sung, "world" starts in 1.5 s
+  win._singLine(el, { elapsed: 1, duration: 4, words: [[0.5, 1.5, 0, 5], [1.5, 2, 6, 9], [2.5, 3.5, 10, 15]] });
+  assert.ok(classes.has('line-words') && !classes.has('line-sing'));
+  const spans = el.children.filter((c) => c.className === 'sing-word');
+  assert.deepEqual(spans.map((s) => s.textContent), ['Hello', 'big', 'world']);
+  assert.deepEqual(spans.map((s) => s.props['--sing-from']), ['-0.5s', '0.5s', '1.5s']);
+  assert.deepEqual(spans.map((s) => s.props['--sing-s']), ['1s', '0.5s', '1s']);
+  assert.equal(el.children.map((c) => c.text ?? c.textContent).join(''), 'Hello big world');
+});
+
+test('karaoke without word times, or with times that do not fit, sweeps the line', () => {
+  const { ctx } = load('subtitle-window.js');
+  const win = Object.create(ctx.SubtitleWindow.prototype);
+  win.settings = { subtitleStyle: 'karaoke' };
+  for (const words of [[], [[0, 1, 0, 99]]]) {
+    const { el, classes } = karaokeLine('Hello');
+    win._singLine(el, { elapsed: 0, duration: 2, words });
+    assert.ok(classes.has('line-sing') && !classes.has('line-words'));
+  }
+});
+
+test('a seek inside a line re-times its karaoke, playing on does not', () => {
+  const { ctx } = load('subtitle-window.js');
+  const win = Object.create(ctx.SubtitleWindow.prototype);
+  win.settings = { subtitleStyle: 'karaoke' };
+  const { el } = karaokeLine('Hello');
+  win._singLine(el, { elapsed: 0, duration: 4, words: [] });
+  assert.equal(win._singDrifted({ elapsed: 0.1, duration: 4 }), false);
+  assert.equal(win._singDrifted({ elapsed: 3, duration: 4 }), true);
+});
+
 test('a resting job says how far is ready, not a count that looks frozen', () => {
   const { ctx } = load('subtitle-window.js');
   const badge = { style: {}, classList: { contains: () => false }, textContent: '', title: '', className: '' };

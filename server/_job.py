@@ -83,6 +83,7 @@ class Job:
 
         self.segments = {}  # id -> segment dict
         self.next_sid = 1
+        self._word_cache = None  # {(start, text): words} saved for this video, loaded once
         self.rev = 0
         self.playhead = seconds(params.get("playhead"))  # YouTube resumes where you left off
         self.last_poll = time.time()
@@ -124,6 +125,13 @@ class Job:
             roma = _state.store.get_romanization(self.lang_key, text)  # LLM result from an earlier run
         return roma
 
+    def _cached_words(self, start, text):
+        """Karaoke word times saved with an earlier run of this video, or None."""
+        if self._word_cache is None:
+            store = _state.store
+            self._word_cache = store.get_word_times(self.video_key, self.lang_key, self.model) if store else {}
+        return self._word_cache.get((round(start, 2), text))
+
     def add_region(self, idx, raw):
         """Add a region's raw Whisper segments; mark the region done."""
         region = self.regions[idx]
@@ -148,6 +156,7 @@ class Job:
                 "loop": i in loops,
                 "filler": i in filler,  # region-level, so refilter() keeps it hidden
                 "tries": 0,
+                "words": self._cached_words(s["start"], s["text"]),  # karaoke: _jobs adds them later
             }
             self.next_sid += 1
             self.segments[seg["id"]] = seg
@@ -367,6 +376,7 @@ def _public(seg):
         **{k: seg[k] for k in _PUBLIC_KEYS},
         "translation": seg["translation"] or "",
         "romaji": seg["romaji"] or "",
+        "words": seg.get("words") or [],
     }
 
 

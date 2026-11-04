@@ -43,6 +43,11 @@ CREATE TABLE IF NOT EXISTS romanizations (
     language TEXT, text TEXT, romaji TEXT, created REAL,
     PRIMARY KEY (language, text)
 );
+CREATE TABLE IF NOT EXISTS word_times (
+    video_key TEXT, language TEXT, model TEXT, start REAL, text TEXT,
+    words TEXT,              -- JSON [[start, end, from, to], ...] for karaoke (_align.py)
+    PRIMARY KEY (video_key, language, model, start, text)
+);
 """
 
 
@@ -131,6 +136,7 @@ class Store:
         with self._lock:
             self._db.execute("DELETE FROM videos WHERE video_key=?", (video_key,))
             self._db.execute("DELETE FROM transcripts WHERE video_key=?", (video_key,))
+            self._db.execute("DELETE FROM word_times WHERE video_key=?", (video_key,))
             self._db.commit()
 
     def library(self):
@@ -188,6 +194,25 @@ class Store:
             )
             self._db.commit()
 
+    # ── word times ─────────────────────────────────────────────────────────────
+
+    def get_word_times(self, video_key, language, model):
+        """{(start, text): words} of a video's lines, for karaoke."""
+        rows = self._q(
+            "SELECT start, text, words FROM word_times WHERE video_key=? AND language=? AND model=?",
+            (video_key, language, model),
+        )
+        return {(round(s, 2), t): json.loads(w) for s, t, w in rows}
+
+    def put_word_times(self, video_key, language, model, lines):
+        """lines: [(start, text, words), ...]"""
+        with self._lock:
+            self._db.executemany(
+                "INSERT OR REPLACE INTO word_times VALUES (?,?,?,?,?,?)",
+                [(video_key, language, model, round(s, 2), t, json.dumps(w)) for s, t, w in lines],
+            )
+            self._db.commit()
+
     # ── translations / romanizations ──────────────────────────────────────────
 
     def get_translations(self, src, tgt, model, texts):
@@ -229,7 +254,7 @@ class Store:
 
     def clear(self):
         with self._lock:
-            for table in ("videos", "transcripts", "translations", "romanizations"):
+            for table in ("videos", "transcripts", "translations", "romanizations", "word_times"):
                 self._db.execute(f"DELETE FROM {table}")  # nosec B608 — fixed table names
             self._db.commit()
 
@@ -242,6 +267,7 @@ class Store:
                 (MAX_VIDEOS,),
             )
             self._db.execute("DELETE FROM transcripts WHERE video_key NOT IN (SELECT video_key FROM videos)")
+            self._db.execute("DELETE FROM word_times WHERE video_key NOT IN (SELECT video_key FROM videos)")
             self._db.execute(
                 "DELETE FROM translations WHERE rowid NOT IN "
                 "(SELECT rowid FROM translations ORDER BY created DESC LIMIT ?)",

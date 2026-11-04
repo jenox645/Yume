@@ -7,6 +7,7 @@
 //      WATCH=60 how long each video plays (s); HEADED=1 shows the browser;
 //      BROWSER=<path to a Chromium browser>, default Brave if installed. Chrome
 //      itself cannot run this: it ignores --load-extension since version 137.
+//      LOOK=karaoke picks a subtitle style; SHOTS=n takes n screenshots of lines.
 //      MIRROR=1 plays long tests on a stand-in for YouTube's page: YouTube's own
 //      player stops after ~45 s in an automated, signed-out browser, with or
 //      without Yume. The stand-in keeps the real URL and title and a video of the
@@ -61,8 +62,12 @@ async function overlay(page) {
     const attr = (name) => (a.indexOf(name) >= 0 && a.indexOf(name) % 2 === 0 ? a[a.indexOf(name) + 1] : '');
     const cls = attr('class').split(' ').find((c) => /^(subtitle-(original|english|romaji|notice|status)|chunk-badge)$/.test(c));
     if (cls) {
-      const text = (n.children || []).filter((c) => c.nodeType === 3).map((c) => c.nodeValue).join('');
-      out[cls.replace('subtitle-', '').replace('chunk-', '')] = /display:\s*none/.test(attr('style')) ? '' : text;
+      // Karaoke puts the words in spans: the text is every text node below
+      const texts = (m) => (m.nodeType === 3 ? m.nodeValue : (m.children || []).map(texts).join(''));
+      out[cls.replace('subtitle-', '').replace('chunk-', '')] = /display:\s*none/.test(attr('style')) ? '' : texts(n);
+      if (cls === 'subtitle-original') {
+        out.singWords = (n.children || []).filter((c) => /sing-word/.test((c.attributes || [])[1] || '')).length;
+      }
     }
     for (const c of [...(n.children || []), ...(n.shadowRoots || []), ...(n.contentDocument ? [n.contentDocument] : [])]) walk(c);
   };
@@ -149,6 +154,7 @@ async function runVideo(spec, index) {
   report.enable = await toTab(page, { action: 'TOGGLE_SUBTITLES' }).catch((e) => ({ error: e.message }));
   let lastStatus = '';
   let playTries = 0;
+  let shots = 0;
   while (Date.now() - t0 < (WATCH_S + 240) * 1000) {
     await dismissConsent(page);  // the wall can appear late, and holds the video behind it
     const [o, v] = await Promise.all([overlay(page), videoState(page)]);
@@ -163,6 +169,11 @@ async function runVideo(spec, index) {
     if (report.firstTranslation === undefined && o.english) report.firstTranslation = s.el;
     if (v?.paused && playTries < 3) { playTries++; await play(page, 0); }
     const watched = report.firstLine !== undefined ? el - report.firstLine : 0;
+    // SHOTS=n: n screenshots of lines while they play, to see what the overlay draws
+    if (shots < Number(process.env.SHOTS || 0) && o.original && watched >= 10 + 3 * shots) {
+      await page.screenshot({ path: path.join(outDir, `v${index}-shot${shots}-t${Math.round(v?.t ?? 0)}.png`) }).catch(() => {});
+      shots++;
+    }
     if (watched >= WATCH_S) break;
     await sleep(1000);
   }
@@ -210,6 +221,7 @@ try {
   worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
   for (const p of context.pages().slice(1)) await p.close();  // tabs restored from an earlier run
   for (let i = 0; i < 40 && !(await worker.evaluate(async () => !!(await chrome.storage.local.get('settings')).settings)); i++) await sleep(250);
+  if (process.env.LOOK) await setSettings({ subtitleStyle: process.env.LOOK });
   for (const [i, s] of specs.entries()) await runVideo(parseSpec(s), i);
 } finally {
   await context.close();
