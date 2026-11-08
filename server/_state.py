@@ -13,7 +13,7 @@ import threading
 import time
 
 # Must match yume/constants.py VERSION and extension/manifest.json (tests check it)
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 
 # ── Whisper model ────────────────────────────────────────────────────────────
 model = None
