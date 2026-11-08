@@ -12,7 +12,7 @@ from pathlib import Path
 from config import DEFAULT_OLLAMA_PORT, DEFAULT_TRANSLATION_PORT
 
 # Must match server/_state.py SERVER_VERSION and extension/manifest.json (tests check it)
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 BASE_DIR = Path(__file__).parent.parent.resolve()
 TOOLS_DIR = BASE_DIR / "tools"

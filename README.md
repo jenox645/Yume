@@ -4,7 +4,7 @@
 
 **You'll Understand More Easily.** Subtitles for any video, made on your own computer.
 
-![Version](https://img.shields.io/badge/version-0.2.0-blue)
+![Version](https://img.shields.io/badge/version-0.3.0-blue)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
 </div>
@@ -21,7 +21,7 @@ Press one button in your browser. Yume starts by itself, and stops by itself whe
 
 <img src="docs/images/in-use.jpg" alt="Yume on a Japanese song: the line, its reading and its English translation over the video, with the popup open" width="100%">
 
-Six subtitle styles. Pick one in the Look tab. Vertical is for Japanese and Chinese.
+Six subtitle styles. Pick one in the Look tab. Karaoke lights each word as it is sung, and Vertical is for Japanese and Chinese.
 
 <img src="docs/images/subtitle-styles.png" alt="One line of a song in six styles: plain box, outline, paper slip, night, karaoke and vertical" width="100%">
 
@@ -38,7 +38,7 @@ Light and dark, and a terminal for everything else.
 
 You need Python 3.10 or newer. A graphics card helps a lot, but a CPU works.
 
-**1. Install.** Download this repository and run the file for your system. A setup wizard checks your hardware and installs everything, including the models.
+**1. Install.** Download this repository and run the file for your system. A setup wizard checks your hardware, recommends the two models that fit it, and installs everything in a Python environment of its own.
 
 | Windows | Linux | macOS |
 |---|---|---|
