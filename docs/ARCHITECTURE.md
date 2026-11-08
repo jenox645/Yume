@@ -21,6 +21,7 @@ Three processes on the user's machine:
 │                                      │      │ _separate.py   vocal isolation (optional, CUDA)    │
 │                                      │      │ _regions.py    split audio at quiet points         │
 │ popup.js     settings, library, stats│      │ _transcribe.py Whisper (music-tuned params)         │
+│                                      │      │ _align.py      karaoke word times                  │
 │                                      │      │ _whispercpp.py whisper.cpp on Vulkan, for AMD       │
 └─────────────────────────────────────┘      │ _filter.py     hallucination filter + blacklist    │
                                              │ _translate.py  LLM client, structured output        │

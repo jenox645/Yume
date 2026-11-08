@@ -167,6 +167,7 @@ User config lives at `config/yume_config.json` (auto-created). Key defaults:
 | `server/_lines.py` | A region's raw lines cleaned, regions joined at a cut (shared by jobs and exports) |
 | `server/_export.py` | SRT/VTT export, also of cached videos without a job |
 | `server/_regions.py` | Quiet-point region planning |
+| `server/_align.py` | Karaoke word times: the final lines of a region aligned to its audio (faster-whisper's cross-attention alignment), cached in `word_times` |
 | `server/_whispercpp.py` | whisper.cpp on Vulkan as a child process, with the two methods of faster-whisper's model; `server/whisper_cpp.json` pins the build and models |
 | `server/_separate.py` | Optional vocal isolation (Demucs htdemucs, CUDA only); falls back to the mix |
 | `server/_translate.py` | LLM client with structured output |

@@ -48,6 +48,7 @@ class SubtitleSession {
     this._unreachable = 0;  // consecutive polls that got no answer
 
     this._onTime = () => this._render();
+    this._onSeek = () => this._render(true);  // karaoke re-times a line sought into
     this._onPlayState = () => window.dispatchEvent(
       new CustomEvent('video-playing', { detail: { playing: !this.video?.paused } }));
     this._onStorage = (changes) => {
@@ -88,7 +89,7 @@ class SubtitleSession {
     if (customStreamUrl) chrome.storage.local.remove('customStreamUrl');
 
     video.addEventListener('timeupdate', this._onTime);
-    video.addEventListener('seeked', this._onTime);
+    video.addEventListener('seeked', this._onSeek);
     video.addEventListener('play', this._onPlayState);
     video.addEventListener('pause', this._onPlayState);
     this._schedulePoll(0, gen);
@@ -115,7 +116,7 @@ class SubtitleSession {
     clearTimeout(this._pollTimer);
     if (this.video) {
       this.video.removeEventListener('timeupdate', this._onTime);
-      this.video.removeEventListener('seeked', this._onTime);
+      this.video.removeEventListener('seeked', this._onSeek);
       this.video.removeEventListener('play', this._onPlayState);
       this.video.removeEventListener('pause', this._onPlayState);
     }
@@ -376,7 +377,12 @@ class SubtitleSession {
       detail: show
         ? {
           original: show.text, english: show.translation, romaji: show.romaji, confidence: show.confidence,
-          timing: { elapsed: Math.max(0, t - show.start), duration: show.end - show.start },
+          timing: {
+            elapsed: Math.max(0, t - show.start),
+            duration: show.end - show.start,
+            // Karaoke word times, from the line's start: [start, end, from, to]
+            words: (show.words || []).map(([s, e, from, to]) => [s - show.start, e - show.start, from, to]),
+          },
         }
         : { original: '', english: '', romaji: '' },
     }));

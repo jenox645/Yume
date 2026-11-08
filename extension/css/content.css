@@ -104,6 +104,11 @@
   .subtitle-window[data-look="karaoke"] .subtitle-original.line-sing {
     width: fit-content;
     margin-inline: auto;
+  }
+
+  /* The whole line sweeps, or each word on its own when the server timed them */
+  .subtitle-window[data-look="karaoke"] .subtitle-original.line-sing,
+  .subtitle-window[data-look="karaoke"] .subtitle-original.line-words .sing-word {
     color: transparent !important;
     text-shadow: none;
     background-image: linear-gradient(to right, #FFD25A 50%, #FFFFFF 50%);
@@ -114,7 +119,15 @@
     animation: line-sing var(--sing-s) linear var(--sing-from) both;
   }
 
-  .subtitle-window[data-look="karaoke"][data-paused="true"] .subtitle-original.line-sing {
+  /* Right to left (Arabic): the gold comes in from the right */
+  .subtitle-window[data-look="karaoke"] .subtitle-original.line-sing.sing-rtl,
+  .subtitle-window[data-look="karaoke"] .subtitle-original.line-words.sing-rtl .sing-word {
+    background-image: linear-gradient(to left, #FFD25A 50%, #FFFFFF 50%);
+    animation-direction: reverse;
+  }
+
+  .subtitle-window[data-look="karaoke"][data-paused="true"] .subtitle-original.line-sing,
+  .subtitle-window[data-look="karaoke"][data-paused="true"] .subtitle-original.line-words .sing-word {
     animation-play-state: paused;
   }
 }
