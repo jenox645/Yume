@@ -36,11 +36,27 @@
     return new Promise((resolve) => {
       const tick = () => {
         const v = findVideo();
-        if (v || --attempts <= 0) resolve(v);
+        if (v || --attempts <= 0 || stale()) resolve(v);
         else setTimeout(tick, 500);
       };
       tick();
     });
+  }
+
+  // How long Enable waits for a video before saying there is none. After a
+  // navigation Yume waits for as long as the page takes instead: a video the
+  // browser would not autoplay loads nothing until play is pressed.
+  const ENABLE_WAIT_TRIES = 6;
+  const PRESS_PLAY_STATUS = 'Waiting for the video: press play if it is paused';
+
+  // Worth waiting for: a page with a player. On YouTube only a watch page or a
+  // Short, as the home page has players too, for the previews under the mouse.
+  function videoPage() {
+    const { hostname, pathname, search } = window.location;
+    if (/(^|\.)youtube\.com$/.test(hostname)) {
+      return pathname.startsWith('/shorts/') || new URLSearchParams(search).has('v');
+    }
+    return document.querySelectorAll('video').length > 0;
   }
 
   // ── start / stop ─────────────────────────────────────────────────────────
@@ -53,11 +69,17 @@
   // pressed twice, two quick navigations) each created a session and the
   // first one kept running, and a stop() during the wait was undone.
   let startSeq = 0;
+  let stale = () => false;  // true once the running start() was stopped or superseded
 
-  async function start() {
+  async function start({ patient = false } = {}) {
     const seq = ++startSeq;
+    stale = () => seq !== startSeq;
     state.active = true;  // a toggle during the wait below means "stop"
-    const video = (state.video && document.contains(state.video)) ? state.video : await waitForVideo(6);
+    let video = (state.video && document.contains(state.video)) ? state.video : await waitForVideo(ENABLE_WAIT_TRIES);
+    if (!video && patient && seq === startSeq && videoPage()) {
+      if (state.window) state.window.updateStatus(PRESS_PLAY_STATUS, 'loading');
+      video = await waitForVideo(Infinity);
+    }
     if (seq !== startSeq) return { done: Promise.resolve() };  // stopped or superseded meanwhile
     if (!video) {
       state.active = false;
@@ -100,7 +122,7 @@
       state.window.updateStatus(reason, 'loading');
     }
     state.video = null;
-    try { await start(); } catch (e) {
+    try { await start({ patient: true }); } catch (e) {
       if (state.window) state.window.showError(e.message);
       state.active = false;
     }
