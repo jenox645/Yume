@@ -1,0 +1,23 @@
+{
+  "files": [
+    {
+      "path": "CLAUDE.md",
+      "description": "The project's conventions, commands and key files: the rules every change follows"
+    },
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "description": "How a job flows: download, regions, the transcription and LLM workers, the cache, the key design decisions",
+      "scope": ["server/**", "extension/**"]
+    },
+    {
+      "path": "docs/SECURITY.md",
+      "description": "The security layers: token, Host and CORS checks, URL validation, the path allowlist, the whisper.cpp child process",
+      "scope": ["server/**", "extension/js/background.js", "yume/native_host.py", "yume/service.py"]
+    },
+    {
+      "path": "tests/gold/RESULTS.md",
+      "description": "What was measured against human captions and lyrics, including the ideas that were rejected and why",
+      "scope": ["server/_transcribe.py", "server/_filter.py", "server/_lines.py", "server/_regions.py", "server/_align.py", "server/_whispercpp.py", "server/_separate.py", "server/_translate.py"]
+    }
+  ]
+}
