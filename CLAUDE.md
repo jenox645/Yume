@@ -16,6 +16,8 @@ Yume is a browser extension + local server system for AI-powered video subtitles
 
 Primary review before committing: run the linters and tests (`ruff check .`, `npx eslint extension/`, `pytest tests/ -v`, `npm test`) and Claude Code's built-in `/code-review` on the diff. Fix all critical and high-severity issues.
 
+Greptile reviews every PR on open and on each push, configured in `.greptile/` (`config.json`: settings and the scoped rules below as Greptile rules; `files.json`: this file and the docs it reads). Before handing a PR over, read Greptile's review and answer each comment: fix it, or reply why not. `@greptileai review` on the PR asks for a new review; `@greptileai <question>` asks it about the codebase. Keep `.greptile/config.json` in step when a convention here changes.
+
 CodeRabbit is on the **free tier** (rate-limited, weaker than the trial) — do NOT run it automatically after every session. Reserve it for large or risky changes (security-sensitive code, big refactors, releases), at most one run per session, and only when the built-in review isn't enough.
 
 ## Commands

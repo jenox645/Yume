@@ -1,0 +1,101 @@
+{
+  "strictness": 2,
+  "commentTypes": ["logic", "syntax", "style"],
+  "autoReview": ["open", "push"],
+  "triggerOnDrafts": false,
+  "excludeAuthors": ["dependabot[bot]"],
+  "ignorePatterns": "server/_vendor/**\npackage-lock.json\ndocs/images/**\nextension/fonts/**\nextension/icons/**\nextension/js/bundled-fonts.js\n*.woff2",
+  "shouldUpdateDescription": false,
+  "fixWithAI": true,
+  "includeIssuesTable": true,
+  "includeConfidenceScore": true,
+  "includeSequenceDiagram": true,
+  "summarySection": { "included": true, "collapsible": true, "defaultOpen": false },
+  "sequenceDiagramSection": { "included": true, "collapsible": true, "defaultOpen": false },
+  "instructions": "Yume is a browser extension (extension/, MV3, no build step) and a local Flask server (server/, port 5001, 127.0.0.1 only) that downloads a video's audio, transcribes it with faster-whisper (whisper.cpp on Vulkan for AMD), translates it with a local LLM and shows subtitles over the video. The CLI lives in yume/. CLAUDE.md holds the project's conventions: hold every change to them. Focus on correctness first: threads (job.lock, _state.transcribe_lock), what a viewer sees on screen, the cache (config/yume_cache.db) and what happens on a second run of the same video. Then security: the API token, Host and CORS checks, subprocess arguments, downloads checked by SHA-256. Anything that changes subtitle text must be measured on the gold set first (tests/gold/RESULTS.md). Many tracked files use CRLF line endings: a diff that rewrites every line of a file is an ending change, flag it. Write comments in plain English, say what goes wrong and when, and skip praise.",
+  "rules": [
+    {
+      "id": "escape-html",
+      "rule": "Dynamic content put into innerHTML must go through _escapeHtml() (it escapes quotes). Subtitle text is set with textContent, never innerHTML.",
+      "scope": ["extension/**/*.js"],
+      "severity": "high"
+    },
+    {
+      "id": "api-token",
+      "rule": "Every server endpoint requires the per-session API token except /health. CORS is only for chrome-extension:// and moz-extension:// origins, and the Host header must be localhost (DNS-rebinding defence). The server binds 127.0.0.1 only.",
+      "scope": ["server/_api.py", "server/_security.py", "server/_startup.py"],
+      "severity": "high"
+    },
+    {
+      "id": "allowed-paths",
+      "rule": "A new server route must be added to _ALLOWED_PATH in extension/js/background.js, or the extension cannot reach it. Only background.js resolves the server URL (_whisperUrl()); content scripts never hardcode localhost:5001.",
+      "scope": ["server/_api.py", "extension/js/**/*.js"],
+      "severity": "medium"
+    },
+    {
+      "id": "no-shell",
+      "rule": "Never shell=True or os.system(). Subprocesses take explicit argv lists. CLI code (yume/) runs commands through the _run() wrapper from yume/utils.py.",
+      "scope": ["yume/**/*.py", "server/**/*.py", "pocket_yume.py", "config.py"],
+      "severity": "high"
+    },
+    {
+      "id": "sanitize-urls",
+      "rule": "A video URL is validated before it reaches yt-dlp or ffmpeg (no argument injection; a URL starting with '-' must never become an option).",
+      "scope": ["server/_ytdlp.py", "server/_download.py", "server/_stream.py", "server/_api.py"],
+      "severity": "high"
+    },
+    {
+      "id": "no-stream-tricks",
+      "rule": "Never byte ranges, seeks or other tricks on a stream URL to get around a site's limits or bot detection: the preview is a second ordinary download through a pipe (yt-dlp -o - | ffmpeg).",
+      "scope": ["server/_stream.py", "server/_download.py", "server/_jobs.py"],
+      "severity": "high"
+    },
+    {
+      "id": "own-ports-only",
+      "rule": "Never kill a process on a port unless it is Yume's own: kill_port_process (yume/ports.py) asks otherwise.",
+      "scope": ["yume/**/*.py"],
+      "severity": "high"
+    },
+    {
+      "id": "pinned-downloads",
+      "rule": "Binaries and models Yume downloads are checked against a SHA-256 pin (server/whisper_cpp.json, yume/hardware.TRANSLATORS, llama.cpp release assets) before use; a mismatch deletes the file and fails.",
+      "scope": ["yume/**/*.py", "server/_whispercpp.py", "server/whisper_cpp.json"],
+      "severity": "high"
+    },
+    {
+      "id": "cli-layout",
+      "rule": "Nothing in yume/ imports from pocket_yume.py. Shared constants (version, paths, platform flags, BACKEND_INFO, download URLs) are defined once in yume/constants.py. A new CLI command is one entry in yume/cli.COMMANDS. Whisper model metadata lives only in yume/hardware.WHISPER_MODELS, multilingual models only (no distil-* or *.en).",
+      "scope": ["yume/**/*.py", "pocket_yume.py"],
+      "severity": "medium"
+    },
+    {
+      "id": "config-hygiene",
+      "rule": "Every key in DEFAULT_CONFIG is read by app code (TestDeadConfigDetection enforces it). requirements.txt and LLAMA_SERVER_DEPS pin exact versions with ==, except yt-dlp and llama-cpp-python.",
+      "scope": ["config.py", "server/requirements.txt", "yume/servers.py"],
+      "severity": "medium"
+    },
+    {
+      "id": "temp-files",
+      "rule": "Downloads live in yume_* temp dirs and are deleted with _audio.remove_temp() in a finally block.",
+      "scope": ["server/**/*.py"],
+      "severity": "medium"
+    },
+    {
+      "id": "gold-set",
+      "rule": "A change to what Whisper hears or which lines are shown (decode parameters, filters, line cleaning, regions, alignment) needs a measurement on the gold set recorded in tests/gold/RESULTS.md, or a reason it cannot change subtitle text.",
+      "scope": ["server/_transcribe.py", "server/_filter.py", "server/_lines.py", "server/_regions.py", "server/_align.py", "server/_whispercpp.py", "server/_separate.py"],
+      "severity": "medium"
+    },
+    {
+      "id": "version-sources",
+      "rule": "A version bump changes all three sources together: VERSION in yume/constants.py, SERVER_VERSION in server/_state.py and \"version\" in extension/manifest.json, plus the README badge.",
+      "scope": ["yume/constants.py", "server/_state.py", "extension/manifest.json", "README.md"],
+      "severity": "low"
+    },
+    {
+      "id": "line-endings",
+      "rule": "Keep each file's line endings: many tracked files are CRLF. .sh and .command files must stay LF (.gitattributes).",
+      "severity": "low"
+    }
+  ]
+}
