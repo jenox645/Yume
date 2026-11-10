@@ -8,7 +8,7 @@ import socket as _socket
 import time
 
 from config import DEFAULT_TRANSLATION_PORT, DEFAULT_WHISPER_PORT, MAX_PORT
-from yume.constants import IS_MAC, IS_WIN
+from yume.constants import IS_MAC, IS_WIN, TOOLS_DIR
 from yume.ui import C, ask_arrow, ask_input, ask_yn, error, info, section, success, warn
 
 _log = logging.getLogger("pocket_yume")
@@ -184,6 +184,8 @@ def kill_port_process(port: int, interactive: bool = True) -> bool:
 
 
 BGUTIL_PORT = 4416  # PO-token server (Deno) the Whisper server starts for YouTube auth
+# server/_bgutil.py runs it from here, by its full path: this marks Yume's own
+BGUTIL_DIR = TOOLS_DIR / "bgutil-ytdlp-pot-provider"
 
 
 def stop_bgutil_server() -> None:
@@ -197,6 +199,9 @@ def stop_bgutil_server() -> None:
     pid, name = get_port_process(BGUTIL_PORT)
     if not pid or "deno" not in (name or "").lower():
         return  # not ours
+    mine = str(BGUTIL_DIR).replace("\\", "/").lower()
+    if mine not in _process_cmdline(pid).replace("\\", "/").lower():
+        return  # another program's Deno on the same port
     try:
         if IS_WIN:
             _run(["taskkill", "/F", "/PID", str(pid)], timeout=10)
