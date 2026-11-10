@@ -283,6 +283,9 @@ def test_another_programs_deno_on_the_token_port_is_left_alone():
     # Found by Greptile: any Deno on 4416 was killed when Yume stopped
     assert bgutil((7, "deno.exe"), cmdline="deno run C:/work/my-app/main.ts --port 4416") == []
     assert bgutil((7, "deno.exe"), cmdline="") == []  # its command line could not be read
+    # Found by Greptile on #84: a sibling folder with the same name in front
+    sibling = f"deno run {ports.BGUTIL_DIR}-backup/server/build/main.js --port 4416"
+    assert bgutil((7, "deno.exe"), cmdline=sibling) == []
 
 
 def test_only_deno_on_the_token_port_is_stopped():

@@ -199,7 +199,8 @@ def stop_bgutil_server() -> None:
     pid, name = get_port_process(BGUTIL_PORT)
     if not pid or "deno" not in (name or "").lower():
         return  # not ours
-    mine = str(BGUTIL_DIR).replace("\\", "/").lower()
+    # Its folder and a separator: "…-pot-provider-backup/" is another program's
+    mine = str(BGUTIL_DIR / "server").replace("\\", "/").lower() + "/"
     if mine not in _process_cmdline(pid).replace("\\", "/").lower():
         return  # another program's Deno on the same port
     try:
