@@ -263,16 +263,29 @@ def test_a_free_port_needs_no_kill():
 # ── the Deno PO-token helper ─────────────────────────────────────────────────
 
 
-def bgutil(owner, *, free=False, win=True):
+YUME_DENO = f"deno run --no-prompt {ports.BGUTIL_DIR / 'server' / 'build' / 'main.js'} --port 4416"
+
+
+def bgutil(owner, *, free=False, win=True, cmdline=YUME_DENO):
     ran = []
     with (
         patch.object(yume.utils, "_run", lambda cmd, **k: ran.append(cmd)),
         patch.object(ports, "IS_WIN", win),
         patch.object(ports, "is_port_free", lambda p: free),
         patch.object(ports, "get_port_process", lambda p: owner),
+        patch.object(ports, "_process_cmdline", lambda pid: cmdline),
     ):
         ports.stop_bgutil_server()
     return ran
+
+
+def test_another_programs_deno_on_the_token_port_is_left_alone():
+    # Found by Greptile: any Deno on 4416 was killed when Yume stopped
+    assert bgutil((7, "deno.exe"), cmdline="deno run C:/work/my-app/main.ts --port 4416") == []
+    assert bgutil((7, "deno.exe"), cmdline="") == []  # its command line could not be read
+    # Found by Greptile on #84: a sibling folder with the same name in front
+    sibling = f"deno run {ports.BGUTIL_DIR}-backup/server/build/main.js --port 4416"
+    assert bgutil((7, "deno.exe"), cmdline=sibling) == []
 
 
 def test_only_deno_on_the_token_port_is_stopped():

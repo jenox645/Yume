@@ -237,7 +237,8 @@ def test_bgutil_runs_from_the_server_dir_and_logs_to_a_file(monkeypatch, bgutil_
     ((cmd, kw),) = spawned
     assert cmd[:2] == ["deno", "run"] and cmd[-2:] == ["--port", "4416"]
     assert Path(kw["cwd"]) == _bgutil.bgutil_server_dir()
-    assert cmd[cmd.index("--allow-sys") + 1] == os.path.join("src", "main.ts")
+    # By its full path: how `yume stop` tells it from another program's Deno
+    assert Path(cmd[cmd.index("--allow-sys") + 1]) == _bgutil.bgutil_server_dir() / "src" / "main.ts"
     assert kw["stderr"] == subprocess.STDOUT
     assert kw["stdout"].closed  # the child has its own handle
     assert (bgutil_dir / "logs" / "bgutil_server.log").read_text() == "up\n"

@@ -1,5 +1,9 @@
 # Changelog
 
+### Unreleased
+
+- **Stopping Yume leaves other programs' Deno alone:** `yume stop` killed any Deno process on port 4416, the PO-token helper's port. Yume now starts its helper by its full path and only stops a Deno whose command line has it. Found by Greptile.
+
 ### v0.3.0
 
 - **True karaoke:** the Karaoke style now lights each word while it is sung, character by character in Japanese and Chinese, instead of sweeping the whole line at an even pace. The lines are heard as before, then their final text is aligned to the audio (`server/_align.py`, about 0.3 s of GPU per region) and the word times are cached with the video. Lines without them (whisper.cpp on AMD, videos cached before) keep the sweep. Arabic now lights up from the right, and a seek inside a line re-times it.

@@ -75,9 +75,11 @@ def start_bgutil_server():
 def _spawn(cwd, main_rel, log_path):
     global _bgutil_proc
     log = open(log_path, "w", encoding="utf-8", errors="replace")  # noqa: SIM115 — owned by the child
+    # The full path, not main_rel: it is how `yume stop` tells this Deno from another
+    # program's on the same port (yume/ports.stop_bgutil_server)
     cmd = [
         "deno", "run", "--no-prompt", "--allow-env", "--allow-net", "--allow-ffi=.", "--allow-read=.", "--allow-sys",
-        main_rel, "--port", str(BGUTIL_PORT),
+        str(Path(cwd) / main_rel), "--port", str(BGUTIL_PORT),
     ]  # fmt: skip
     _bgutil_proc = subprocess.Popen(
         cmd,
